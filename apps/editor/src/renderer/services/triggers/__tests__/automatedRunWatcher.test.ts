@@ -135,6 +135,7 @@ function makeRequest(overrides: Partial<TriggerRunRequest['budget']> = {}): Trig
     showSession: false,
     prompt: 'do it',
     promptForSystemContract: 'do it (system)',
+    eventPayload: {},
     runDir: '/userData/triggers/runs/run-1',
     budget: { maxCostUsd: 1, timeoutMin: 1, approvalTimeoutMin: 1, ...overrides },
   }

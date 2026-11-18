@@ -34,6 +34,8 @@ export interface ITriggerQueryService {
    * Malformed lines (hand-edited file) are skipped; `limit` defaults to 100, max 500.
    */
   listRuns(filter?: TriggerRunFilter): Promise<readonly TriggerRunHistoryEntry[]>
+  /** One history row by run id; used to locate a run's saved input for a re-run. */
+  getRun(runId: string): Promise<TriggerRunHistoryEntry | undefined>
   /**
    * Read one run's `report.md` by run id. The file name and directory are
    * rebuilt in main; callers never pass a path. `authority` selects the remote

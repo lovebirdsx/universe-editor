@@ -340,6 +340,7 @@ import {
   RemoveTriggerWorkspaceAction,
   ResumeAllTriggersAction,
   ResumeTriggerAction,
+  RerunRunAction,
   RunTriggerNowAction,
   ShowTriggersLogAction,
   ViewTriggerReportAction,
@@ -1067,6 +1068,7 @@ registerAction2(RemoveManualHostAction)
 registerAction2(OpenTriggerManagerAction)
 registerAction2(ListTriggersAction)
 registerAction2(RunTriggerNowAction)
+registerAction2(RerunRunAction)
 registerAction2(PauseTriggerAction)
 registerAction2(ResumeTriggerAction)
 registerAction2(PauseAllTriggersAction)

@@ -11,7 +11,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   IEditorGroupsService,
   IEditorService,
+  IFileService,
   IInstantiationService,
+  ILoggerService,
+  INotificationService,
   IStorageService,
   REMOTE_SCHEME,
   StorageScope,
@@ -32,6 +35,7 @@ import { IAcpSessionHistoryService } from '../../services/acp/session/acpSession
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import { revealSessionChat } from '../../services/acp/session/revealSessionChat.js'
 import { TriggerReportEditorInput } from '../../services/triggers/triggerReportEditorInput.js'
+import { rerunTriggerRun } from '../../services/triggers/rerunTriggerRun.js'
 import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { useService } from '../useService.js'
 import { automationVerdictLabel, triggerRunOutcomeLabel } from '../agents/automationLabels.js'
@@ -74,6 +78,9 @@ export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
   const instantiation = useService(IInstantiationService)
   const widgets = useService(IAcpChatWidgetService)
   const windowFocus = useService(IWindowFocusService)
+  const files = useService(IFileService)
+  const notifications = useService(INotificationService)
+  const loggerService = useService(ILoggerService)
 
   const [runs, setRuns] = useState<readonly TriggerRunHistoryEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -220,6 +227,21 @@ export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
     [editors],
   )
 
+  const rerun = useCallback(
+    (entry: TriggerRunHistoryEntry) => {
+      void rerunTriggerRun(
+        {
+          triggers,
+          files,
+          notifications,
+          logger: loggerService.createLogger({ id: 'triggerRerun', name: 'Triggers' }),
+        },
+        entry.runId,
+      )
+    },
+    [files, loggerService, notifications, triggers],
+  )
+
   return (
     <div className={styles['runs']} data-testid="trigger-manager-runs">
       <div className={styles['runsToolbar']}>
@@ -346,6 +368,17 @@ export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
                         data-testid="trigger-manager-runs-view-report"
                       >
                         {localize('trigger.manager.runs.viewReport', 'View report')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          rerun(entry)
+                        }}
+                        data-testid="trigger-manager-runs-rerun"
+                      >
+                        {localize('trigger.manager.runs.rerun', 'Rerun')}
                       </Button>
                     </div>
                   </td>

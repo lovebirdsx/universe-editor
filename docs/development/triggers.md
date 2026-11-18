@@ -82,7 +82,7 @@ TriggerMainService ── IPC facade / summary / audit / history / 装配
 
 | 通道 | 方向 | 契约 |
 | --- | --- | --- |
-| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`（由 query / control / run-event / workspace 四个子接口组合）：触发器与工作区列表、手动运行（`runNow(triggerKey, event?)`，poll 源可带选中条目的 payload 与 `sourceKey`）/ 手动预览 poll 事件（`previewPollEvents`，只读执行一次取数）、暂停、激活确认（同时覆盖高权限模式）、`ensureConfigFile` / `rescanWorkspace` / `removeWorkspace`、运行目录、运行结束上报、`listRuns`（本机运行历史，按复合键与 outcome 过滤）、通用事件上报 `reportTriggerEvents(eventName, items, workspaceUri)`、`readRunReport`（PC 按 runId + 可选 authority 读 `report.md`）/ `onDidChangeTriggers` |
+| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`（由 query / control / run-event / workspace 四个子接口组合）：触发器与工作区列表、手动运行（`runNow(triggerKey, event?)`，poll 源可带选中条目的 payload 与 `sourceKey`）/ 手动预览 poll 事件（`previewPollEvents`，只读执行一次取数）、暂停、激活确认（同时覆盖高权限模式）、`ensureConfigFile` / `rescanWorkspace` / `removeWorkspace`、运行目录、运行结束上报、`listRuns`（本机运行历史，按复合键与 outcome 过滤）/ `getRun`（按 runId 取单条，供重跑定位输入）、通用事件上报 `reportTriggerEvents(eventName, items, workspaceUri)`、`readRunReport`（PC 按 runId + 可选 authority 读 `report.md`）/ `onDidChangeTriggers` |
 | `ServiceChannels.TriggerRunHost`（`'triggerRunHost'`） | main → renderer | `ITriggerRunHost`：`startRun` / `cancelRun` / `isWorkspaceTrusted` |
 | `RemoteChannels.TriggerPoll`（`'triggerPoll'`） | main → 远端 server | `IRemoteTriggerService`：`poll` / `createRunDir` / `readReport`。DTO 路径一律 URI；runDir 布局由 server 拥有，客户端只传 `clientId` / `runId` 与保留策略（`keep` / `protectedRunIds`），清理由 `createRunDir` 一并完成 |
 
@@ -114,9 +114,9 @@ TriggerMainService ── IPC facade / summary / audit / history / 装配
 | `<userData>/triggers/workspaces.json` | `TriggerWorkspaceRegistry`（独占） | 本机登记的工作区 **URI** 列表（version 2，本地 `file:` 与远程 `remote-ssh:` 都收；**不入库**）。窗口打开工作区 / `openConfig` 时登记；`removeWorkspace` 移除。加载时丢弃非绝对 `file:` 路径与非 `remote-ssh:` 的项，旧 version 数据直接作废。 |
 | `<userData>/triggers/state.json` | `TriggerStateRepository`（独占） | version 2；`pausedAll`、每触发器（键为**复合键**，工作区部分是 URI 比较键）`processed`（去重 key）、`paused`、`consecutiveFailures`、`backoffUntil`、`lastScheduledAt`、`lastRunAt`、`lastError`、`baselineDone`、`sourceFingerprint`、`activationConfirmed` 指纹（同时覆盖高权限模式）、`pending` 记录（`triggerKey`）。防抖 + 原子写（0600）。加载时丢弃 `runId` 不是 UUID 形态的 pending 记录（会拼进文件路径）。 |
 | `<userData>/triggers/audit.jsonl` | `AuditLog` | `action` / `result` / `detail`（标识性文本，无 payload / prompt / 摘要）。 |
-| `<userData>/triggers/history.jsonl` | `TriggerHistoryStore`（独占） | 每次运行结束追加一行：`runId` / `triggerKey` / `triggerId` / `triggerName` / `workspace` / `workspaceName` / `sessionId?` / `startedAt` / `endedAt` / `outcome` / `verdict?` / `summary?` / `error?` / `costUsd?` / `durationMs?`。达到 1 MB 时轮转为 `.1` … `.3`（最多 4 份）；`listRuns` 按写入顺序读最新在前，坏行 / 未知枚举跳过。纯文本渲染，不写 payload / prompt / Agent 输出正文。 |
-| `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | 本地运行的 `result.json`、`report.md`；启动新 run 时按 mtime 只保留最近 200 个目录，但**跳过 active / queued / pending 的 runId**。手机端可经网关按会话读取 `report.md`（见 `mobile-gateway.md` §7e），PC 端经 `readRunReport` 按 runId 读取（同一 reader），目录被清理后入口显示空状态。 |
-| `<远端 serverDataDir>/triggers/runs/<clientId>/<runId>/` | 远端 server（`triggerPoll.createRunDir`），Agent 写文件 | 远程运行的 `result.json`、`report.md`、`prompt.md`。`clientId` 为本机安装 ID；保留策略按 clientId 命名空间各留 200 个，客户端的保留请求只影响自己的子目录。 |
+| `<userData>/triggers/history.jsonl` | `TriggerHistoryStore`（独占） | 每次运行结束追加一行：`runId` / `triggerKey` / `triggerId` / `triggerName` / `workspace` / `workspaceName` / `sessionId?` / `runDir?` / `startedAt` / `endedAt` / `outcome` / `verdict?` / `summary?` / `error?` / `costUsd?` / `durationMs?`。达到 1 MB 时轮转为 `.1` … `.3`（最多 4 份）；`listRuns` 按写入顺序读最新在前，坏行 / 未知枚举跳过。纯文本渲染，不写 payload / prompt / Agent 输出正文；`runDir` 只用于定位 `event.json`。 |
+| `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | 本地运行的 `result.json`、`report.md`、`prompt.md`、`event.json`；启动新 run 时按 mtime 只保留最近 200 个目录，但**跳过 active / queued / pending 的 runId**。手机端可经网关按会话读取 `report.md`（见 `mobile-gateway.md` §7e），PC 端经 `readRunReport` 按 runId 读取（同一 reader），目录被清理后入口显示空状态。 |
+| `<远端 serverDataDir>/triggers/runs/<clientId>/<runId>/` | 远端 server（`triggerPoll.createRunDir`），Agent 写文件 | 远程运行的 `result.json`、`report.md`、`prompt.md`、`event.json`。`clientId` 为本机安装 ID；保留策略按 clientId 命名空间各留 200 个，客户端的保留请求只影响自己的子目录。 |
 | `<userData>/triggers/pending/<runId>.json` | `TriggerStateRepository` | 排队事件的临时负载；run 开始或丢弃后删除。 |
 
 `state.json` 里的去重 key 每条最多保留 **2000** 个、**30 天**（`prune`）。
@@ -321,6 +321,7 @@ startRun
 - **暂停只阻止自动调度**：`setPaused(triggerKey, true)` 只丢弃该触发器**自动**来源的排队项并 `forget` 其 key（不计失败），手动来源（`manual:` 前缀）的排队项保留；`setAllPaused(true)` 是紧急停止，清空全部排队项（含手动）。`state.pending` 里尚未入队的记录不会被删除，恢复 / 全局恢复 / 完成激活确认后都会再跑一次 `replayPendingRuns`，把此前保留的 pending 记录入队。
 - **暂停与手动运行**：`runNow` 不再因单触发器暂停被拒绝，`acceptEvent` / `isRunnable` 对 `manual: true` / `manual:` 前缀放行 `state.paused`；`pausedAll` 仍一律拒绝。手动运行结束后不改变 `paused`（成功上报只清 `autoPaused`）。
 - **手动事件可携带事件数据**：`runNow(triggerKey, event?)` 接受 payload 与可选 `sourceKey`；main 经 `triggerManualPayload.ts` 只保留合法字段名（`^[A-Za-z0-9_]{1,64}$`）的标量值（字符串截断 4000、最多 64 个字段），非法 `sourceKey`（须匹配 `/^poll:[^\u0000\r\n]{1,512}$/u`）只记 debug 并忽略。`sourceKey` 仅在 poll 源下进入 `consumeKeys`；事件 key 仍是 `manual:<uuid>`——`isManualEventKey` 的暂停 / 退避放行依赖该前缀，不能改成 `poll:`。
+- **重新运行历史运行**：`rerunTriggerRun(runId, authority?)` 读取该 run 的 `event.json`，以 `manual:<uuid>` 事件调用 `runNow(entry.triggerKey, { payload })`——**不传 `sourceKey`**（原 poll 条目保持已消费），不改变调度去重状态，可反复验证。入口：管理器运行历史行、报告页右上角、`workbench.action.triggers.rerun`。目标 run 没有 `event.json` / `runDir`（功能上线前的记录）时提示「该次运行未保存输入」。
 - **窗口关闭 / reload**：`unregisterWindowHost` 与同 `windowId` 的**二次 `registerWindowHost`**（renderer reload）都会把它负责的 active run 标为失败（`The window ... closed / reloaded`），释放槽位。**登记表不受影响**：本地工作区继续调度、需要时会重新开后台窗口；远程工作区不会后台开窗，因此在窗口重新打开且连接 `connected` 之前不再调度。
 - **running 看门狗**：run 启动后按 `budget.timeoutMin + budget.approvalTimeoutMin + 10 分钟宽限` 设时；到期仍未 `reportRunEnd` → 记失败、释放槽位，并调用该窗口的 `host.cancelRun`（若 host 还在）。`reportRunEnd` 会清掉定时器。
 - **运行结束**：renderer `TriggerRunHost` 订阅 `AutomatedSessionService.onDidEndRun`，调 `reportRunEnd`。main：
@@ -352,11 +353,12 @@ startRun
 - `allowElevatedMode`：仅当 `isElevatedModeId(mode)` **且** `state.activationConfirmed === fingerprint`——激活确认同时批准高权限模式。
 - `prompt`：`renderTriggerPrompt(...)` 的 **inline** 变体：输出契约内联在用户消息里。
 - `promptForSystemContract`：同一模板的 **system** 变体：不含输出要求节，只留运行目录行。
+- `eventPayload`：原始事件 `payload`，renderer 写到 `<runDir>/event.json` 供「重新运行」回放；prompt 里仍内联同一份数据。
 - `runDir`：宿主原生绝对路径，main 已创建。本地在 `<userData>/triggers/runs/<runId>/`；远程由远端 server 在 `<serverDataDir>/triggers/runs/<clientId>/<runId>/` 创建并回传 URI。
 - `agentId` / `model` / `mcpServerNames`：会话启动参数；未配置的项由 renderer / 用户设置决定。
 - `showSession`：该触发器的 `showSession`，renderer 据此决定会话启动后是否切过去（仍要求窗口可见）。
 
-事件数据不再单独作为 `payload` 字段传递：`_buildRunRequest` 已把它渲染进 `prompt` / `promptForSystemContract` 的 `<event-data>` 围栏（`{{event.*}}` 占位符也在此时替换）。手动运行同样可携带 payload（poll 源另带 `sourceKey`），清洗后进入同一个围栏。`TriggerRunRequest` 没有 `sourceType` / `payload`，renderer 也不再据此执行任何动作。
+事件数据不单独作为请求字段做业务判断：`_buildRunRequest` 已把它渲染进 `prompt` / `promptForSystemContract` 的 `<event-data>` 围栏（`{{event.*}}` 占位符也在此时替换）。`eventPayload` 只用于写 `event.json` 审计/重放副本；手动运行同样可携带 payload（poll 源另带 `sourceKey`），清洗后进入同一个围栏。`TriggerRunRequest` 没有 `sourceType`，renderer 也不据此执行任何动作。
 
 ### 两种输出契约与能力表
 
@@ -418,14 +420,16 @@ system 变体的首条消息：
 
 system prompt append 全文见 `shared/triggers/promptTemplate.ts` 的 `TRIGGER_OUTPUT_CONTRACT_SYSTEM`（`## 输出契约` / `### 运行目录` / `### result.json 字段` / `### 判决` / `### 示例`）。
 
-### `prompt.md` 审计副本
+### `prompt.md` / `event.json` 审计副本
 
 renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，两节：
 
 - `## System prompt append`：实际发送的 append 原文；未使用 append 的分支写一行「未使用（输出契约已内联到首条消息）」。
 - `## 首条用户消息`：实际发送的原文，用比内容中最长反引号串更长的围栏包裹。
 
-写失败只 warn，不影响运行。它是纯审计副本，任何逻辑都不得回读。
+同时写 `<runDir>/event.json`：`{ version: 1, eventKey, payload, firedAt }`。这是「重新运行」唯一的输入来源——重跑时读回 `payload`，按**当前** triggers.json（含最新 skill）重新渲染 prompt，以 `manual:<uuid>` 事件运行。旧版本记录的 run 没有该文件，重跑入口会提示「该次运行未保存输入」。它位于 Agent 可写的运行目录（`additionalDirectories` + 自动放行 edit），与 `report.md` 同信任级别；重跑信任其内容，因此只适合「验证 skill / 配置调整」，不能作为不可篡改的审计凭据。
+
+两者都是 best-effort，写失败只 warn，不影响运行。
 
 ## 8. 自动化会话启动
 
@@ -536,6 +540,7 @@ Swarm 写操作由 Agent 通过 skill 自带的 CLI 完成（模板见 `docs/use
 | `OpenTriggerManagerAction` | `workbench.action.triggers.openManager` | 触发器: 打开管理器（单例 tab；可选参数是复合键。打开时先对调用窗口的当前工作区做一次幂等重扫（文件不存在则跳过、不创建），已打开时再在所有分屏中定位已有 tab 并 reveal，把选中项经 `select` / `updateFrom` 交给已挂载视图，不会在另一个分屏再开一份） |
 | `ListTriggersAction` | `workbench.action.triggers.list` | 触发器: 列出触发器 |
 | `RunTriggerNowAction` | `workbench.action.triggers.runNow` | 触发器: 立即运行触发器… |
+| `RerunRunAction` | `workbench.action.triggers.rerun` | 触发器: 重新运行触发器运行…（活动报告页 → 该 run；否则历史 QuickPick。用保存的 `event.json` 以 `manual` 事件重放，不消费原去重键） |
 | `PauseTriggerAction` | `workbench.action.triggers.pause` | 触发器: 暂停触发器… |
 | `ResumeTriggerAction` | `workbench.action.triggers.resume` | 触发器: 恢复触发器… |
 | `PauseAllTriggersAction` | `workbench.action.triggers.pauseAll` | 触发器: 全部暂停 |

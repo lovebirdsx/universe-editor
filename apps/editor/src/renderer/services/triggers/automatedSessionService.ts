@@ -33,6 +33,7 @@ import {
   CONSERVATIVE_MODE_BY_AGENT,
   isElevatedModeId,
   type TriggerRunEnd,
+  type TriggerRunEventRecord,
   type TriggerRunRequest,
 } from '../../../shared/triggers/types.js'
 import { decideAutomatedPermission } from './automatedPermissionPolicy.js'
@@ -205,8 +206,8 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
     })
     this._runs.set(runId, { session, watcher })
     watcher.start()
-    // Audit copy only — nothing reads it back. Written before the first prompt
-    // so the directory always shows what the agent was actually given.
+    // Written before the first prompt so the directory always shows what the
+    // agent was actually given; event.json is also the re-run input.
     await this._writePromptAudit(request, firstPrompt, appendSystemContract)
     void session.sendPrompt(firstPrompt).then(
       () => watcher.notifyTurnSettled(),
@@ -230,9 +231,10 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
   }
 
   /**
-   * Best-effort `<runDir>/prompt.md`: the system prompt append actually used
-   * (or a note that the contract was inline) plus the exact first message.
-   * Purely an audit copy, so a failure only warns.
+   * Best-effort `<runDir>/prompt.md` (the system prompt append actually used, or
+   * a note that the contract was inline, plus the exact first message) and
+   * `<runDir>/event.json` (the raw event, so a finished run can be re-run).
+   * Purely audit copies, so a failure only warns.
    */
   private async _writePromptAudit(
     request: TriggerRunRequest,
@@ -242,20 +244,45 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
     const appendSection = systemContract
       ? TRIGGER_OUTPUT_CONTRACT_SYSTEM
       : '未使用（输出契约已内联到首条消息）'
-    const content = [
+    const promptContent = [
       '## System prompt append',
       appendSection,
       '',
       '## 首条用户消息',
       fence(firstPrompt),
     ].join('\n')
+    const eventRecord: TriggerRunEventRecord = {
+      version: 1,
+      eventKey: request.origin.eventKey,
+      payload: request.eventPayload,
+      firedAt: Date.now(),
+    }
     try {
-      await this._files.writeFile(
-        URI.joinPath(fsPathToWorkspaceUri(request.runDir, request.authority), 'prompt.md'),
-        content,
-      )
+      const runDirUri = fsPathToWorkspaceUri(request.runDir, request.authority)
+      // allSettled: one failed audit write must not turn the other into an
+      // unhandled rejection, and neither may block the prompt below.
+      const results = await Promise.allSettled([
+        this._files.writeFile(URI.joinPath(runDirUri, 'prompt.md'), promptContent),
+        this._files.writeFile(
+          URI.joinPath(runDirUri, 'event.json'),
+          `${JSON.stringify(eventRecord, null, 2)}\n`,
+        ),
+      ])
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          this._logger.warn(
+            `failed to write run audit files: ${
+              result.reason instanceof Error ? result.reason.message : String(result.reason)
+            }`,
+          )
+        }
+      }
     } catch (err) {
-      this._logger.warn(`failed to write prompt audit: ${(err as Error).message}`)
+      // A malformed run directory must not turn an otherwise valid run into a
+      // start failure: audit files are best-effort.
+      this._logger.warn(
+        `failed to write run audit files: ${err instanceof Error ? err.message : String(err)}`,
+      )
     }
   }
 

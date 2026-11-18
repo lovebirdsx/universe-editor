@@ -59,6 +59,7 @@ import {
   TriggerReportEditorInput,
   fallbackTriggerName,
 } from '../services/triggers/triggerReportEditorInput.js'
+import { rerunTriggerRun } from '../services/triggers/rerunTriggerRun.js'
 import { TriggerManagerEditorInput } from '../services/triggers/triggerManagerEditorInput.js'
 import { readTriggerConfig } from '../services/triggers/triggerConfigFileService.js'
 import { revealTriggerConfig } from '../services/triggers/revealTriggerConfig.js'
@@ -929,6 +930,76 @@ export class RunTriggerNowAction extends Action2 {
       )
       if (summary === undefined) return
       await runTriggerNow(services, summary)
+    })
+  }
+}
+
+function rerunServices(services: TriggerActionServices) {
+  return {
+    triggers: services.triggers,
+    files: services.files,
+    notifications: services.notifications,
+    logger: services.logger,
+  }
+}
+
+/**
+ * Re-runs a finished run with its saved input. The active report tab wins, then
+ * an explicit run id, then a history picker. Re-running replays the payload as a
+ * `manual` event, so a skill edit can be verified without touching the scheduler's
+ * dedupe state.
+ */
+export class RerunRunAction extends Action2 {
+  static readonly ID = 'workbench.action.triggers.rerun'
+
+  constructor() {
+    super({
+      id: RerunRunAction.ID,
+      title: localize2('action.triggers.rerun.title', 'Re-run Trigger Run...'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const services = triggerActionServices(accessor)
+    await runTriggerAction(services, async () => {
+      const requestedRunId = typeof arg === 'string' && arg.length > 0 ? arg : undefined
+      const active = services.editorService.activeEditor
+      const activeReport = active instanceof TriggerReportEditorInput ? active : undefined
+      const runId = requestedRunId ?? activeReport?.target.runId
+      if (runId !== undefined) {
+        await rerunTriggerRun(rerunServices(services), runId)
+        return
+      }
+
+      const runs = await services.triggers.listRuns({ limit: 100 })
+      if (runs.length === 0) {
+        services.notifications.notify({
+          severity: Severity.Info,
+          message: localize('triggers.rerun.empty', 'No trigger runs have been recorded yet.'),
+        })
+        return
+      }
+      const selected = await services.quickInput.pick(
+        runs.map((entry) => ({
+          id: entry.runId,
+          label: `${entry.triggerName} · ${new Date(entry.endedAt).toLocaleString()}`,
+          description: entry.summary ?? entry.outcome,
+          ...(entry.runDir === undefined
+            ? { detail: localize('triggers.rerun.noInputShort', 'No saved input; cannot re-run') }
+            : {}),
+        })),
+        {
+          id: 'workbench.triggers.rerun',
+          placeholder: localize('triggers.rerun.pick', 'Select a run to re-run'),
+          matchOnDescription: true,
+        },
+      )
+      if (selected === undefined) return
+      const entry = runs.find((item) => item.runId === selected.id)
+      if (entry === undefined) return
+      await rerunTriggerRun(rerunServices(services), entry.runId)
     })
   }
 }

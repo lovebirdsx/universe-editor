@@ -9,7 +9,10 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   IEditorGroupsService,
   IEditorInput,
+  IFileService,
   IInstantiationService,
+  ILoggerService,
+  INotificationService,
   localize,
   URI,
 } from '@universe-editor/platform'
@@ -29,6 +32,7 @@ import {
   fallbackTriggerName,
   TriggerReportEditorInput,
 } from '../../services/triggers/triggerReportEditorInput.js'
+import { rerunTriggerRun } from '../../services/triggers/rerunTriggerRun.js'
 import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { relativeTime } from '../../relativeTime.js'
 import { useObservable, useService } from '../useService.js'
@@ -65,6 +69,9 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
   const inst = useService(IInstantiationService)
   const widgets = useService(IAcpChatWidgetService)
   const windowFocus = useService(IWindowFocusService)
+  const files = useService(IFileService)
+  const notifications = useService(INotificationService)
+  const loggerService = useService(ILoggerService)
 
   useObservable(sessions.sessions)
   useObservable(history.entries)
@@ -126,6 +133,19 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
     )
   }, [groups, inst, widgets, windowFocus, sessionId, live, historyEntry])
 
+  const rerun = useCallback(() => {
+    if (runId === undefined) return
+    void rerunTriggerRun(
+      {
+        triggers,
+        files,
+        notifications,
+        logger: loggerService.createLogger({ id: 'triggerRerun', name: 'Triggers' }),
+      },
+      runId,
+    )
+  }, [files, loggerService, notifications, runId, triggers])
+
   if (reportInput === undefined) return null
 
   const outcomeLabel = triggerRunOutcomeLabel(outcome)
@@ -170,6 +190,14 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
               {localize('trigger.report.openSession', 'Open Session')}
             </button>
           )}
+          <button
+            type="button"
+            className={styles['action']}
+            data-testid="trigger-report-rerun"
+            onClick={rerun}
+          >
+            {localize('trigger.report.rerun', 'Rerun')}
+          </button>
           <button
             type="button"
             className={styles['action']}

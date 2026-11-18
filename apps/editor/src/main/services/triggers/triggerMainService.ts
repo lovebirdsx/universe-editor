@@ -788,6 +788,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         workspace: entry.workspace,
         workspaceName: workspaceFolderName(entry.workspace),
         ...(end.sessionId === undefined ? {} : { sessionId: end.sessionId }),
+        ...(entry.runDir === undefined ? {} : { runDir: entry.runDir }),
         startedAt: entry.startedAt ?? entry.firedAt,
         endedAt: now,
         outcome: end.outcome,
@@ -836,6 +837,12 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   async listRuns(filter?: TriggerRunFilter): Promise<readonly TriggerRunHistoryEntry[]> {
     await this._awaitReady()
     return this._historyStore.recent(filter)
+  }
+
+  async getRun(runId: string): Promise<TriggerRunHistoryEntry | undefined> {
+    await this._awaitReady()
+    const [entry] = await this._historyStore.recent({ runId, limit: 1 })
+    return entry
   }
 
   async readRunReport(runId: string, authority?: string): Promise<TriggerRunReportReadResult> {

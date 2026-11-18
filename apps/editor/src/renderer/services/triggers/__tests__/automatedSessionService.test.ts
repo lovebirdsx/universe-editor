@@ -179,6 +179,7 @@ function request(overrides: Partial<TriggerRunRequest> = {}): TriggerRunRequest 
     showSession: false,
     prompt: 'do it',
     promptForSystemContract: 'do it (system contract)',
+    eventPayload: {},
     runDir: '/userData/triggers/runs/run-1',
     budget: { maxCostUsd: 1, timeoutMin: 30, approvalTimeoutMin: 60 },
     ...overrides,
@@ -353,6 +354,22 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
     await h.service.startAutomatedSession(request({ promptForSystemContract: '```\ncode\n```' }))
     const audit = String(h.writeFile.mock.calls[0]?.[1])
     expect(audit).toContain('````\n```\ncode\n```\n````')
+  })
+
+  it('saves the raw event beside the prompt audit for re-runs', async () => {
+    const h = makeHarness()
+    await h.service.startAutomatedSession(
+      request({ eventPayload: { title: 'Bug', count: 2, critical: true } }),
+    )
+    const eventCall = h.writeFile.mock.calls.find(
+      (call) => String(call[0]) === 'file:///userData/triggers/runs/run-1/event.json',
+    )
+    expect(eventCall).toBeDefined()
+    expect(JSON.parse(String(eventCall?.[1]))).toMatchObject({
+      version: 1,
+      eventKey: 'event:1',
+      payload: { title: 'Bug', count: 2, critical: true },
+    })
   })
 
   it('still starts the run when the prompt audit cannot be written', async () => {

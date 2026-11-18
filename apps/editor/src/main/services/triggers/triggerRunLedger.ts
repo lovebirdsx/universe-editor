@@ -48,6 +48,8 @@ export interface ActiveRun extends PendingRun {
   startedAt?: number
   windowId?: number
   sessionId?: string
+  /** Host-native run directory, recorded as soon as it exists so the history row can point at it. */
+  runDir?: string
   watchdogTimer?: TriggerTimerHandle
 }
 
@@ -459,6 +461,10 @@ export class TriggerRunLedger {
       }
       if (created.kind === 'unavailable') throw new DeferredRunError(created.reason)
       const runDir = created.runDir
+      // Record the directory before awaiting the renderer: a run that ends
+      // immediately still needs its history row to point at the saved input.
+      const starting = this._active.get(pending.runId)
+      if (starting !== undefined) starting.runDir = runDir
       const request = this._buildRunRequest(trigger, pending, event, runDir, authority)
       const result = await this._startHostRun(runHost, request, pending.runId)
       if (result === undefined) {
@@ -701,6 +707,7 @@ export class TriggerRunLedger {
       ...(session.mcpServers === undefined ? {} : { mcpServerNames: session.mcpServers }),
       prompt,
       promptForSystemContract,
+      eventPayload: event.payload,
       runDir,
       budget: session.budget,
     }

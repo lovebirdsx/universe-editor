@@ -234,11 +234,24 @@ export interface TriggerRunRequest {
    */
   readonly promptForSystemContract: string
   /**
+   * Raw event payload, persisted next to `prompt.md` as `event.json` so a
+   * finished run can be replayed with the same input.
+   */
+  readonly eventPayload: Readonly<Record<string, TriggerPayloadValue>>
+  /**
    * Absolute host-native `<runs dir>/<runId>`; already created by main. On the
    * remote host when `authority` is set.
    */
   readonly runDir: string
   readonly budget: TriggerBudget
+}
+
+/** `<runDir>/event.json`: the input a run was started from, kept for replay. */
+export interface TriggerRunEventRecord {
+  readonly version: 1
+  readonly eventKey: string
+  readonly payload: Readonly<Record<string, TriggerPayloadValue>>
+  readonly firedAt: number
 }
 
 /** renderer → main when a run reaches a terminal state. */
@@ -268,6 +281,11 @@ export interface TriggerRunHistoryEntry {
   readonly workspace: string
   readonly workspaceName: string
   readonly sessionId?: string
+  /**
+   * Absolute run directory on the host that owns it; absent for runs recorded
+   * before `event.json` replay existed (such runs cannot be re-run).
+   */
+  readonly runDir?: string
   readonly startedAt: number
   readonly endedAt: number
   readonly outcome: TriggerRunOutcome
@@ -281,6 +299,7 @@ export interface TriggerRunHistoryEntry {
 /** Query for the run history; `limit` defaults to 100 and is capped at 500. */
 export interface TriggerRunFilter {
   readonly limit?: number
+  readonly runId?: string
   readonly triggerKey?: string
   readonly workspace?: string
   readonly outcome?: TriggerRunOutcome

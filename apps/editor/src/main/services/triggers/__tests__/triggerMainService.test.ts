@@ -938,9 +938,13 @@ describe('TriggerMainService summaries and run history', () => {
     })
     expect(first.summary).toHaveLength(200)
     expect(first.summary?.startsWith('x'.repeat(200))).toBe(true)
+    // The history row points at the run directory so its saved input can be replayed.
+    expect(first.runDir?.endsWith(firstRunId)).toBe(true)
 
     expect(await harness.service.listRuns({ outcome: 'timeout' })).toEqual([runs[0]])
     expect(await harness.service.listRuns({ limit: 1 })).toEqual([runs[0]])
+    expect((await harness.service.getRun(firstRunId))?.runId).toBe(firstRunId)
+    expect(await harness.service.getRun('missing-run')).toBeUndefined()
 
     // The per-trigger synopsis mirrors the newest run; a missing verdict clears
     // the previous one instead of leaving a stale value in the overview.

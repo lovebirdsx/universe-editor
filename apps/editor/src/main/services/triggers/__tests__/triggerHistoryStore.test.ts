@@ -102,6 +102,22 @@ describe('TriggerHistoryStore', () => {
     expect((await store.recent({ limit: 0 })).map((run) => run.runId)).toEqual(['d'])
   })
 
+  it('keeps an optional run directory and filters by run id', async () => {
+    const file = join(await tempDir(), 'history.jsonl')
+    const store = new TriggerHistoryStore({ file, logger: createLogger().logger })
+    await store.append(entry({ runId: 'old' }))
+    await store.append(entry({ runId: 'new', runDir: '/userData/triggers/runs/new' }))
+
+    const [old] = await store.recent({ runId: 'old', limit: 1 })
+    expect(old?.runId).toBe('old')
+    expect(old?.runDir).toBeUndefined()
+
+    const [current] = await store.recent({ runId: 'new', limit: 1 })
+    expect(current?.runDir).toBe('/userData/triggers/runs/new')
+
+    expect(await store.recent({ runId: 'missing' })).toEqual([])
+  })
+
   it('skips malformed lines and unknown enum values without failing the read', async () => {
     const file = join(await tempDir(), 'history.jsonl')
     const store = new TriggerHistoryStore({ file, logger: createLogger().logger })

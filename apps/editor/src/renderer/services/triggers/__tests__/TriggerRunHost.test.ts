@@ -41,6 +41,7 @@ function makeRequest(runId = 'run-1', showSession = false): TriggerRunRequest {
     allowElevatedMode: false,
     prompt: 'do the thing',
     promptForSystemContract: 'do the thing (system)',
+    eventPayload: {},
     runDir: 'X:/workspace/run',
     budget: { maxCostUsd: 1, timeoutMin: 30, approvalTimeoutMin: 60 },
   }
@@ -95,6 +96,9 @@ class FakeTriggerMain implements ITriggerMainService {
   readonly reportRunEnd = vi.fn(async (_end: TriggerRunEnd): Promise<void> => undefined)
   readonly listTriggers = vi.fn(async (): Promise<readonly TriggerSummary[]> => [])
   readonly listRuns = vi.fn(async (): Promise<readonly TriggerRunHistoryEntry[]> => [])
+  readonly getRun = vi.fn(
+    async (_runId: string): Promise<TriggerRunHistoryEntry | undefined> => undefined,
+  )
   readonly listWorkspaces = vi.fn(async () => [])
   readonly getRunsDir = vi.fn(async (): Promise<string> => 'X:/workspace/triggers/runs')
   readonly setMaxConcurrentRuns = vi.fn(async (): Promise<void> => undefined)

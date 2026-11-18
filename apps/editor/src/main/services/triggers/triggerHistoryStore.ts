@@ -144,6 +144,7 @@ function clampLimit(limit: number | undefined): number {
 }
 
 function matchesFilter(entry: TriggerRunHistoryEntry, filter: TriggerRunFilter): boolean {
+  if (filter.runId !== undefined && entry.runId !== filter.runId) return false
   if (filter.triggerKey !== undefined && entry.triggerKey !== filter.triggerKey) return false
   if (filter.workspace !== undefined && entry.workspace !== filter.workspace) return false
   return filter.outcome === undefined || entry.outcome === filter.outcome
@@ -177,6 +178,8 @@ function toHistoryEntry(value: unknown): TriggerRunHistoryEntry | undefined {
   }
   const sessionId = optionalText(record['sessionId'])
   if (sessionId === INVALID) return undefined
+  const runDir = optionalText(record['runDir'])
+  if (runDir === INVALID) return undefined
   const verdictRaw = record['verdict']
   const verdict = verdictRaw === undefined ? undefined : asEnum(verdictRaw, VERDICT_KINDS)
   if (verdictRaw !== undefined && verdict === undefined) return undefined
@@ -197,6 +200,7 @@ function toHistoryEntry(value: unknown): TriggerRunHistoryEntry | undefined {
     workspace,
     workspaceName,
     ...(sessionId === undefined ? {} : { sessionId }),
+    ...(runDir === undefined ? {} : { runDir }),
     startedAt,
     endedAt,
     outcome,
