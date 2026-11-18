@@ -307,6 +307,7 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'Muted foreground color in the editor area.',
     'color-editor-fg-muted',
   ),
+  d('editorWarning.foreground', '#cca700', '#bf8803', 'Foreground color of editor warnings.'),
   d(
     'editor.blameForeground',
     'editor.mutedForeground',

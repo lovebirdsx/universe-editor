@@ -4303,6 +4303,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'color.warning.foreground': '警告消息的前景色。',
   'color.warning.background': '警告区块的背景色。',
   'color.warning.border': '警告区块的边框色。',
+  'color.editorWarning.foreground': '编辑器警告的前景色。',
   'color.notifications.infoBackground': '信息类通知区块的背景色。',
   'color.notificationsErrorIcon.foreground': '错误通知图标的前景色。',
   'color.notificationsWarningIcon.foreground': '警告通知图标的前景色。',
