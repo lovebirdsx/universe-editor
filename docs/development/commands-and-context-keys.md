@@ -55,6 +55,25 @@ React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keyb
 - QuickInput 不走注册表：锁定 / readOnly / 松开修饰键即接受的语义只有面板自己知道，J/K 别名（Ctrl/Alt/裸键三种形态）在 `QuickInputPanel` 内处理，`isQuickInputOwnedKey` 负责让 dispatcher 放行。`Ctrl+P/N` 不再放行：dispatcher 的 `quickInputVisible` 分支会解析到全局命令后 `preventDefault + stopPropagation`，但只执行 Escape，因此既不移动面板，也不会打开 Quick Open / New File。
 - **Esc 逃生口**：`FocusActiveEditorGroupAction` 不要加 `hasActiveEditor` precondition。列表 / 树聚焦时用户要靠 `Esc` 把焦点移回编辑区才能开始 `Ctrl+K` 和弦；空编辑区且焦点在视图里（`focusedView` 非空）时也必须能匹配（标题栏菜单 / 下拉保留自己的 Esc）。无编辑器时直接聚焦始终渲染的 `editor-group-body`——`editor-area` Part 根没有 tabIndex，`focusPart` / `Part.focus()` 只记账、不搬 DOM 焦点。
 
+## Vim 模式：Normal 模式的按键归属
+
+`editor.vimMode.enabled` 打开后，Normal 模式的裸键（`h/j/k/l`、`w/b/e`、`gg`/`G`、`d`/`c`/`y` + motion、`x`/`p`/`u`/`J` 等）必须**先于**全局 dispatcher 被认领，否则 `d` 会触发删除、`p` 会打开 Quick Open 之类。两条链路都走 **window capture**：
+
+- 编辑器：`apps/editor/src/renderer/workbench/editor/vim/vimEditorRegistry.ts` 每个 `Document` 一个 window-capture 监听，按 `container.contains(activeElement)` + `hasTextFocus()` 路由到唯一 `VimEditorController`。**不要用 `editor.addCommand`**——standalone Monaco 的 keybinding service 跨实例共享，会吞掉其它编辑器的键。
+- 列表 / 树 / 菜单 / 浮层：扩展现有 `ctrlNavigationRegistry` 的 `vim` 选项（见上节），可编辑焦点一律拒绝。
+
+**上下文键**：`vimMode`（`'normal' | 'insert' | ''`）与 `vimNormalMode`（编辑器文本聚焦且处于 Normal 模式）由控制器写入；`vimNormalMode` 同时是 dispatcher 的放行条件——`useGlobalKeybindingHandler` 在 `Ctrl+F/B/D/U` 上先于单键解析返回，把翻页留给编辑器。
+
+**必须让行的三种情况**（否则会抢走别人的键）：
+
+1. `keybindingChordPending` 为真——`Ctrl+K` 和弦第二击属于 dispatcher；
+2. 模态面打开（`[data-renderer-dialog]` / `[role="menu"]`）——虚拟焦点可能停在编辑器文本下；
+3. IME 组合中（`isComposing || keyCode === 229`）。
+
+**`Ctrl+H/J/K/L` 不走 Vim**：Normal 模式下它们仍归工作台（替换 / 切换底栏 / 和弦 / 扩选），Vim 只认领 `Ctrl+F/B/D/U`；Insert 模式完全放行。
+
+**状态栏**：`vim-mode` 条目只在编辑器文本聚焦且开启时存在（`editor.vimMode.showStatusBar` 可关）。用户可见键位见 `docs/user/zh-CN/reference/editor-shortcuts.md` 的「Vim 模式」一节。
+
 ## 焦点类上下文键：一律 DOM 派生
 
 **全局键盘守卫**：`apps/editor/src/renderer/workbench/useGlobalKeybindingHandler.ts` 有一道「无 ctrl/alt/meta 的裸字符键与 Delete/Backspace 保留给文本面」的守卫，判据 `isEditableTarget(target) || editorTextFocus === true || acpPromptInputFocused === true`（inTextSurface / isPrintableTyping / isNativeEditing 三处，紧挨 chord 分支）。任一 key 残留 true，即便 registry 已解析出 `EXECUTE` 也会被吞。**签名症状**：`Ctrl+F` 正常、`runCommand` 正常、裸字母（如 markdown 预览 link hints 的 `f`）无反应。

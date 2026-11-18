@@ -85,6 +85,8 @@ const SEEDED_CONTEXT_KEYS: readonly string[] = [
   'inReferenceSearchEditor',
   'editorFocus',
   'editorTextFocus',
+  'vimMode',
+  'vimNormalMode',
   'editorColumnSelection',
   'suggestWidgetVisible',
   'findWidgetVisible',

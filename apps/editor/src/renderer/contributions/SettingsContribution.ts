@@ -329,6 +329,22 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Code actions to run on save, keyed by action kind (e.g. "source.organizeImports", "source.fixAll"). "always" runs on every save, "explicit" only on explicit saves, "never" disables the kind.',
             ),
           },
+          'editor.vimMode.enabled': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.editor.vimMode.enabled.description',
+              'Enable Vim keybindings (Normal/Insert modes) in code editors and list navigation. In Normal mode, h/j/k/l move, w/b/e jump by word, gg/G go to the first/last line, and Ctrl+F/B/D/U page.',
+            ),
+          },
+          'editor.vimMode.showStatusBar': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.editor.vimMode.showStatusBar.description',
+              'Show the current Vim mode (-- NORMAL -- / -- INSERT --) in the status bar while an editor has text focus.',
+            ),
+          },
         },
       }),
     )

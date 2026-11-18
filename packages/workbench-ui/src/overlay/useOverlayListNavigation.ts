@@ -253,6 +253,28 @@ export function useOverlayListNavigation(
         handleHorizontal(direction === 'left' ? 'ArrowLeft' : 'ArrowRight')
       }
     },
+    vim: {
+      directions: ['up', 'down', 'left', 'right'],
+      onMove: (motion) => {
+        if (motion.kind === 'direction') {
+          if (motion.direction === 'up' || motion.direction === 'down') {
+            applyIndexKey(motion.direction === 'down' ? 'ArrowDown' : 'ArrowUp')
+          } else {
+            handleHorizontal(motion.direction === 'left' ? 'ArrowLeft' : 'ArrowRight')
+          }
+          return
+        }
+        if (motion.kind === 'first') {
+          applyIndexKey('Home')
+          return
+        }
+        if (motion.kind === 'last') {
+          applyIndexKey('End')
+          return
+        }
+        applyIndexKey(motion.direction === 'down' ? 'PageDown' : 'PageUp')
+      },
+    },
     ...(options.targetDocument !== undefined ? { targetDocument: options.targetDocument } : {}),
   })
 

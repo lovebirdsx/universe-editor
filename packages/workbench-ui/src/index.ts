@@ -68,6 +68,10 @@ export * from './keybinding/KeybindingLabel.js'
 export * from './keybinding/ctrlNavigation.js'
 export {
   useCtrlNavigationLayer,
+  setVimListNavigationEnabledProvider,
   type CtrlNavigationLayerKind,
   type ICtrlNavigationLayerOptions,
+  type IVimListNavigationOptions,
 } from './keybinding/ctrlNavigationRegistry.js'
+export * from './keybinding/vimListNavigation.js'
+export * from './keybinding/keybindingChordState.js'

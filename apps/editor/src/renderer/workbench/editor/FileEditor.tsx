@@ -26,6 +26,7 @@ import {
   IContextKeyService,
   IEditorGroupsService,
   IFocusStackService,
+  IStatusBarService,
   localize,
   markAsSingleton,
   PartId,
@@ -34,6 +35,8 @@ import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { createWorkbenchEditor } from './monaco/workbenchEditorFactory.js'
+import { createVimEditorController } from './vim/vimEditorController.js'
+import { registerVimEditor } from './vim/vimEditorRegistry.js'
 import {
   computeEditorContextMenuAnchor,
   isEditorContextMenuKey,
@@ -141,6 +144,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const configService = useService(IConfigurationService)
   const contextKeyService = useService(IContextKeyService)
   const focusStackService = useService(IFocusStackService)
+  const statusBarService = useService(IStatusBarService)
   const recentEditsTracker = useService(IRecentEditsTracker)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -321,12 +325,25 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     }
     dropContainer.addEventListener('contextmenu', onContextMenu)
     const hoverGuard = MonacoLoader.trackEditorDispose(ed)
+    // Vim Normal/Insert mode. The controller owns per-editor state; the registry
+    // installs the window-capture listener that routes strokes here ahead of the
+    // global dispatcher. It is disposed before the editor so its focus/config
+    // subscriptions never observe a half-disposed instance.
+    const vimController = createVimEditorController({
+      editor: ed,
+      configService,
+      contextKeyService,
+      statusBarService,
+    })
+    const vimRegistration = registerVimEditor(vimController)
     editorRef.current = ed
     return () => {
       dropContainer.removeEventListener('dragover', armDropIntoEditorOnShift, true)
       dropContainer.removeEventListener('contextmenu', onContextMenu)
       contextMenuKeySub.dispose()
       hoverGuard.dispose()
+      vimRegistration.dispose()
+      vimController.dispose()
       editorFocusSub.dispose()
       textFocusSub.dispose()
       textBlurSub.dispose()
@@ -345,7 +362,15 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // via `fileInputRef` (blur handler) and the model-swap effect handles input
     // changes with setModel, so neither is a dependency here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monacoNs, commandService, configService, contextKeyService, focusStackService, group])
+  }, [
+    monacoNs,
+    commandService,
+    configService,
+    contextKeyService,
+    focusStackService,
+    statusBarService,
+    group,
+  ])
 
   // Apply config changes to the live editor instance.
   useEffect(() => {

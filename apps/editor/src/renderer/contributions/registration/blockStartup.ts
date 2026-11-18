@@ -20,6 +20,7 @@ import { ExtensionTreeViewsContribution } from '../ExtensionTreeViewsContributio
 import { SwarmViewContribution } from '../SwarmViewContribution.js'
 import { SwarmConfigurationContribution } from '../SwarmConfigurationContribution.js'
 import { SettingsContribution } from '../SettingsContribution.js'
+import { VimModeContribution } from '../VimModeContribution.js'
 import { ThemesContribution } from '../ThemesContribution.js'
 import { AiConfigurationContribution } from '../AiConfigurationContribution.js'
 import { UpdateConfigurationContribution } from '../UpdateConfigurationContribution.js'
@@ -164,6 +165,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.settings',
   SettingsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Vim mode switch for list navigation (the registry reads it on every
+// keystroke). BlockStartup so it is installed before the first list mounts.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.vimMode',
+  VimModeContribution,
   WorkbenchPhase.BlockStartup,
 )
 

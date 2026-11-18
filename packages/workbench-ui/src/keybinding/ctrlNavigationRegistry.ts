@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ctrlNavigationRegistry — one window-capture listener per document that routes the
- *  Ctrl movement aliases (Ctrl+J/K/H/L) to the innermost active list surface.
+ *  ctrlNavigationRegistry — one window-capture listener per document that routes
+ *  the Ctrl movement aliases (Ctrl+J/K/H/L) to the innermost active list surface.
  *
  *  A listener per component does not work here. Menus paint with virtual focus
  *  (`aria-activedescendant`), so DOM focus stays on the tree or list underneath;
@@ -18,15 +18,36 @@
  *  movement. Ctrl+P/N are deliberately absent: they stay with Quick Open / New
  *  File everywhere, including list surfaces. The price, accepted by design:
  *  while a list/menu/overlay owns the keyboard, Ctrl+K chords are unavailable.
+ *
+ *  Vim mode piggybacks on the same arbitration: when enabled, a layer may also
+ *  register bare hjkl / gg / G / Ctrl+d/u through `vim`. Editable targets are
+ *  always rejected, so a search box keeps typing.
  *--------------------------------------------------------------------------------------------*/
 
 import { useContext, useEffect, useRef } from 'react'
 import { isEditableElement } from '../dom/domRealm.js'
 import { OwnerDocumentContext } from '../overlay/ownerDocumentContext.js'
 import { ctrlNavigationDirection, type CtrlNavigationDirection } from './ctrlNavigation.js'
+import { isKeybindingChordPending } from './keybindingChordState.js'
+import {
+  INITIAL_VIM_LIST_STATE,
+  reduceVimListKey,
+  type VimListDirection,
+  type VimListMotion,
+  type VimListState,
+} from './vimListNavigation.js'
 export type { CtrlNavigationDirection }
 
 export type CtrlNavigationLayerKind = 'menu' | 'dialog' | 'overlay' | 'list'
+
+export interface IVimListNavigationOptions {
+  readonly directions: readonly VimListDirection[]
+  /** Whether gg/G jump to the first/last row. Defaults to true. */
+  readonly jumps?: boolean | undefined
+  /** Whether Ctrl+d/u page the list. Defaults to true. */
+  readonly paging?: boolean | undefined
+  readonly onMove: (motion: VimListMotion, event: KeyboardEvent) => void
+}
 
 export interface ICtrlNavigationLayerOptions {
   readonly kind: CtrlNavigationLayerKind
@@ -59,18 +80,23 @@ export interface ICtrlNavigationLayerOptions {
    */
   readonly allowEditableFocus?: boolean | undefined
   readonly targetDocument?: Document | undefined
+  /** Opt in to bare-key Vim navigation (hjkl/gg/G/Ctrl+d/u). */
+  readonly vim?: IVimListNavigationOptions | undefined
 }
 
 interface LayerEntry {
   /** Read on every stroke so a caller may change kind/directions without re-registering. */
   readonly options: { current: ICtrlNavigationLayerOptions }
   readonly sequence: number
+  /** Mutable: count / pending-g state for this surface. */
+  vimState: VimListState
 }
 
 interface DocumentState {
   readonly view: Window
   readonly layers: Map<symbol, LayerEntry>
   readonly listener: (event: KeyboardEvent) => void
+  readonly focusListener: () => void
 }
 
 const KIND_PRIORITY: Record<CtrlNavigationLayerKind, number> = {
@@ -82,6 +108,17 @@ const KIND_PRIORITY: Record<CtrlNavigationLayerKind, number> = {
 
 const documents = new Map<Document, DocumentState>()
 let nextSequence = 1
+
+let vimListNavigationEnabledProvider: (() => boolean) | undefined
+
+/** Installed by the workbench so the pure UI package stays DI-free. */
+export function setVimListNavigationEnabledProvider(provider: (() => boolean) | undefined): void {
+  vimListNavigationEnabledProvider = provider
+}
+
+function isVimListNavigationEnabled(): boolean {
+  return vimListNavigationEnabledProvider?.() === true
+}
 
 function elementDepth(element: Element): number {
   let depth = 0
@@ -137,22 +174,77 @@ function pickLayer(
   return best
 }
 
-function handleKeyDown(state: DocumentState, doc: Document, event: KeyboardEvent): void {
-  // An earlier listener already acted on the stroke.
-  if (event.defaultPrevented) return
-  // Mid-composition strokes are the IME's.
-  if (event.isComposing || event.keyCode === 229) return
-  const direction = ctrlNavigationDirection(event)
-  if (direction === undefined) return
-  const layer = pickLayer(state, doc, direction)
-  if (layer === undefined) return
+/** Like `pickLayer` but without a direction filter; used by the Vim branch. */
+function pickAnyLayer(state: DocumentState, doc: Document): LayerEntry | undefined {
+  let best: LayerEntry | undefined
+  for (const entry of state.layers.values()) {
+    if (!isLayerActive(entry, doc)) continue
+    if (best === undefined || outranks(entry, best)) best = entry
+  }
+  return best
+}
+
+function consume(event: KeyboardEvent): void {
   // Claim before invoking: the dispatcher on document capture must not also run
   // the global command / enter the Ctrl+K chord, and other window listeners must
   // not move a second surface.
   event.preventDefault()
   event.stopPropagation()
   event.stopImmediatePropagation()
-  layer.options.current.onMove(direction, event)
+}
+
+function handleVimKeyDown(state: DocumentState, doc: Document, event: KeyboardEvent): void {
+  const active = doc.activeElement
+  // Bare-key Vim navigation never types into an editable surface, even for
+  // layers that opted into editable focus for their checkboxes.
+  if (active === null || isEditableElement(active)) return
+
+  const layer = pickAnyLayer(state, doc)
+  if (layer === undefined) return
+  const vim = layer.options.current.vim
+  // A surface without a Vim mapping leaves the stroke alone. Swallowing it here
+  // would break every bare-key interaction on layers that never opted in
+  // (Select typeahead, chat timelines, dialogs on a Monaco edit-context host).
+  if (vim === undefined) return
+
+  const result = reduceVimListKey(
+    layer.vimState,
+    {
+      key: event.key,
+      ctrl: event.ctrlKey,
+      alt: event.altKey,
+      meta: event.metaKey,
+      shift: event.shiftKey,
+    },
+    {
+      directions: vim.directions,
+      jumps: vim.jumps ?? true,
+      paging: vim.paging ?? true,
+    },
+  )
+  layer.vimState = result.state
+  if (!result.handled) return
+  consume(event)
+  if (result.motion !== null) vim.onMove(result.motion, event)
+}
+
+function handleKeyDown(state: DocumentState, doc: Document, event: KeyboardEvent): void {
+  // An earlier listener already acted on the stroke.
+  if (event.defaultPrevented) return
+  // Mid-composition strokes are the IME's.
+  if (event.isComposing || event.keyCode === 229) return
+  // A pending chord second stroke belongs to the dispatcher, not to navigation.
+  if (isKeybindingChordPending(doc)) return
+  const direction = ctrlNavigationDirection(event)
+  if (direction !== undefined) {
+    const layer = pickLayer(state, doc, direction)
+    if (layer === undefined) return
+    consume(event)
+    layer.options.current.onMove(direction, event)
+    return
+  }
+  if (!isVimListNavigationEnabled()) return
+  handleVimKeyDown(state, doc, event)
 }
 
 function ensureDocument(doc: Document): DocumentState | undefined {
@@ -160,13 +252,18 @@ function ensureDocument(doc: Document): DocumentState | undefined {
   if (existing !== undefined) return existing
   const view = doc.defaultView
   if (view === null) return undefined
-  const listener = (event: KeyboardEvent): void => handleKeyDown(state, doc, event)
   const state: DocumentState = {
     view,
     layers: new Map(),
-    listener,
+    listener: (event: KeyboardEvent) => handleKeyDown(state, doc, event),
+    // A focus change starts a fresh count / pending-g; otherwise `3` typed in
+    // one list would carry into the next surface.
+    focusListener: () => {
+      for (const entry of state.layers.values()) entry.vimState = INITIAL_VIM_LIST_STATE
+    },
   }
   view.addEventListener('keydown', state.listener, true)
+  doc.addEventListener('focusin', state.focusListener, true)
   documents.set(doc, state)
   return state
 }
@@ -180,6 +277,7 @@ function registerLayer(doc: Document, entry: LayerEntry): () => void {
     if (!state.layers.delete(id)) return
     if (state.layers.size > 0) return
     state.view.removeEventListener('keydown', state.listener, true)
+    doc.removeEventListener('focusin', state.focusListener, true)
     documents.delete(doc)
   }
 }
@@ -212,7 +310,11 @@ export function useCtrlNavigationLayer(options: ICtrlNavigationLayerOptions): vo
       optionsRef.current.getElement?.()?.ownerDocument ??
       (typeof document === 'undefined' ? undefined : document)
     if (doc === undefined) return undefined
-    return registerLayer(doc, { options: optionsRef, sequence: nextSequence++ })
+    return registerLayer(doc, {
+      options: optionsRef,
+      sequence: nextSequence++,
+      vimState: INITIAL_VIM_LIST_STATE,
+    })
   }, [contextDoc, enabled, targetDocument])
 }
 
@@ -220,6 +322,7 @@ export function useCtrlNavigationLayer(options: ICtrlNavigationLayerOptions): vo
 export function __resetCtrlNavigationForTests(): void {
   for (const [doc, state] of documents) {
     state.view.removeEventListener('keydown', state.listener, true)
+    doc.removeEventListener('focusin', state.focusListener, true)
     documents.delete(doc)
   }
   nextSequence = 1

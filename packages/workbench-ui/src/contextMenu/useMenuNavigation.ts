@@ -281,6 +281,29 @@ export function useMenuNavigation(
     directions: ['up', 'down', 'left', 'right'],
     onMove: moveByDirection,
     targetDocument: doc,
+    vim: {
+      directions: ['up', 'down', 'left', 'right'],
+      // Menus have no paging; gg/G jump to the first/last row.
+      paging: false,
+      onMove: (motion) => {
+        if (motion.kind === 'direction') {
+          moveByDirection(motion.direction)
+          return
+        }
+        if (motion.kind !== 'first' && motion.kind !== 'last') return
+        const s = stateRef.current
+        const level = activeLevel(s)
+        const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
+        if (!levelRows) return
+        const next = stepIndex(levelRows, undefined, motion.kind === 'first' ? 1 : -1)
+        if (next === undefined) return
+        cancelClose()
+        setState({
+          open: s.open.slice(0, level),
+          active: { level, index: next, source: 'keyboard' },
+        })
+      },
+    },
   })
 
   // Window capture: the workbench keybinding dispatcher listens on *document*

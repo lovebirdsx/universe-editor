@@ -368,6 +368,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'panel.restore': '还原底栏大小',
   'sidebar.empty': '没有注册任何视图。',
   'titleBar.empty': '（空）',
+  'vim.status.insert': '-- INSERT --',
+  'vim.status.normal': '-- NORMAL --',
   'view.aiDebug': 'AI 调试',
   'view.commitChanges': '提交变更',
   'view.files': '文件',
@@ -842,6 +844,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.togglePrimarySideBar.title': '切换主侧边栏',
   'action.toggleSecondarySideBar.title': '切换辅助侧边栏',
   'action.toggleTerminal.title': '切换终端',
+  'action.toggleVimMode.title': '切换 Vim 模式',
   'action.toggleWordWrap.title': '切换自动换行',
   'action.undo.title': '撤销',
   'action.unlockEditorGroup.title': '解锁组',
@@ -1276,6 +1279,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.editor.codeActionsOnSave.description':
     '保存时要运行的代码操作，按操作类型（如 "source.organizeImports"、"source.fixAll"）配置。"always" 表示每次保存都运行，"explicit" 表示仅在显式保存时运行，"never" 表示禁用该类型。',
   'settings.editor.semanticHighlighting.description': '控制对支持该特性的语言是否显示语义高亮。',
+  'settings.editor.vimMode.enabled.description':
+    '在代码编辑器与列表导航中启用 Vim 键位（Normal / Insert 双模式）。Normal 模式下 h/j/k/l 移动、w/b/e 按词跳转、gg/G 跳到首末行、Ctrl+F/B/D/U 翻页。',
+  'settings.editor.vimMode.showStatusBar.description':
+    '编辑器持有文本焦点时，在状态栏显示当前 Vim 模式（-- NORMAL -- / -- INSERT --）。',
   'settings.files.nativeDialog.enable.description':
     '打开文件/文件夹及保存时使用操作系统文件对话框，而不是内置对话框。',
   'settings.issueReporter': '问题报告器',

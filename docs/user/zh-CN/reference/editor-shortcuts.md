@@ -16,6 +16,7 @@
 - [代码编辑](#代码编辑)
 - [代码折叠](#代码折叠)
 - [导航](#导航)
+- [Vim 模式（可选，默认关闭）](#vim-模式可选默认关闭)
 - [平台差异：Windows / Mac / Linux](#平台差异windows--mac--linux)
 - [被本编辑器占用的键](#被本编辑器占用的键)
 
@@ -120,6 +121,45 @@
 | 下一个 / 上一个问题 | `F8` / `Shift+F8` | Go to Next / Previous Problem |
 | 下一个 / 上一个错误或警告 | `Alt+F8` / `Shift+Alt+F8` | Go to Next / Previous Error or Warning |
 | 下一个 / 上一个符号高亮 | `F7` / `Shift+F7` | Go to Next / Previous Symbol Highlight |
+
+## Vim 模式（可选，默认关闭）
+
+开启后，编辑器文本区与列表 / 树 / 菜单都进入 Vim 的 **Normal / Insert 双模式**，日常编辑可以双手不离开主键盘区。开启方式二选一：
+
+- 设置里把 `editor.vimMode.enabled` 设为 `true`；
+- 命令面板执行「切换 Vim 模式」（命令 id `workbench.action.toggleVimMode`）。
+
+默认关闭；关闭时本文其余键位表保持原样。开启且编辑器持有文本焦点时，状态栏左侧显示当前模式（`-- NORMAL --` / `-- INSERT --`）；不需要这个指示可把 `editor.vimMode.showStatusBar` 设为 `false`。
+
+### Normal 模式
+
+| 操作 | 键位 |
+| --- | --- |
+| 左 / 右 / 上 / 下移动 | `h` / `l` / `j` / `k` |
+| 按词移动 | `w` `b` `e`；大写 `W` `B` `E` 按空白分词 |
+| 行首 / 行尾 | `0` / `$`；`^` 到首个非空白字符 |
+| 文件首行 / 末行 | `gg` / `G` |
+| 段落 | `{` / `}` |
+| 翻页 | `Ctrl+F` / `Ctrl+B`（整页）、`Ctrl+D` / `Ctrl+U`（半页） |
+| 进入 Insert | `i` `a` `I` `A`（当前行）、`o` `O`（上 / 下新行） |
+| 删除 | `x` / `X`（字符）、`d` + 移动（`dw` `dd` `d$` 等） |
+| 修改（删除后进入 Insert） | `c` + 移动（`cw` `cc` 等） |
+| 复制到寄存器 | `y` + 移动（`yw` `yy` 等） |
+| 粘贴 | `p` / `P` |
+| 撤销 | `u` |
+| 合并行 | `J` |
+
+数字前缀（如 `3j`、`2dd`）可用。Normal 模式下**未实现的按键会被吞掉**，不会输入到缓冲区。
+
+> Normal 模式只接管 `Ctrl+F` / `Ctrl+B` / `Ctrl+D` / `Ctrl+U`；`Ctrl+H` / `Ctrl+J` / `Ctrl+K` / `Ctrl+L` 仍归工作台（替换、切换底栏、和弦、扩选），`Ctrl+K` 和弦照常可用。Insert 模式完全保持现有行为。
+
+### Insert 模式
+
+所有键原样输入，`Esc` 回到 Normal 模式。
+
+### 列表 / 树 / 菜单
+
+这些表面没有 Insert 模式（不输入文本），聚焦时直接支持 `h` `j` `k` `l` 移动、`gg` / `G` 跳到首 / 末行；列表与树另支持 `Ctrl+D` / `Ctrl+U` 翻页（菜单不翻页）。可编辑控件（搜索框、行内输入框）里裸键仍是普通输入。
 
 ## 平台差异：Windows / Mac / Linux
 

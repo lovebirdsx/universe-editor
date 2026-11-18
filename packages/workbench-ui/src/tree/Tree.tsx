@@ -633,6 +633,31 @@ export function Tree<T>(props: ITreeProps<T>) {
     directions: ['up', 'down', 'left', 'right'],
     getElement: () => containerRef.current,
     onMove: (direction) => model.navigate(direction),
+    vim: {
+      directions: ['up', 'down', 'left', 'right'],
+      onMove: (motion) => {
+        if (motion.kind === 'direction') {
+          model.navigate(motion.direction)
+          return
+        }
+        const vis = model.getVisibleNodes()
+        if (vis.length === 0) return
+        if (motion.kind === 'first' || motion.kind === 'last') {
+          const target = motion.kind === 'first' ? vis[0] : vis[vis.length - 1]
+          if (target) model.setSelection([target.id], target.id)
+          return
+        }
+        const focusedId = model.focused
+        const currentIndex = focusedId ? vis.findIndex((n) => n.id === focusedId) : -1
+        const next = resolveIndexNavigation(motion.direction === 'down' ? 'PageDown' : 'PageUp', {
+          index: currentIndex,
+          count: vis.length,
+          pageSize: PAGE_STEP,
+        })
+        const target = next === undefined ? undefined : vis[next]
+        if (target) model.setSelection([target.id], target.id)
+      },
+    },
   })
 
   // 身份恒定、body 最新：返回的行处理器每次调用现造（读到当前 model / onActivate），

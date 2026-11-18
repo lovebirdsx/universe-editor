@@ -213,6 +213,7 @@ import {
 } from './searchActions.js'
 import { FindWordAtCursorNextAction, FindWordAtCursorPreviousAction } from './findWordActions.js'
 import { ChangeLanguageModeAction } from './languageModeActions.js'
+import { ToggleVimModeAction } from './vimActions.js'
 import { CloseQuickInputAction } from './quickInputActions.js'
 import { FocusNextPartAction, FocusPreviousPartAction } from './focusActions.js'
 import { ClearHistoryAction, GoBackAction, GoForwardAction } from './historyActions.js'
@@ -533,6 +534,7 @@ registerAction2(FocusOutlineAction)
 registerAction2(ToggleMinimapAction)
 registerAction2(ToggleWordWrapAction)
 registerAction2(ChangeLanguageModeAction)
+registerAction2(ToggleVimModeAction)
 
 // Editor — close
 registerAction2(CloseActiveEditorAction)

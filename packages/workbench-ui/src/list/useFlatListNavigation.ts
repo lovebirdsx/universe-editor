@@ -211,6 +211,42 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
       })
       if (next !== undefined) focusRow(next)
     },
+    vim: {
+      directions:
+        options.onMoveHorizontal === undefined ? ['up', 'down'] : ['up', 'down', 'left', 'right'],
+      onMove: (motion) => {
+        const { count, focusedIndex, getPageSize, onMoveHorizontal } = optionsRef.current
+        if (count === 0) return
+        if (motion.kind === 'direction') {
+          if (motion.direction === 'left' || motion.direction === 'right') {
+            if (onMoveHorizontal === undefined) return
+            if (focusedIndex < 0 || focusedIndex >= count) return
+            onMoveHorizontal(motion.direction, focusedIndex)
+            return
+          }
+          const next = resolveIndexNavigation(
+            motion.direction === 'down' ? 'ArrowDown' : 'ArrowUp',
+            { index: focusedIndex, count, pageSize: getPageSize?.() },
+          )
+          if (next !== undefined) focusRow(next)
+          return
+        }
+        if (motion.kind === 'first') {
+          focusRow(0)
+          return
+        }
+        if (motion.kind === 'last') {
+          focusRow(count - 1)
+          return
+        }
+        const next = resolveIndexNavigation(motion.direction === 'down' ? 'PageDown' : 'PageUp', {
+          index: focusedIndex,
+          count,
+          pageSize: getPageSize?.(),
+        })
+        if (next !== undefined) focusRow(next)
+      },
+    },
   })
 
   const openContextMenu = useCallback(() => {

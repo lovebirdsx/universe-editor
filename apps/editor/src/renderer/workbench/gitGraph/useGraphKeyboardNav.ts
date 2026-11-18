@@ -88,6 +88,28 @@ export function useGraphKeyboardNav({
     directions: ['up', 'down'],
     getElement: () => scrollRef.current,
     onMove: (direction) => moveBy(direction === 'down' ? 1 : -1),
+    vim: {
+      directions: ['up', 'down'],
+      onMove: (motion) => {
+        if (motion.kind === 'direction') {
+          moveBy(motion.direction === 'down' ? 1 : -1)
+          return
+        }
+        if (motion.kind === 'first') {
+          moveTo(0)
+          return
+        }
+        if (motion.kind === 'last') {
+          moveTo(rows.length - 1)
+          return
+        }
+        const pageSize = Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 0) / rowHeight))
+        const currentKey = selectionRef.current[0]
+        const currentIndex = currentKey === undefined ? -1 : rows.indexOf(currentKey)
+        const base = currentIndex < 0 ? 0 : currentIndex
+        moveTo(base + (motion.direction === 'down' ? pageSize : -pageSize))
+      },
+    },
   })
 
   return useCallback(

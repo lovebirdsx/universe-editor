@@ -244,6 +244,12 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // Monaco's job).
     contextKeyService.createKey<boolean>('editorTextFocus', false)
 
+    // Vim mode state, written by the FileEditor's Vim controller. `vimNormalMode`
+    // is true only while a Vim-enabled editor holds text focus in Normal mode; the
+    // global dispatcher uses it to hand Ctrl+F/B/D/U to the editor.
+    contextKeyService.createKey<string>('vimMode', '')
+    contextKeyService.createKey<boolean>('vimNormalMode', false)
+
     // True while the ACP session prompt input (an embedded Monaco editor) holds
     // text focus. Written by PromptMonacoEditor. Deliberately separate from
     // editorTextFocus: commands gated on editorTextFocus assume a real file editor

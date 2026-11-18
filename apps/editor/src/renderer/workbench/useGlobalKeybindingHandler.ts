@@ -10,6 +10,7 @@ import {
   isElementLike,
   isHTMLElementLike,
   isAltRemoveShortcut,
+  setKeybindingChordPending,
 } from '@universe-editor/workbench-ui'
 import {
   ICommandService,
@@ -28,6 +29,7 @@ import { formatChord } from './titlebar/keybindingFormat.js'
 import { IKeyboardDebugService } from '../services/keybinding/keyboardDebugService.js'
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 import { MonacoLoader } from './editor/monaco/MonacoLoader.js'
+import { isVimPagingStroke } from './editor/vim/vimKeymap.js'
 import { recordPerfPhase } from '../services/performance/perfPhases.js'
 import {
   formatGuardStop,
@@ -152,6 +154,7 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
   // content commits, not one passive-effect flush later.
   useLayoutEffect(() => {
     function clearChord() {
+      setKeybindingChordPending(targetDocument, false)
       const p = pendingRef.current
       if (!p) return
       clearTimeout(p.timer)
@@ -161,6 +164,10 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
 
     function enterChord(key: string) {
       clearChord()
+      // The Vim window-capture listeners run before this document-capture
+      // dispatcher; tell them to yield the second stroke so `Ctrl+K Ctrl+J`
+      // still completes instead of moving the cursor.
+      setKeybindingChordPending(targetDocument, true)
       const entry = statusBarService.addEntry({
         text: localize('keybinding.chordPending', '({key}) was pressed. Waiting for second key…', {
           key: formatChord([key]),
@@ -334,6 +341,24 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
       }
 
       const key = buildKeyString(e)
+
+      // Vim Normal mode claims Ctrl+F/B/D/U while a Vim-enabled editor holds
+      // text focus. The registry's window-capture listener normally consumes
+      // these first; this guard is the safety net for a controller that is
+      // disabled or unfocused mid-flight, so Find / Toggle Panel never fire in
+      // Normal mode.
+      if (
+        contextKeyService.get('vimNormalMode') === true &&
+        contextKeyService.get('editorTextFocus') === true &&
+        isVimPagingStroke(e)
+      ) {
+        if (dbg) {
+          keyboardDebugService.append(
+            formatGuardStop(toDiagnostics(e, key), 'Vim Normal mode owns this paging stroke'),
+          )
+        }
+        return
+      }
 
       const result = resolveWithPhase(key)
       const diag = dbg ? toDiagnostics(e, key) : undefined
