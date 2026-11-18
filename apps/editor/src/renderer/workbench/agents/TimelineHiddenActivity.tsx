@@ -85,15 +85,14 @@ export function TimelineHiddenActivity({
         >
           {primary}
         </span>
-        {secondary !== undefined && (
-          <span
-            className={styles['timelineHiddenActivityDetail']}
-            data-testid={`${testId}-detail`}
-            data-tooltip={secondary}
-          >
-            {secondary}
-          </span>
-        )}
+        {/* Always mounted: the CSS slot keeps the row height stable while activity swaps. */}
+        <span
+          className={styles['timelineHiddenActivityDetail']}
+          data-testid={`${testId}-detail`}
+          data-tooltip={secondary}
+        >
+          {secondary}
+        </span>
       </div>
     </div>
   )

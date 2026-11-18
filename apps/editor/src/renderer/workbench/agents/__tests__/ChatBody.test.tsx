@@ -2442,7 +2442,7 @@ describe('ChatBody — display modes', () => {
 
     act(() => session.setCollapseMode('hideThinking'))
     expect(getByTestId('acp-timeline-hidden-activity-primary').textContent).toBe('Thinking…')
-    expect(queryByTestId('acp-timeline-hidden-activity-detail')).toBeNull()
+    expect(getByTestId('acp-timeline-hidden-activity-detail').textContent).toBe('')
 
     act(() => session.setCollapseMode('onlyMessage'))
     expect(getByTestId('acp-timeline-hidden-activity-detail').textContent).toBe('…')

@@ -480,6 +480,34 @@ describe('ToolCallCard', () => {
     expect(screen.queryByTestId('acp-subagent-hidden-activity')).toBeNull()
   })
 
+  it('keeps an empty detail slot so activity swaps do not change the row height', () => {
+    renderCard(
+      makeCall({
+        kind: 'think',
+        subagent: true,
+        status: 'in_progress',
+        title: 'Explore the repo',
+        children: [
+          {
+            kind: 'toolCall',
+            id: 'sc-read',
+            call: makeCall({
+              id: 'sc-read',
+              kind: 'read',
+              title: 'Read file',
+              status: 'in_progress',
+            }),
+          },
+        ],
+      }),
+      {},
+      { collapseMode: 'onlyMessage', collapsed: true },
+    )
+
+    expect(screen.getByTestId('acp-subagent-hidden-activity-primary').textContent).toBe('Read file')
+    expect(screen.getByTestId('acp-subagent-hidden-activity-detail').textContent).toBe('')
+  })
+
   it('hides the sub-agent timeline while the parent card is collapsed', () => {
     renderCard(
       makeCall({
