@@ -258,6 +258,13 @@ describe('reduceVimKey', () => {
     const escaped = press(insert, 'Escape')
     expect(escaped.state.mode).toBe('normal')
     expect(escaped.handled).toBe(true)
+    expect(escaped.command).toBeNull()
+  })
+
+  it('maps Normal-mode Escape to :nohlsearch', () => {
+    const result = press(INITIAL_VIM_STATE, 'Escape')
+    expect(result.handled).toBe(true)
+    expect(result.command).toEqual({ type: 'search-highlight-clear' })
   })
 
   it('maps Ctrl+f/b/d/u to paging motions', () => {

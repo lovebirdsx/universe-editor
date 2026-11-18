@@ -372,7 +372,14 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'vim.status.normal': 'Vim: 普通模式（点击切换）',
   'vim.search.ariaLabel': 'Vim 搜索',
   'vim.search.noMatch': '未找到匹配项',
+  'vim.search.noMatchCaseSensitive': '未找到匹配项（可在查询后加 \\c 忽略大小写）',
   'vim.search.noPrevious': '没有上一次搜索',
+  'vim.search.emptyPattern': '搜索内容为空',
+  'vim.search.caseLabel': '区分大小写',
+  'vim.search.caseTooltip': '大小写：{mode}（点击切换）',
+  'vim.search.caseMode.smart': '智能（含大写时区分）',
+  'vim.search.caseMode.sensitive': '区分',
+  'vim.search.caseMode.insensitive': '忽略',
   'view.aiDebug': 'AI 调试',
   'view.commitChanges': '提交变更',
   'view.files': '文件',
@@ -1288,6 +1295,13 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '编辑器持有文本焦点时，在状态栏显示当前 Vim 模式的图标。',
   'settings.editor.vimMode.autoSwitchInputMethod.description':
     '进入 Normal 模式时把系统输入法切到英文，回到 Insert 模式时恢复，避免中文输入法把拼音写进缓冲区。仅 Windows 生效。',
+  'settings.editor.vimMode.searchCaseSensitivity.description':
+    '控制 Vim `/` 与 `?` 搜索的大小写策略。"smart" 仅在查询包含大写字母时区分；`\\c`/`\\C` 可对单次搜索覆盖该设置。',
+  'settings.editor.vimMode.searchCaseSensitivity.smart': '智能大小写',
+  'settings.editor.vimMode.searchCaseSensitivity.sensitive': '区分大小写',
+  'settings.editor.vimMode.searchCaseSensitivity.insensitive': '忽略大小写',
+  'settings.editor.vimMode.highlightSearch.description':
+    '高亮全部 Vim 搜索匹配，并在编辑时刷新。Normal 模式按 Esc 清除（等价 :nohlsearch）。大文件会限制扫描范围。',
   'settings.files.nativeDialog.enable.description':
     '打开文件/文件夹及保存时使用操作系统文件对话框，而不是内置对话框。',
   'settings.issueReporter': '问题报告器',
@@ -4198,6 +4212,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'color.editor.blameForeground': '行内 git blame 标注的前景色。',
   'color.editorGroup.border': '编辑器区域及编辑器内部部件的边框色。',
   'color.editorWidget.background': '行内评论线程等编辑器部件的背景色。',
+  'color.editorWidget.foreground': '查找框等编辑器部件的前景色。',
+  'color.widget.border': '查找框等部件的边框色。',
   'color.editor.findMatchBackground': '当前搜索匹配项的背景色。',
   'color.editor.findMatchForeground': '当前搜索匹配项的前景色。',
   'color.breadcrumb.foreground': '面包屑项的前景色。',

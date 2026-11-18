@@ -24,11 +24,18 @@ import { clampNormalPosition, firstNonBlankColumn, resolveMotion } from './vimMo
 import { linewiseRange, resolveOperatorRange } from './vimOperators.js'
 import { getVimRegister, setVimRegister } from './vimRegisters.js'
 import {
+  findAllVimMatches,
   findVimMatch,
   getLastVimSearch,
   oppositeSearchDirection,
+  resolveVimSearchPattern,
   setLastVimSearch,
+  VIM_SEARCH_HIGHLIGHT_LIMITS,
+  type VimSearchCaseMode,
+  type VimSearchCaseOverride,
   type VimSearchMatch,
+  type VimSearchPattern,
+  type VimSearchSpan,
 } from './vimSearch.js'
 import { createVimSearchWidget, type VimSearchWidget } from './vimSearchWidget.js'
 import {
@@ -45,6 +52,10 @@ import {
 
 const VIM_STATUS_ENTRY_ID = 'vim-mode'
 const VIM_STATUS_PRIORITY = 5000
+const SEARCH_HIGHLIGHT_REFRESH_MS = 150
+const PREVIEW_HIGHLIGHT_REFRESH_MS = 120
+/** Below this size a preview keystroke can afford a synchronous full-file scan. */
+const SEARCH_SYNC_HIGHLIGHT_MAX_LINES = 5000
 
 /**
  * Shared by every controller in this window. Main keeps one saved input method
@@ -91,6 +102,14 @@ export function createVimEditorController(
   let enabled = configService.get<boolean>('editor.vimMode.enabled') === true
   let autoSwitchInputMethod =
     configService.get<boolean>('editor.vimMode.autoSwitchInputMethod') !== false
+  let searchCaseMode: VimSearchCaseMode = readSearchCaseMode()
+  let searchCaseOverride: VimSearchCaseOverride = null
+  let highlightSearch = readHighlightSearch()
+  let searchHighlightSuppressed = false
+  let searchComposing = false
+  let compositionJustEnded = false
+  let searchRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  let previewHighlightTimer: ReturnType<typeof setTimeout> | null = null
   let textFocused = false
   let statusEntry: IStatusBarEntryAccessor | undefined
   let searchWidget: VimSearchWidget | null = null
@@ -100,6 +119,19 @@ export function createVimEditorController(
   let searchFocused = false
   let searchDecorations: ReturnType<VimEditor['createDecorationsCollection']> | null = null
   let closingSearch = false
+
+  function readSearchCaseMode(): VimSearchCaseMode {
+    const value = configService.get<string>('editor.vimMode.searchCaseSensitivity')
+    return value === 'sensitive' || value === 'insensitive' ? value : 'smart'
+  }
+
+  function readHighlightSearch(): boolean {
+    return configService.get<boolean>('editor.vimMode.highlightSearch') === true
+  }
+
+  function resolveCurrentSearch(raw: string): VimSearchPattern {
+    return resolveVimSearchPattern(raw, searchCaseMode, searchCaseOverride)
+  }
 
   function setSearchFocused(next: boolean): void {
     if (searchFocused === next) return
@@ -299,6 +331,9 @@ export function createVimEditorController(
     widget.input.addEventListener('input', onSearchInput)
     widget.input.addEventListener('focus', onSearchFocus)
     widget.input.addEventListener('blur', onSearchBlur)
+    widget.input.addEventListener('compositionstart', onSearchCompositionStart)
+    widget.input.addEventListener('compositionend', onSearchCompositionEnd)
+    widget.caseButton.addEventListener('click', onSearchCaseClick)
     searchWidget = widget
     return widget
   }
@@ -339,9 +374,33 @@ export function createVimEditorController(
     setSearchFocused(true)
   }
 
+  function onSearchCompositionStart(): void {
+    searchComposing = true
+    compositionJustEnded = false
+  }
+
+  /**
+   * Some IMEs deliver the final `input` with `isComposing` still true, which
+   * used to leave the preview one keystroke behind until a later deletion. The
+   * composition-end microtask is the authoritative "text is final" signal.
+   */
+  function onSearchCompositionEnd(): void {
+    searchComposing = false
+    compositionJustEnded = true
+    queueMicrotask(() => {
+      compositionJustEnded = false
+      if (searchOrigin !== null) previewSearch()
+    })
+  }
+
   function onSearchInput(event: Event): void {
-    if ((event as InputEvent).isComposing) return
+    if (searchComposing) return
+    if ((event as InputEvent).isComposing === true && !compositionJustEnded) return
     previewSearch()
+  }
+
+  function onSearchCaseClick(): void {
+    toggleSearchCase()
   }
 
   /**
@@ -358,63 +417,228 @@ export function createVimEditorController(
       closeSearch(false, false)
       return
     }
-    const query = widget.input.value
+    const pattern = resolveCurrentSearch(widget.input.value)
     const match =
-      query.length === 0
+      pattern.text.length === 0
         ? null
-        : findVimMatch(model, origin, query, {
+        : findVimMatch(model, origin, pattern.text, {
             direction: searchDirection,
             count: searchOpenCount,
+            caseSensitive: pattern.caseSensitive,
           })
-    if (match === null) {
+    if (pattern.text.length === 0 || match === null) {
       closeSearch(true, false)
+      if (highlightSearch) refreshSearchHighlights()
       return
     }
-    setLastVimSearch({ text: query, direction: searchDirection })
-    moveToSearchMatch(match, query)
-    closeSearch(false, false, true)
-  }
-
-  function setSearchHighlight(match: VimSearchMatch, query: string): void {
-    searchDecorations ??= editor.createDecorationsCollection()
-    searchDecorations.set([
-      {
-        range: {
-          startLineNumber: match.line,
-          startColumn: match.column,
-          endLineNumber: match.line,
-          endColumn: match.column + query.length,
-        },
-        options: { inlineClassName: 'vim-search-match' },
-      },
-    ])
+    setLastVimSearch({
+      text: pattern.text,
+      direction: searchDirection,
+      caseSensitive: pattern.caseSensitive,
+    })
+    searchHighlightSuppressed = false
+    setPosition({ line: match.line, column: match.column })
+    closeSearch(false, false)
+    if (highlightSearch) refreshSearchHighlights()
+    else clearSearchHighlight()
   }
 
   function clearSearchHighlight(): void {
     searchDecorations?.clear()
   }
 
-  function moveToSearchMatch(match: VimSearchMatch, query: string): void {
-    setPosition({ line: match.line, column: match.column })
-    setSearchHighlight(match, query)
+  function cancelSearchRefreshTimer(): void {
+    if (searchRefreshTimer !== null) {
+      clearTimeout(searchRefreshTimer)
+      searchRefreshTimer = null
+    }
+  }
+
+  function cancelPreviewHighlightTimer(): void {
+    if (previewHighlightTimer !== null) {
+      clearTimeout(previewHighlightTimer)
+      previewHighlightTimer = null
+    }
+  }
+
+  function spanFor(match: VimSearchMatch, length: number): VimSearchSpan {
+    return { line: match.line, column: match.column, length }
+  }
+
+  function sameSpan(a: VimSearchSpan, b: VimSearchSpan): boolean {
+    return a.line === b.line && a.column === b.column
+  }
+
+  function renderAllMatches(spans: readonly VimSearchSpan[], current: VimSearchSpan | null): void {
+    if (spans.length === 0) {
+      clearSearchHighlight()
+      return
+    }
+    searchDecorations ??= editor.createDecorationsCollection()
+    searchDecorations.set(
+      spans.map((span) => ({
+        range: {
+          startLineNumber: span.line,
+          startColumn: span.column,
+          endLineNumber: span.line,
+          endColumn: span.column + span.length,
+        },
+        options: {
+          inlineClassName:
+            current !== null && sameSpan(span, current)
+              ? 'vim-search-match-current'
+              : 'vim-search-match',
+        },
+      })),
+    )
+  }
+
+  /** The span under the cursor when it starts a match the capped scan may miss. */
+  function matchAtCursor(query: string, caseSensitive: boolean): VimSearchSpan | null {
+    const model = editor.getModel()
+    if (model === null || query.length === 0) return null
+    const cursor = primaryPosition()
+    const line = model.getLineContent(cursor.line)
+    const start = cursor.column - 1
+    if (start + query.length > line.length) return null
+    const slice = line.slice(start, start + query.length)
+    const equal = caseSensitive ? slice === query : slice.toLowerCase() === query.toLowerCase()
+    return equal ? { line: cursor.line, column: cursor.column, length: query.length } : null
+  }
+
+  /**
+   * Scan the whole model for `hlsearch`. The scan is capped in vimSearch.ts so a
+   * large or minified file cannot make every edit rescans the buffer unbounded.
+   * `forcedCurrent` lets a preview keep its cursor match when the cap truncates
+   * the scan before reaching it, so the current highlight never flickers away.
+   */
+  function renderAllMatchesFor(
+    query: string,
+    caseSensitive: boolean,
+    forcedCurrent: VimSearchSpan | null = null,
+  ): void {
+    const model = editor.getModel()
+    if (model === null || query.length === 0) {
+      clearSearchHighlight()
+      return
+    }
+    const { matches } = findAllVimMatches(model, query, {
+      caseSensitive,
+      ...VIM_SEARCH_HIGHLIGHT_LIMITS,
+    })
+    const cursor = primaryPosition()
+    const current =
+      forcedCurrent ??
+      matches.find(
+        (span) =>
+          span.line === cursor.line &&
+          cursor.column >= span.column &&
+          cursor.column < span.column + span.length,
+      ) ??
+      matchAtCursor(query, caseSensitive)
+    if (current === null) {
+      renderAllMatches(matches, null)
+      return
+    }
+    const rendered = matches.some((span) => sameSpan(span, current))
+      ? matches
+      : [...matches, current]
+    renderAllMatches(rendered, current)
+  }
+
+  function renderStoredHighlights(): void {
+    const last = getLastVimSearch()
+    if (last === null) {
+      clearSearchHighlight()
+      return
+    }
+    renderAllMatchesFor(last.text, last.caseSensitive)
+  }
+
+  function refreshSearchHighlights(): void {
+    if (!enabled) return
+    if (!highlightSearch || searchHighlightSuppressed || searchOrigin !== null) return
+    renderStoredHighlights()
+  }
+
+  function scheduleSearchHighlightRefresh(): void {
+    if (!enabled) return
+    if (!highlightSearch || searchHighlightSuppressed || searchOrigin !== null) return
+    cancelSearchRefreshTimer()
+    searchRefreshTimer = setTimeout(() => {
+      searchRefreshTimer = null
+      refreshSearchHighlights()
+    }, SEARCH_HIGHLIGHT_REFRESH_MS)
+  }
+
+  /** Keep the preview's cursor match even when the full scan is capped. */
+  function previewCurrentSpan(text: string): VimSearchSpan {
+    const cursor = primaryPosition()
+    return { line: cursor.line, column: cursor.column, length: text.length }
+  }
+
+  function schedulePreviewHighlightRefresh(): void {
+    if (!enabled) return
+    if (!highlightSearch || searchHighlightSuppressed) return
+    cancelPreviewHighlightTimer()
+    previewHighlightTimer = setTimeout(() => {
+      previewHighlightTimer = null
+      if (searchOrigin === null) return
+      const widget = searchWidget
+      if (widget === null) return
+      const pattern = resolveCurrentSearch(widget.input.value)
+      if (pattern.text.length === 0) return
+      renderAllMatchesFor(pattern.text, pattern.caseSensitive, previewCurrentSpan(pattern.text))
+    }, PREVIEW_HIGHLIGHT_REFRESH_MS)
+  }
+
+  /**
+   * A case-sensitive miss often means the user wants a case-insensitive search;
+   * probing once with `ignoreCase` lets the hint suggest `\c` only when it would
+   * actually help. The probe reuses the capped scan and stops at the first hit.
+   */
+  function noMatchHint(model: VimTextModel, pattern: VimSearchPattern): string {
+    if (pattern.caseSensitive && pattern.text.length > 0) {
+      const relaxed = findAllVimMatches(model, pattern.text, {
+        ...VIM_SEARCH_HIGHLIGHT_LIMITS,
+        caseSensitive: false,
+        maxMatches: 1,
+      })
+      if (relaxed.matches.length > 0) {
+        return localize('vim.search.noMatchCaseSensitive', 'No match — add \\c to ignore case')
+      }
+    }
+    return localize('vim.search.noMatch', 'No match')
+  }
+
+  function syncSearchCaseUi(pattern: VimSearchPattern): void {
+    searchWidget?.setCaseState({
+      caseSensitive: pattern.caseSensitive,
+      caseMode: pattern.caseMode,
+      caseSource: pattern.caseSource,
+    })
   }
 
   /**
    * Hide the box and drop its transient state. `restoreOrigin` puts the cursor
    * back where the search started (Esc); `refocus` returns text focus to Monaco
-   * so Normal-mode keystrokes resume (Enter/Esc, but not a blur away);
-   * `keepHighlight` leaves the confirmed match marked after the box closes.
+   * so Normal-mode keystrokes resume (Enter/Esc, but not a blur away). The
+   * transient preview highlight is always cleared here; `hlsearch` highlights
+   * are rebuilt explicitly after the box closes.
    */
-  function closeSearch(restoreOrigin: boolean, refocus: boolean, keepHighlight = false): void {
+  function closeSearch(restoreOrigin: boolean, refocus: boolean): void {
     if (closingSearch) return
     closingSearch = true
     try {
+      cancelPreviewHighlightTimer()
+      searchComposing = false
+      compositionJustEnded = false
       const origin = searchOrigin
       searchOrigin = null
       searchWidget?.clearHint()
       searchWidget?.hide()
       setSearchFocused(false)
-      if (!keepHighlight) clearSearchHighlight()
+      clearSearchHighlight()
       if (restoreOrigin && origin !== null) setPosition(origin)
       if (refocus) editor.focus()
     } finally {
@@ -428,11 +652,17 @@ export function createVimEditorController(
     searchOrigin = primaryPosition()
     searchDirection = direction
     searchOpenCount = Math.max(1, count)
+    searchCaseOverride = null
+    searchHighlightSuppressed = false
+    searchComposing = false
+    compositionJustEnded = false
     const widget = ensureSearchWidget()
     widget.setDirection(direction)
     widget.setValue('')
     widget.clearHint()
+    syncSearchCaseUi(resolveCurrentSearch(''))
     widget.show()
+    if (highlightSearch && !searchHighlightSuppressed) renderStoredHighlights()
     queueMicrotask(() => {
       if (searchOrigin === null) return
       widget.input.focus()
@@ -445,57 +675,117 @@ export function createVimEditorController(
     const origin = searchOrigin
     const model = editor.getModel()
     if (widget === null || origin === null || model === null) return
-    const query = widget.input.value
-    if (query.length === 0) {
+    const raw = widget.input.value
+    const pattern = resolveCurrentSearch(raw)
+    syncSearchCaseUi(pattern)
+
+    if (raw.length === 0) {
+      cancelPreviewHighlightTimer()
       setPosition(origin)
-      clearSearchHighlight()
       widget.clearHint()
+      if (highlightSearch && !searchHighlightSuppressed) renderStoredHighlights()
+      else clearSearchHighlight()
       return
     }
-    const match = findVimMatch(model, origin, query, {
+
+    if (pattern.text.length === 0) {
+      cancelPreviewHighlightTimer()
+      setPosition(origin)
+      clearSearchHighlight()
+      widget.showHint(localize('vim.search.emptyPattern', 'Empty search pattern'))
+      return
+    }
+
+    const match = findVimMatch(model, origin, pattern.text, {
       direction: searchDirection,
       count: searchOpenCount,
+      caseSensitive: pattern.caseSensitive,
     })
     if (match === null) {
+      cancelPreviewHighlightTimer()
       setPosition(origin)
       clearSearchHighlight()
-      widget.showHint(localize('vim.search.noMatch', 'No match'))
+      widget.showHint(noMatchHint(model, pattern))
       return
     }
+
     widget.clearHint()
-    moveToSearchMatch(match, query)
+    setPosition({ line: match.line, column: match.column })
+    const current = spanFor(match, pattern.text.length)
+    if (highlightSearch && !searchHighlightSuppressed) {
+      if (model.getLineCount() <= SEARCH_SYNC_HIGHLIGHT_MAX_LINES) {
+        renderAllMatchesFor(pattern.text, pattern.caseSensitive, current)
+      } else {
+        renderAllMatches([current], current)
+        schedulePreviewHighlightRefresh()
+      }
+    } else {
+      renderAllMatches([current], current)
+    }
   }
 
   function commitSearch(): void {
     const widget = searchWidget
     const origin = searchOrigin
     if (widget === null || origin === null) return
-    const last = getLastVimSearch()
-    const typed = widget.input.value
-    const query = typed.length > 0 ? typed : (last?.text ?? '')
-    if (query.length === 0) {
-      widget.showHint(localize('vim.search.noPrevious', 'No previous search'))
-      return
-    }
-    setLastVimSearch({ text: query, direction: searchDirection })
     const model = editor.getModel()
     if (model === null) return
-    const match = findVimMatch(model, origin, query, {
+
+    const raw = widget.input.value
+    const last = getLastVimSearch()
+    let pattern: VimSearchPattern
+    if (raw.length === 0) {
+      if (last === null) {
+        widget.showHint(localize('vim.search.noPrevious', 'No previous search'))
+        return
+      }
+      const caseSensitive =
+        searchCaseOverride === null ? last.caseSensitive : searchCaseOverride === 'sensitive'
+      pattern = {
+        text: last.text,
+        caseSensitive,
+        caseMode: searchCaseMode,
+        caseSource: searchCaseOverride === null ? 'default' : 'user',
+        marker: null,
+      }
+    } else {
+      pattern = resolveCurrentSearch(raw)
+    }
+
+    if (pattern.text.length === 0) {
+      widget.showHint(localize('vim.search.emptyPattern', 'Empty search pattern'))
+      return
+    }
+
+    setLastVimSearch({
+      text: pattern.text,
+      direction: searchDirection,
+      caseSensitive: pattern.caseSensitive,
+    })
+    searchHighlightSuppressed = false
+
+    const match = findVimMatch(model, origin, pattern.text, {
       direction: searchDirection,
       count: searchOpenCount,
+      caseSensitive: pattern.caseSensitive,
     })
     if (match === null) {
       setPosition(origin)
       clearSearchHighlight()
-      widget.showHint(localize('vim.search.noMatch', 'No match'))
+      widget.showHint(noMatchHint(model, pattern))
       return
     }
-    moveToSearchMatch(match, query)
-    closeSearch(false, true, true)
+
+    setPosition({ line: match.line, column: match.column })
+    closeSearch(false, true)
+    if (highlightSearch) refreshSearchHighlights()
+    else clearSearchHighlight()
   }
 
   function cancelSearch(): void {
     closeSearch(true, true)
+    // Esc before committing keeps the previous search result visible again.
+    if (highlightSearch && !searchHighlightSuppressed) renderStoredHighlights()
   }
 
   function repeatSearch(reverse: boolean, count: number): void {
@@ -506,9 +796,28 @@ export function createVimEditorController(
     const match = findVimMatch(model, primaryPosition(), last.text, {
       direction,
       count,
+      caseSensitive: last.caseSensitive,
     })
     if (match === null) return
-    moveToSearchMatch(match, last.text)
+    searchHighlightSuppressed = false
+    setPosition({ line: match.line, column: match.column })
+    if (highlightSearch) refreshSearchHighlights()
+    else clearSearchHighlight()
+  }
+
+  function toggleSearchCase(): void {
+    const widget = searchWidget
+    if (widget === null || searchOrigin === null) return
+    const resolved = resolveCurrentSearch(widget.input.value)
+    const nextSensitive = !resolved.caseSensitive
+    if (resolved.marker !== null) {
+      widget.setValue(`${resolved.text}${nextSensitive ? '\\C' : '\\c'}`)
+      searchCaseOverride = null
+    } else {
+      searchCaseOverride = nextSensitive ? 'sensitive' : 'insensitive'
+    }
+    previewSearch()
+    widget.input.focus()
   }
 
   function executeSearchCommand(
@@ -522,11 +831,16 @@ export function createVimEditorController(
   }
 
   function disposeSearch(): void {
+    cancelSearchRefreshTimer()
+    cancelPreviewHighlightTimer()
     if (searchWidget !== null) {
+      searchWidget.input.removeEventListener('compositionstart', onSearchCompositionStart)
+      searchWidget.input.removeEventListener('compositionend', onSearchCompositionEnd)
       searchWidget.input.removeEventListener('keydown', onSearchKeyDown)
       searchWidget.input.removeEventListener('input', onSearchInput)
       searchWidget.input.removeEventListener('focus', onSearchFocus)
       searchWidget.input.removeEventListener('blur', onSearchBlur)
+      searchWidget.caseButton.removeEventListener('click', onSearchCaseClick)
     }
     closeSearch(false, false)
     searchWidget?.dispose()
@@ -538,6 +852,13 @@ export function createVimEditorController(
   function executeCommand(command: VimCommand): void {
     if (command.type === 'search-open' || command.type === 'search-repeat') {
       executeSearchCommand(command)
+      return
+    }
+    if (command.type === 'search-highlight-clear') {
+      searchHighlightSuppressed = true
+      cancelSearchRefreshTimer()
+      cancelPreviewHighlightTimer()
+      clearSearchHighlight()
       return
     }
 
@@ -759,18 +1080,27 @@ export function createVimEditorController(
   })
   const modelSubscription = editor.onDidChangeModel(() => {
     state = INITIAL_VIM_STATE
+    cancelSearchRefreshTimer()
+    cancelPreviewHighlightTimer()
     closeSearch(false, false)
     syncContextKeys()
     syncStatusBar()
+    if (highlightSearch && !searchHighlightSuppressed) refreshSearchHighlights()
   })
-  disposables.push(focusSubscription, blurSubscription, modelSubscription)
+  const contentSubscription = editor.onDidChangeModelContent(() => {
+    scheduleSearchHighlightRefresh()
+  })
+  disposables.push(focusSubscription, blurSubscription, modelSubscription, contentSubscription)
 
   const configSubscription = configService.onDidChangeConfiguration((event) => {
     if (event.affectsConfiguration('editor.vimMode.enabled')) {
       enabled = configService.get<boolean>('editor.vimMode.enabled') === true
       if (!enabled) {
         state = INITIAL_VIM_STATE
+        cancelSearchRefreshTimer()
+        cancelPreviewHighlightTimer()
         closeSearch(false, false)
+        clearSearchHighlight()
       }
       syncContextKeys()
       syncStatusBar()
@@ -783,6 +1113,22 @@ export function createVimEditorController(
       autoSwitchInputMethod =
         configService.get<boolean>('editor.vimMode.autoSwitchInputMethod') !== false
       syncInputMethod()
+    }
+    if (event.affectsConfiguration('editor.vimMode.searchCaseSensitivity')) {
+      searchCaseMode = readSearchCaseMode()
+      if (searchOrigin !== null) previewSearch()
+    }
+    if (event.affectsConfiguration('editor.vimMode.highlightSearch')) {
+      highlightSearch = readHighlightSearch()
+      cancelSearchRefreshTimer()
+      searchHighlightSuppressed = false
+      if (!highlightSearch) {
+        cancelPreviewHighlightTimer()
+        clearSearchHighlight()
+        return
+      }
+      if (searchOrigin !== null) previewSearch()
+      else refreshSearchHighlights()
     }
   })
   disposables.push(configSubscription)

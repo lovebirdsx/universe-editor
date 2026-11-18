@@ -44,6 +44,8 @@ const BESPOKE_KEYS = new Set<string>([
   'editor.vimMode.enabled',
   'editor.vimMode.showStatusBar',
   'editor.vimMode.autoSwitchInputMethod',
+  'editor.vimMode.searchCaseSensitivity',
+  'editor.vimMode.highlightSearch',
 ])
 
 // Prefixes whose whole subtree is owned elsewhere. `unicodeHighlight` is forced

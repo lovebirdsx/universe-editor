@@ -353,6 +353,34 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Switch the OS input method to English in Normal mode and restore it in Insert mode, so a Chinese IME does not type into the buffer. Windows only; ignored elsewhere.',
             ),
           },
+          'editor.vimMode.searchCaseSensitivity': {
+            type: 'string',
+            default: 'smart',
+            enum: ['smart', 'sensitive', 'insensitive'],
+            enumItemLabels: {
+              smart: localize('settings.editor.vimMode.searchCaseSensitivity.smart', 'Smart case'),
+              sensitive: localize(
+                'settings.editor.vimMode.searchCaseSensitivity.sensitive',
+                'Match case',
+              ),
+              insensitive: localize(
+                'settings.editor.vimMode.searchCaseSensitivity.insensitive',
+                'Ignore case',
+              ),
+            },
+            description: localize(
+              'settings.editor.vimMode.searchCaseSensitivity.description',
+              'Controls case sensitivity for Vim `/` and `?` searches. "smart" matches case only when the pattern contains an uppercase letter; `\\c`/`\\C` override it per search.',
+            ),
+          },
+          'editor.vimMode.highlightSearch': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.editor.vimMode.highlightSearch.description',
+              'Highlight all Vim search matches and keep them updated while editing. Press Escape in Normal mode to clear them (`:nohlsearch`). Large files are capped.',
+            ),
+          },
         },
       }),
     )

@@ -51,6 +51,7 @@ function createFakeEditor(lines: string[], doc: Document = document) {
   const focusListeners: (() => void)[] = []
   const blurListeners: (() => void)[] = []
   const modelListeners: (() => void)[] = []
+  const contentListeners: (() => void)[] = []
   const overlays: monaco.editor.IOverlayWidget[] = []
   const decorationSets: monaco.editor.IModelDeltaDecoration[][] = []
   let decorationClears = 0
@@ -104,6 +105,15 @@ function createFakeEditor(lines: string[], doc: Document = document) {
       modelListeners.push(listener)
       return { dispose: () => undefined }
     },
+    onDidChangeModelContent: (listener) => {
+      contentListeners.push(listener)
+      return {
+        dispose: () => {
+          const index = contentListeners.indexOf(listener)
+          if (index >= 0) contentListeners.splice(index, 1)
+        },
+      }
+    },
     focus: vi.fn(() => {
       focusListeners.forEach((listener) => listener())
     }),
@@ -125,6 +135,7 @@ function createFakeEditor(lines: string[], doc: Document = document) {
     focus: () => focusListeners.forEach((listener) => listener()),
     blur: () => blurListeners.forEach((listener) => listener()),
     modelChange: () => modelListeners.forEach((listener) => listener()),
+    contentChange: () => contentListeners.forEach((listener) => listener()),
     selection: () => selection,
     container,
     overlays: () => overlays,
@@ -452,18 +463,22 @@ describe('createVimEditorController', () => {
     controller.dispose()
   })
 
-  function createSearchHarness(lines: string[]) {
+  function createSearchHarness(lines: string[], config: Record<string, unknown> = {}) {
     const fake = createFakeEditor(lines)
     const context = createContext()
+    const configService = createFakeConfig({
+      'editor.vimMode.enabled': true,
+      ...config,
+    })
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      configService: configService as never,
       contextKeyService: context as never,
       statusBarService: createStatusBar() as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
-    return { fake, controller, context }
+    return { fake, controller, context, config: configService }
   }
 
   async function openSearchBox(
@@ -503,7 +518,7 @@ describe('createVimEditorController', () => {
     type(input, 'foo')
     expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 5 })
     expect(fake.decorationSets().at(-1)?.[0]?.options).toMatchObject({
-      inlineClassName: 'vim-search-match',
+      inlineClassName: 'vim-search-match-current',
     })
 
     press(input, 'Enter')
@@ -602,9 +617,13 @@ describe('createVimEditorController', () => {
 
     input.dispatchEvent(new Event('blur'))
     expect(fake.overlays()[0]?.getDomNode().hidden).toBe(true)
-    // The confirmed match stays marked; only an explicit cancel clears it.
-    expect(fake.decorationClears()).toBe(clears)
-    expect(getLastVimSearch()).toEqual({ text: 'foo', direction: 'forward' })
+    // The default (`highlightSearch` off) drops the transient preview highlight.
+    expect(fake.decorationClears()).toBeGreaterThan(clears)
+    expect(getLastVimSearch()).toEqual({
+      text: 'foo',
+      direction: 'forward',
+      caseSensitive: false,
+    })
     expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
     expect(context.get('vimSearchFocused')).toBe(false)
     controller.dispose()
@@ -692,5 +711,334 @@ describe('createVimEditorController', () => {
     ;(config as unknown as { fire(key: string): void }).fire('editor.vimMode.enabled')
     controller.dispose()
     expect(fake.overlays()).toHaveLength(0)
+  })
+
+  it('exposes an Aa toggle that flips the case policy', async () => {
+    const { fake, controller } = createSearchHarness(['Foo bar', 'FOO baz', 'foo qux'])
+    const input = await openSearchBox(fake, controller, '/')
+    const button = fake
+      .overlays()[0]!
+      .getDomNode()
+      .querySelector('.vim-search-case') as HTMLButtonElement
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+
+    type(input, 'foo')
+    // Smartcase: a lowercase query ignores case; the cursor's own match is skipped.
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+
+    button.click()
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 3, startColumn: 1 })
+
+    button.click()
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    controller.dispose()
+  })
+
+  it('rewrites an explicit marker when Aa is clicked', async () => {
+    const { fake, controller } = createSearchHarness(['Foo', 'foo'])
+    const input = await openSearchBox(fake, controller, '/')
+    const button = fake
+      .overlays()[0]!
+      .getDomNode()
+      .querySelector('.vim-search-case') as HTMLButtonElement
+
+    type(input, 'foo\\C')
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+    button.click()
+    expect(input.value).toBe('foo\\c')
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    controller.dispose()
+  })
+
+  it('keeps the input focused when the Aa button is pressed', async () => {
+    const { fake, controller } = createSearchHarness(['foo'])
+    await openSearchBox(fake, controller, '/')
+    const button = fake
+      .overlays()[0]!
+      .getDomNode()
+      .querySelector('.vim-search-case') as HTMLButtonElement
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    button.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    controller.dispose()
+  })
+
+  it('searches as soon as the IME composition ends', async () => {
+    const { fake, controller } = createSearchHarness(['foo', 'foo'])
+    const input = await openSearchBox(fake, controller, '/')
+
+    input.dispatchEvent(new Event('compositionstart'))
+    input.value = 'fo'
+    const composing = new Event('input') as InputEvent
+    Object.defineProperty(composing, 'isComposing', { value: true })
+    input.dispatchEvent(composing)
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+
+    input.value = 'foo'
+    input.dispatchEvent(new Event('compositionend'))
+    // Some IMEs keep isComposing=true on the final input; compositionend wins.
+    const finalInput = new Event('input') as InputEvent
+    Object.defineProperty(finalInput, 'isComposing', { value: true })
+    input.dispatchEvent(finalInput)
+
+    await vi.waitFor(() =>
+      expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 }),
+    )
+    controller.dispose()
+  })
+
+  it('honors \\c / \\C and highlights only the stripped pattern', async () => {
+    const { fake, controller } = createSearchHarness(['Foo', 'FOO'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo\\c')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    expect(fake.decorationSets().at(-1)?.[0]?.range).toMatchObject({
+      startLineNumber: 2,
+      startColumn: 1,
+      endLineNumber: 2,
+      endColumn: 4,
+    })
+
+    type(input, 'foo\\C')
+    const node = fake.overlays()[0]!.getDomNode()
+    expect(node.querySelector('.vim-search-hint')?.textContent).toContain('\\c')
+    controller.dispose()
+  })
+
+  it('treats a marker-only query as an empty pattern', async () => {
+    const { fake, controller } = createSearchHarness(['foo'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, '\\c')
+    const node = fake.overlays()[0]!.getDomNode()
+    expect(node.querySelector('.vim-search-hint')?.textContent).toBeTruthy()
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+    press(input, 'Enter')
+    expect(node.hidden).toBe(false)
+    expect(getLastVimSearch()).toBeNull()
+    controller.dispose()
+  })
+
+  it('drops the preview highlight on Enter and n/N by default', async () => {
+    const { fake, controller } = createSearchHarness(['foo', 'foo'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    const clearsBefore = fake.decorationClears()
+    const setsBefore = fake.decorationSets().length
+
+    press(input, 'Enter')
+    expect(fake.decorationClears()).toBeGreaterThan(clearsBefore)
+    expect(fake.decorationSets().length).toBe(setsBefore)
+
+    controller.handleKeyDown(key('n'))
+    expect(fake.decorationSets().length).toBe(setsBefore)
+    expect(fake.decorationClears()).toBeGreaterThan(clearsBefore)
+    controller.dispose()
+  })
+
+  it('highlights every match when highlightSearch is enabled', async () => {
+    const { fake, controller } = createSearchHarness(['foo bar', 'foo baz'], {
+      'editor.vimMode.highlightSearch': true,
+    })
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    press(input, 'Enter')
+    const decorations = fake.decorationSets().at(-1) ?? []
+    expect(decorations).toHaveLength(2)
+    expect(
+      decorations.map((item) => (item.options as { inlineClassName?: string }).inlineClassName),
+    ).toEqual(['vim-search-match', 'vim-search-match-current'])
+    controller.dispose()
+  })
+
+  it('refreshes hlsearch after edits', async () => {
+    const { fake, controller } = createSearchHarness(['foo', 'foo'], {
+      'editor.vimMode.highlightSearch': true,
+    })
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    press(input, 'Enter')
+    const setsBefore = fake.decorationSets().length
+
+    vi.useFakeTimers()
+    try {
+      fake.contentChange()
+      vi.advanceTimersByTime(150)
+      expect(fake.decorationSets().length).toBeGreaterThan(setsBefore)
+    } finally {
+      vi.useRealTimers()
+    }
+    controller.dispose()
+  })
+
+  it('clears hlsearch on Normal-mode Escape until the next n/N', async () => {
+    const { fake, controller } = createSearchHarness(['foo', 'foo'], {
+      'editor.vimMode.highlightSearch': true,
+    })
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    press(input, 'Enter')
+    const setsBefore = fake.decorationSets().length
+    const clearsBefore = fake.decorationClears()
+
+    controller.handleKeyDown(key('Escape'))
+    expect(fake.decorationClears()).toBeGreaterThan(clearsBefore)
+
+    vi.useFakeTimers()
+    try {
+      fake.contentChange()
+      vi.advanceTimersByTime(150)
+      expect(fake.decorationSets().length).toBe(setsBefore)
+    } finally {
+      vi.useRealTimers()
+    }
+
+    controller.handleKeyDown(key('n'))
+    expect(fake.decorationSets().length).toBeGreaterThan(setsBefore)
+    controller.dispose()
+  })
+
+  it('turns hlsearch on and off through configuration', async () => {
+    const { fake, controller, config } = createSearchHarness(['foo', 'foo'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    press(input, 'Enter')
+    const setsBefore = fake.decorationSets().length
+
+    config.set('editor.vimMode.highlightSearch', true)
+    config.fire('editor.vimMode.highlightSearch')
+    expect(fake.decorationSets().length).toBeGreaterThan(setsBefore)
+
+    const clearsBefore = fake.decorationClears()
+    config.set('editor.vimMode.highlightSearch', false)
+    config.fire('editor.vimMode.highlightSearch')
+    expect(fake.decorationClears()).toBeGreaterThan(clearsBefore)
+    controller.dispose()
+  })
+
+  it('replays the committed case policy for n/N', async () => {
+    const { fake, controller } = createSearchHarness(['Foo', 'FOO', 'foo'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'FOO')
+    // Smartcase keeps this case-sensitive, so only line 2 matches.
+    press(input, 'Enter')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    controller.handleKeyDown(key('n'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    controller.dispose()
+  })
+
+  it('honors editor.vimMode.searchCaseSensitivity defaults', async () => {
+    const { fake, controller } = createSearchHarness(['Foo', 'foo'], {
+      'editor.vimMode.searchCaseSensitivity': 'insensitive',
+    })
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    press(input, 'Enter')
+    controller.handleKeyDown(key('n'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+    controller.dispose()
+  })
+
+  it('stops refreshing hlsearch once Vim is disabled', async () => {
+    const { fake, controller, config } = createSearchHarness(['foo', 'foo'], {
+      'editor.vimMode.highlightSearch': true,
+    })
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    press(input, 'Enter')
+    const setsBefore = fake.decorationSets().length
+
+    config.set('editor.vimMode.enabled', false)
+    config.fire('editor.vimMode.enabled')
+
+    vi.useFakeTimers()
+    try {
+      fake.contentChange()
+      fake.modelChange()
+      vi.advanceTimersByTime(200)
+      expect(fake.decorationSets().length).toBe(setsBefore)
+    } finally {
+      vi.useRealTimers()
+    }
+    controller.dispose()
+  })
+
+  it('keeps the preview match highlighted when the scan skips an overlong line', async () => {
+    const longLine = `${'a'.repeat(20001)}foo`
+    const { fake, controller } = createSearchHarness([longLine], {
+      'editor.vimMode.highlightSearch': true,
+    })
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 20002 })
+    const decorations = fake.decorationSets().at(-1) ?? []
+    expect(decorations).toHaveLength(1)
+    expect(decorations[0]?.options).toMatchObject({
+      inlineClassName: 'vim-search-match-current',
+    })
+    controller.dispose()
+  })
+
+  it('restores stored hlsearch when opening and cancelling a search', async () => {
+    const { fake, controller } = createSearchHarness(['foo', 'foo'], {
+      'editor.vimMode.highlightSearch': true,
+    })
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    press(input, 'Enter')
+
+    const beforeOpen = fake.decorationSets().length
+    await openSearchBox(fake, controller, '/')
+    expect(fake.decorationSets().length).toBeGreaterThan(beforeOpen)
+    expect(fake.decorationSets().at(-1)).toHaveLength(2)
+
+    const beforeCancel = fake.decorationSets().length
+    press(input, 'Escape')
+    expect(fake.decorationSets().length).toBeGreaterThan(beforeCancel)
+    expect(fake.decorationSets().at(-1)).toHaveLength(2)
+    controller.dispose()
+  })
+
+  it('re-previews when the default case policy changes while the box is open', async () => {
+    const { fake, controller, config } = createSearchHarness(['foo', 'Foo'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    // Smartcase with a lowercase query skips the match under the cursor and
+    // lands on line 2.
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+
+    config.set('editor.vimMode.searchCaseSensitivity', 'sensitive')
+    config.fire('editor.vimMode.searchCaseSensitivity')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+    expect(fake.overlays()[0]!.getDomNode().querySelector('.vim-search-hint')?.textContent).toBe('')
+    controller.dispose()
+  })
+
+  it('lets the IME consume Enter / Escape before committing or cancelling', async () => {
+    const { fake, controller } = createSearchHarness(['foo'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    const node = fake.overlays()[0]!.getDomNode()
+
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    Object.defineProperty(enter, 'keyCode', { value: 229 })
+    input.dispatchEvent(enter)
+    expect(node.hidden).toBe(false)
+    expect(getLastVimSearch()).toBeNull()
+
+    const escape = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    })
+    Object.defineProperty(escape, 'isComposing', { value: true })
+    input.dispatchEvent(escape)
+    expect(node.hidden).toBe(false)
+    expect(node.querySelector<HTMLInputElement>('input')?.value).toBe('foo')
+    controller.dispose()
   })
 })

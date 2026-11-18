@@ -90,6 +90,8 @@ export type VimCommand =
     }
   /** `n` and `N`: repeat the last search; `reverse` flips its direction. */
   | { readonly type: 'search-repeat'; readonly reverse: boolean; readonly count: number }
+  /** Normal-mode Escape: drop persistent `hlsearch` highlights (`:nohlsearch`). */
+  | { readonly type: 'search-highlight-clear' }
 
 export interface VimKeyInput {
   readonly key: string
@@ -168,6 +170,7 @@ export interface VimEditor {
   onDidFocusEditorText(listener: () => void): { dispose(): void }
   onDidBlurEditorText(listener: () => void): { dispose(): void }
   onDidChangeModel(listener: () => void): { dispose(): void }
+  onDidChangeModelContent(listener: () => void): { dispose(): void }
   focus(): void
   addOverlayWidget(widget: monaco.editor.IOverlayWidget): void
   removeOverlayWidget(widget: monaco.editor.IOverlayWidget): void

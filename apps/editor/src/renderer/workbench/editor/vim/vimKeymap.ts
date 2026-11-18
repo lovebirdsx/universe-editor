@@ -178,7 +178,9 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
   const key = input.key
 
   if (key === 'Escape') {
-    return { state: idle(state), command: null, handled: true }
+    // Vim's Normal-mode `<Esc>` is also `:nohlsearch`: the controller drops any
+    // persistent search highlight until the next search command.
+    return { state: idle(state), command: { type: 'search-highlight-clear' }, handled: true }
   }
 
   const functional = functionalKeyResult(state, key)

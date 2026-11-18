@@ -330,6 +330,13 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'color-editor-widget-bg',
   ),
   d(
+    'editorWidget.foreground',
+    '#cccccc',
+    '#24262b',
+    'Foreground color of editor widgets such as the find widget.',
+  ),
+  d('widget.border', '#454545', '#c7cbd3', 'Border color of widgets such as the find widget.'),
+  d(
     'editor.findMatchBackground',
     'rgba(234, 179, 8, 0.85)',
     'rgba(234, 179, 8, 0.85)',

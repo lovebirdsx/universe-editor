@@ -1,16 +1,20 @@
 .vim-search-widget {
   display: flex;
   align-items: center;
-  gap: 6px;
-  max-width: 60%;
-  margin: 8px 16px 0 0;
-  padding: 3px 8px;
-  border: 1px solid var(--vscode-editorGroup-border);
+  gap: 4px;
+  box-sizing: border-box;
+  width: 419px;
+  max-width: calc(100% - 32px);
+  height: 33px;
+  margin: 8px 8px 0 0;
+  padding: 0 4px;
+  border: 1px solid var(--vscode-widget-border);
   border-radius: 4px;
   background: var(--vscode-editorWidget-background);
-  color: var(--vscode-editor-foreground);
-  box-shadow: 0 2px 8px var(--vscode-widget-shadow);
-  font: 12px monospace;
+  color: var(--vscode-editorWidget-foreground);
+  box-shadow: 0 0 8px 2px var(--vscode-widget-shadow);
+  font-size: 13px;
+  line-height: 19px;
 }
 
 .vim-search-widget[hidden] {
@@ -18,12 +22,14 @@
 }
 
 .vim-search-prefix {
+  flex: 0 0 auto;
   opacity: 0.8;
 }
 
 .vim-search-input {
-  flex: 1;
-  min-width: 140px;
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 25px;
   padding: 0;
   border: none;
   outline: none;
@@ -33,14 +39,44 @@
 }
 
 .vim-search-hint {
-  color: var(--vscode-errorForeground);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--vscode-errorForeground);
+  font-size: 12px;
 }
 
 .vim-search-hint:empty {
   display: none;
 }
 
+.vim-search-case {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 19px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: 12px/19px monospace;
+  cursor: pointer;
+}
+
+.vim-search-case:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.vim-search-case[aria-pressed='true'] {
+  background: var(--vscode-inputOption-activeBackground);
+}
+
 .vim-search-match {
+  background-color: var(--vscode-editor-findMatchHighlightBackground);
+}
+
+.vim-search-match-current {
   background-color: var(--vscode-editor-findMatchBackground);
 }
