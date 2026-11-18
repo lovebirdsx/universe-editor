@@ -27,6 +27,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
       getValue: () => value,
       getVersionId: () => alternativeVersionId,
       getAlternativeVersionId: () => alternativeVersionId,
+      getValueLength: () => value.length,
       setValue: (next: string) => {
         if (next === value) return
         value = next

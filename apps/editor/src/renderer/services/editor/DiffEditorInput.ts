@@ -25,6 +25,7 @@ import { noteSelfWrite } from './selfWriteRegistry.js'
 import { EditorViewStateCache } from './EditorViewStateCache.js'
 import { splitLeadingBom, UTF8_BOM } from './leadingBom.js'
 import { normalizeToModelEol } from './minimalModelEdit.js'
+import { isModelAtCleanVersion } from './modelDirty.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 /** Structural + content snapshot for reopen / session restore. A diff's two sides
@@ -258,14 +259,14 @@ export class DiffEditorInput extends EditorInput {
   }
 
   private _recomputeDirty(model: monaco.editor.ITextModel): void {
-    if (this._savedAlternativeVersionId !== undefined) {
-      this.setDirty(model.getAlternativeVersionId() !== this._savedAlternativeVersionId)
+    const saved = this._savedAlternativeVersionId
+    const clean = this._cleanModifiedContent
+    if (saved !== undefined && clean !== undefined) {
+      this.setDirty(!isModelAtCleanVersion(model, saved, clean))
       return
     }
     // Baseline not yet read → treat as clean until the disk read lands.
-    this.setDirty(
-      this._cleanModifiedContent !== undefined && model.getValue() !== this._cleanModifiedContent,
-    )
+    this.setDirty(clean !== undefined && model.getValue() !== clean)
   }
 
   private _acceptModelClean(model: monaco.editor.ITextModel): void {

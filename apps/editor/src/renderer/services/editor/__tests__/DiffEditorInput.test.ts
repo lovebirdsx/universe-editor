@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { Range } from 'monaco-editor'
 import {
   IFileService,
   InstantiationService,
@@ -281,6 +282,35 @@ describe('DiffEditorInput', () => {
 
       model.setValue('one\r\ntwo\r\nEDITED\r\n')
       expect(input.isDirty).toBe(true)
+      input.releaseModifiedModel()
+      input.dispose()
+    })
+
+    it('clears dirty after an IME composition is cancelled (insert then delete)', async () => {
+      fs.store[uri.toString()] = 'abc'
+      const input = inst.createInstance(
+        DiffEditorInput,
+        uri,
+        'head',
+        'abc',
+        undefined,
+        undefined,
+        true,
+      )
+      const model = input.acquireModifiedModel()
+      await flush()
+      // Establish the saved baseline the same way a real save does.
+      await input.save()
+      expect(input.isDirty).toBe(false)
+
+      model.pushEditOperations(null, [{ range: new Range(1, 2, 1, 2), text: 'n' }], () => null)
+      expect(model.getValue()).toBe('anbc')
+      expect(input.isDirty).toBe(true)
+
+      model.pushEditOperations(null, [{ range: new Range(1, 2, 1, 3), text: '' }], () => null)
+      expect(model.getValue()).toBe('abc')
+      expect(input.isDirty).toBe(false)
+
       input.releaseModifiedModel()
       input.dispose()
     })

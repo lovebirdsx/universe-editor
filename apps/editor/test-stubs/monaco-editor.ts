@@ -158,6 +158,7 @@ function makeModel(initial: string, language: string, uri: unknown) {
     getValue: () => value,
     getVersionId: () => versionId,
     getAlternativeVersionId: () => versionId,
+    getValueLength: () => value.length,
     getEOL: () => eol,
     setValue: (next: string) => {
       const normalized = normalizeModelText(next)

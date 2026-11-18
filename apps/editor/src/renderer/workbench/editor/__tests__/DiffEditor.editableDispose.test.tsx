@@ -49,6 +49,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
       },
       getLanguageId: () => language,
       getAlternativeVersionId: () => versionId,
+      getValueLength: () => value.length,
       isDisposed: () => disposed,
       onDidChangeContent: (cb: () => void) => {
         contentListeners.add(cb)

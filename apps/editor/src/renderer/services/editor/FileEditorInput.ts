@@ -22,6 +22,7 @@ import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRe
 import { SaveParticipant } from '../extensions/SaveParticipant.js'
 import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
 import { applyMinimalTextEdit, normalizeToModelEol } from './minimalModelEdit.js'
+import { isModelAtCleanVersion } from './modelDirty.js'
 import { isTooLargeForExternalReload, readFileTextForReload } from '../files/externalReload.js'
 import { noteSelfWrite } from './selfWriteRegistry.js'
 import { EditorViewStateCache } from './EditorViewStateCache.js'
@@ -241,8 +242,9 @@ export class FileEditorInput extends EditorInput {
   }
 
   updateDirtyFromModel(model: monaco.editor.ITextModel): void {
-    if (this._savedAlternativeVersionId !== undefined) {
-      this.setDirty(model.getAlternativeVersionId() !== this._savedAlternativeVersionId)
+    const saved = this._savedAlternativeVersionId
+    if (saved !== undefined) {
+      this.setDirty(!isModelAtCleanVersion(model, saved, this._backupContent))
       return
     }
     this.setDirty(model.getValue() !== this._backupContent)

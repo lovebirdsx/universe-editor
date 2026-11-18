@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { editor as monacoEditor } from 'monaco-editor'
+import { Range, editor as monacoEditor } from 'monaco-editor'
 import {
   Emitter,
   IFileService,
@@ -134,6 +134,28 @@ describe('FileEditorInput', () => {
 
     target.dispose()
     expect(MonacoModelRegistry.peek(uri)).toBeUndefined()
+  })
+
+  it('clears dirty after an IME composition is cancelled (insert then delete)', async () => {
+    const input = inst.createInstance(FileEditorInput, uri)
+    const model = await input.resolveModel()
+    expect(input.isDirty).toBe(false)
+
+    // IME preedit: Monaco applies the composed text as a normal edit.
+    model.pushEditOperations(null, [{ range: new Range(1, 2, 1, 2), text: 'n' }], () => null)
+    input.updateDirtyFromModel(model)
+    expect(model.getValue()).toBe('{n"a":1}')
+    expect(input.isDirty).toBe(true)
+
+    // ESC: the browser cancels the composition with a second, independent
+    // deletion edit — not an undo, so the alternative version id stays ahead
+    // even though the buffer is back at the saved content.
+    model.pushEditOperations(null, [{ range: new Range(1, 2, 1, 3), text: '' }], () => null)
+    input.updateDirtyFromModel(model)
+    expect(model.getValue()).toBe('{"a":1}')
+    expect(input.isDirty).toBe(false)
+
+    input.dispose()
   })
 
   it('deserialize round-trip via accessor yields a new FileEditorInput on the same URI', () => {
