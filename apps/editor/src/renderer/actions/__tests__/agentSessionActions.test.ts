@@ -1191,7 +1191,7 @@ describe('agent focus commands', () => {
     const h = make({ promptFocused: true, lastFocusedWidget: widget })
     await h.run(FocusAgentTimelineAction.ID)
 
-    expect(widget.focusTimeline).toHaveBeenCalledOnce()
+    expect(widget.focusTimeline).toHaveBeenCalledWith()
     expect(widget.focusInput).not.toHaveBeenCalled()
   })
 
@@ -1200,7 +1200,8 @@ describe('agent focus commands', () => {
     const h = make({ promptFocused: true, lastFocusedWidget: widget })
     await h.run(ToggleAgentFocusAction.ID)
 
-    expect(widget.focusTimeline).toHaveBeenCalledOnce()
+    // Pinned to the bottom, the toggle also reveals the newest message from its top.
+    expect(widget.focusTimeline).toHaveBeenCalledWith({ revealLastItem: true })
     expect(widget.focusInput).not.toHaveBeenCalled()
   })
 
@@ -1224,7 +1225,7 @@ describe('agent focus commands', () => {
     })
 
     await h.run(ToggleAgentFocusAction.ID)
-    expect(lastFocused.focusTimeline).toHaveBeenCalledOnce()
+    expect(lastFocused.focusTimeline).toHaveBeenCalledWith({ revealLastItem: true })
     expect(active.focusTimeline).not.toHaveBeenCalled()
 
     await h.run(FocusAgentInputAction.ID)
@@ -1232,7 +1233,7 @@ describe('agent focus commands', () => {
     expect(lastFocused.focusInput).not.toHaveBeenCalled()
 
     await h.run(FocusAgentTimelineAction.ID)
-    expect(active.focusTimeline).toHaveBeenCalledOnce()
+    expect(active.focusTimeline).toHaveBeenCalledWith()
     expect(lastFocused.focusTimeline).toHaveBeenCalledOnce()
 
     h.context.set('acpPromptInputFocused', false)

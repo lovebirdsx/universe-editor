@@ -62,6 +62,14 @@ export type AcpSubagentMoveDirection = 'next' | 'prev'
 
 export type AcpTimelineScrollTarget = 'top' | 'bottom' | 'pageUp' | 'pageDown' | 'up' | 'down'
 
+export interface AcpFocusTimelineOptions {
+  /** When the timeline is pinned to the bottom, land the newest row's top just
+   *  below the sticky header instead of leaving the viewport where it is —
+   *  Ctrl+Alt+I from the prompt input should read the last reply from its first
+   *  line, not require a few pages of scrolling up. */
+  revealLastItem?: boolean
+}
+
 export interface AcpChatWidget {
   readonly sessionId?: string
   readonly container: HTMLElement
@@ -80,7 +88,7 @@ export interface AcpChatWidget {
   /** Move keyboard focus onto the timeline scroll container — the surface
    *  Alt+J/K navigate, where a message card selection lives. Returns whether
    *  focus landed. */
-  focusTimeline(): boolean
+  focusTimeline(options?: AcpFocusTimelineOptions): boolean
   /**
    * Open the config bar entry at `index` (0-based, in bar order) and move the
    * cursor inside it. An entry the bar could not fit expands inside the "…"

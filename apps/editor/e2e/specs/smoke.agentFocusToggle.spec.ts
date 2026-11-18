@@ -249,4 +249,59 @@ test.describe('agent focus — Ctrl+Alt+I toggles input and timeline', () => {
     await expect.poll(() => selectedTimelineKey(page), { timeout: 5000 }).toBe(selectedBeforeAlt)
     expect(selectedAfterAltJ).not.toBe(selectedBeforeAlt)
   })
+
+  test('reveals the newest message from its top when toggling from the prompt while pinned to the bottom @p1', async ({
+    page,
+    workbench,
+  }) => {
+    await startEchoSession(page, workbench)
+
+    const long = Array.from({ length: 40 }, (_, i) => `line ${i} ${'x'.repeat(40)}`).join('\n')
+    await sendPrompts(
+      page,
+      Array.from({ length: 8 }, (_, i) => `${i}\n${long}`),
+    )
+    // 等懒测量行高稳定后滚到最底部。
+    await expect
+      .poll(
+        async () => {
+          const a = await page.evaluate((sel) => {
+            const el = document.querySelector(sel)?.parentElement as HTMLElement | null
+            return el ? el.scrollHeight - el.clientHeight : 0
+          }, TIMELINE)
+          await page.waitForTimeout(150)
+          const b = await page.evaluate((sel) => {
+            const el = document.querySelector(sel)?.parentElement as HTMLElement | null
+            return el ? el.scrollHeight - el.clientHeight : 0
+          }, TIMELINE)
+          return a === b && a > 200 ? a : 0
+        },
+        { timeout: 10000 },
+      )
+      .toBeGreaterThan(200)
+    await page.evaluate((sel) => {
+      const el = document.querySelector(sel)?.parentElement as HTMLElement | null
+      if (el) el.scrollTop = el.scrollHeight
+    }, TIMELINE)
+    await waitForScrollSettled(page)
+    const bottom = await timelineScrollTop(page)
+    expect(bottom).toBeGreaterThan(200)
+
+    await focusPromptInput(page)
+    await page.keyboard.press('Control+Alt+I')
+    await expect.poll(() => focusIsOnTimelineContainer(page)).toBe(true)
+    await waitForScrollSettled(page)
+
+    // 最后一条消息的顶部落到视口内（吸顶头下方），而不是停在底部。
+    const topGap = await page.evaluate((sel) => {
+      const scroller = document.querySelector(sel)?.parentElement
+      const rows = document.querySelectorAll<HTMLElement>('[data-timeline-key]')
+      const last = rows[rows.length - 1]
+      if (!scroller || !last) return Number.NaN
+      return last.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    }, TIMELINE)
+    expect(topGap).toBeGreaterThanOrEqual(0)
+    expect(topGap).toBeLessThan(120)
+    expect(await timelineScrollTop(page)).toBeLessThan(bottom)
+  })
 })

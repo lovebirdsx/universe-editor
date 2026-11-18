@@ -544,7 +544,9 @@ export class ToggleAgentFocusAction extends Action2 {
       // 输入框实际所在的分屏可能与活动编辑器不同。
       const target =
         accessor.get(IAcpChatWidgetService).lastFocusedWidget ?? resolveNavWidget(accessor)
-      target?.focusTimeline()
+      // 列表正停在底部时，顺带把最后一条消息的顶部对齐到视口顶部——
+      // 切过去的目的是从头阅读最新回复，否则还要手动向上滚几页。
+      target?.focusTimeline({ revealLastItem: true })
       return
     }
     resolveNavWidget(accessor)?.focusInput()

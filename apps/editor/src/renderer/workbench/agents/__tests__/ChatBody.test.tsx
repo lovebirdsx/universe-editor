@@ -2078,6 +2078,60 @@ describe('ChatBody — scroll position persistence', () => {
     expect(after?.focusedKey).toBe('m:b')
     expect(after?.stuck).toBe(false)
   })
+
+  // Ctrl+Alt+I from the prompt input while pinned to the bottom: the newest
+  // reply starts above the viewport, so the toggle lands its top just below the
+  // sticky header instead of leaving the user to page up.
+  it('reveals the last message from its top when the timeline was pinned to the bottom', () => {
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', items))
+    const scroll = scrollEl(container)
+    Object.defineProperty(scroll, 'scrollHeight', { value: 5000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+    scroll.scrollTop = 4700
+    act(() => {
+      fireEvent.scroll(scroll)
+    })
+    expect(AcpChatViewStateCache.load('s1')?.stuck).toBe(true)
+
+    // Viewport-relative geometry: the container starts at 0 and the newest row
+    // begins 2000px above it (the row is partly off-screen above the viewport).
+    ;(scroll as HTMLElement).getBoundingClientRect = (() => ({ top: 0 }) as DOMRect) as never
+    const target = container.querySelector<HTMLElement>('[data-sticky-key="m:b"]')!
+    ;(target as HTMLElement).getBoundingClientRect = (() => ({ top: -2000 }) as DOMRect) as never
+    const header = target.querySelector<HTMLElement>(
+      'button[data-testid="acp-collapsible-toggle"]',
+    )!
+    ;(header as HTMLElement).getBoundingClientRect = (() => ({ height: 24 }) as DOMRect) as never
+
+    act(() => {
+      widgetRef.current!.focusTimeline({ revealLastItem: true })
+    })
+
+    // 4700 + (-2000) - (24 + 8) → the row's top lands just under the sticky header.
+    expect(scroll.scrollTop).toBe(2668)
+    expect(document.activeElement).toBe(scroll)
+  })
+
+  it('leaves the scroll position alone when the timeline is not pinned to the bottom', () => {
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', items))
+    const scroll = scrollEl(container)
+    Object.defineProperty(scroll, 'scrollHeight', { value: 5000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+    scroll.scrollTop = 200
+    act(() => {
+      fireEvent.scroll(scroll)
+    })
+    ;(scroll as HTMLElement).getBoundingClientRect = (() => ({ top: 0 }) as DOMRect) as never
+    const target = container.querySelector<HTMLElement>('[data-sticky-key="m:b"]')!
+    ;(target as HTMLElement).getBoundingClientRect = (() => ({ top: -2000 }) as DOMRect) as never
+
+    act(() => {
+      widgetRef.current!.focusTimeline({ revealLastItem: true })
+    })
+
+    expect(document.activeElement).toBe(scroll)
+    expect(scroll.scrollTop).toBe(200)
+  })
 })
 
 describe('ChatBody — collapse', () => {

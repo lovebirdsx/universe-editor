@@ -62,6 +62,7 @@ import { resolveChatContextTarget } from '../../services/acp/chatContextTarget.j
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
+  type AcpFocusTimelineOptions,
   type AcpSubagentMoveDirection,
   type AcpTimelineLevelDirection,
   type AcpTimelineMoveDirection,
@@ -172,7 +173,7 @@ export interface WidgetHandle {
   focus: () => boolean
   /** Pull keyboard focus onto the timeline scroll container — the surface the
    *  message-card selection and Alt+J/K navigation live on. */
-  focusTimeline: () => boolean
+  focusTimeline: (options?: AcpFocusTimelineOptions) => boolean
   /** Open the config bar entry at `index` (Alt+<n>). False when no such entry. */
   activateConfigEntry: (index: number) => boolean
   jumpToPlan: () => void
@@ -401,7 +402,7 @@ function ChatSessionBody({
       moveSubagent: (d) => handleRef.current.moveSubagent(d),
       scrollTimeline: (t) => handleRef.current.scrollTimeline(t),
       focusInput: () => handleRef.current.focus(),
-      focusTimeline: () => handleRef.current.focusTimeline(),
+      focusTimeline: (options) => handleRef.current.focusTimeline(options),
       activateConfigEntry: (index) => handleRef.current.activateConfigEntry(index),
       // Read through to the cache rather than snapshotting at mount: an explicit
       // "focus the input" (deep link / session switcher) records the surface
@@ -1666,19 +1667,55 @@ function ChatScroll({
     }
   }, [collapse, displayKeys, filteredTimeline, focusedKey, persist])
 
+  // Ctrl+Alt+I from the prompt input lands here while the timeline is pinned to
+  // the bottom — where the newest reply starts above the viewport. Align that
+  // row's top just below the sticky header (the same landing as a jump) so the
+  // answer is read from its first line. The resulting scroll event updates
+  // stick/persist, so no explicit state write is needed.
+  const revealLastItemStart = useCallback((el: HTMLDivElement) => {
+    const list = displayTimelineRef.current
+    let index = -1
+    for (let i = list.length - 1; i >= 0; i--) {
+      const item = list[i]
+      if (
+        item !== undefined &&
+        (item.kind !== 'message' || isMessageRendered(item.message, false))
+      ) {
+        index = i
+        break
+      }
+    }
+    const item = index === -1 ? undefined : list[index]
+    if (item === undefined) return
+    const node = el.querySelector<HTMLElement>(`[data-sticky-key="${cssEscape(slotKey(item))}"]`)
+    if (node) {
+      const relTop = node.getBoundingClientRect().top - el.getBoundingClientRect().top
+      const max = Math.max(0, el.scrollHeight - el.clientHeight)
+      el.scrollTop = Math.max(0, Math.min(el.scrollTop + relTop - stickyRevealOffset(node), max))
+      return
+    }
+    // Not mounted yet (unreachable while pinned to the bottom, since the newest
+    // row is on screen) — fall back to the virtualizer's own alignment.
+    virtualizerRef.current?.scrollToIndex(index, { align: 'start' })
+  }, [])
+
   // The timeline's keyboard surface: the tabIndex={-1} scroll container Alt+J/K
   // drive and message cards are selected on. Keyboard navigation, the read-only
   // Alt+T fallback and the cross-tab focus restore all funnel through here.
   // popoverHide dismisses any prompt suggestion popup left open (it ignores
   // blur), so the stale acpPromptPopupVisible key can't keep capturing
   // arrows/Enter — a no-op when no popup is open.
-  const focusTimeline = useCallback((): boolean => {
-    const el = containerRef.current
-    if (!el) return false
-    el.focus({ preventScroll: true })
-    handleRef.current.popoverHide()
-    return true
-  }, [handleRef])
+  const focusTimeline = useCallback(
+    (options?: AcpFocusTimelineOptions): boolean => {
+      const el = containerRef.current
+      if (!el) return false
+      el.focus({ preventScroll: true })
+      handleRef.current.popoverHide()
+      if (options?.revealLastItem === true && stickRef.current) revealLastItemStart(el)
+      return true
+    },
+    [handleRef, revealLastItemStart],
+  )
 
   useEffect(() => {
     const handle = handleRef.current
