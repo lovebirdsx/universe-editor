@@ -2,14 +2,14 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  Operator + motion range building. A deliberately small, predictable subset:
- *  `dd/cc/yy` (lines), `d$/c$/y$`, `dw/cw/yw`, `db/cb/yb`, `de/ce/ye`, and the
+ *  `dd/yy` (lines), `d$/y$`, `dw/yw`, `db/yb`, `de/ye`, and the
  *  linewise motions `dj/dk/dgg/dG`. Whole-line ranges include the trailing line
  *  break except at EOF, where the leading break is removed instead so a `dd` on
  *  the last line really deletes the line rather than leaving a blank one.
  *--------------------------------------------------------------------------------------------*/
 
-import { classifyChar, lineLength, resolveMotion } from './vimMotions.js'
-import type { VimMotion, VimOperator, VimPosition, VimRange } from './vimTypes.js'
+import { lineLength, resolveMotion } from './vimMotions.js'
+import type { VimMotion, VimPosition, VimRange } from './vimTypes.js'
 
 export interface VimOperatorRange {
   readonly range: VimRange
@@ -92,17 +92,12 @@ function charwiseRange(
 /**
  * Build the range an operator acts on. Paging motions are not supported by
  * operators here and return `null`.
- *
- * `cw` is Vim-special: it changes to the end of the current word (like `ce`)
- * when the cursor sits on a word, so the target motion is substituted rather
- * than reusing the `w` (next word start) destination.
  */
 export function resolveOperatorRange(
   lines: readonly string[],
   from: VimPosition,
   motion: VimMotion,
   count: number,
-  operator: VimOperator,
 ): VimOperatorRange | null {
   const steps = Math.max(1, count)
   const target = (m: VimMotion): VimPosition | null => resolveMotion(lines, from, m, steps)
@@ -156,16 +151,6 @@ export function resolveOperatorRange(
     }
     case 'w':
     case 'W': {
-      const bigWord = motion === 'W'
-      // Vim special-cases `cw`: on a word it acts like `ce`; on whitespace it
-      // deletes the whitespace run like `dw` (stopping before the next word).
-      const cursorChar = lines[from.line - 1]?.[from.column - 1] ?? ''
-      if (operator === 'c' && classifyChar(cursorChar) !== 'blank') {
-        const destination = target(bigWord ? 'E' : 'e')
-        return destination === null
-          ? null
-          : { range: charwiseRange(lines, from, destination, true, true), linewise: false }
-      }
       const destination = target(motion)
       if (destination === null) return null
       // Exclusive, except when there is no next word start: the motion then

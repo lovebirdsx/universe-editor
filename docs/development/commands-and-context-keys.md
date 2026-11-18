@@ -57,7 +57,7 @@ React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keyb
 
 ## Vim 模式：Normal 模式的按键归属
 
-`editor.vimMode.enabled` 打开后，Normal 模式的裸键（`h/j/k/l`、`w/b/e`、`gg`/`G`、`d`/`c`/`y` + motion、`x`/`p`/`u`/`J` 等）必须**先于**全局 dispatcher 被认领，否则 `d` 会触发删除、`p` 会打开 Quick Open 之类。两条链路都走 **window capture**：
+`editor.vimMode.enabled` 打开后，Normal 模式的裸键（`h/j/k/l`、`w/b/e`、`gg`/`G`、`d`/`y` + motion、`x`/`p`/`u`/`J` 等）必须**先于**全局 dispatcher 被认领，否则 `d` 会触发删除、`p` 会打开 Quick Open 之类。两条链路都走 **window capture**：
 
 - 编辑器：`apps/editor/src/renderer/workbench/editor/vim/vimEditorRegistry.ts` 每个 `Document` 一个 window-capture 监听，按 `container.contains(activeElement)` + `hasTextFocus()` 路由到唯一 `VimEditorController`。**不要用 `editor.addCommand`**——standalone Monaco 的 keybinding service 跨实例共享，会吞掉其它编辑器的键。
 - 列表 / 树 / 菜单 / 浮层：扩展现有 `ctrlNavigationRegistry` 的 `vim` 选项（见上节），可编辑焦点一律拒绝。

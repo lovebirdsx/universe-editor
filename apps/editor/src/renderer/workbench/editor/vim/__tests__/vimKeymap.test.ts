@@ -72,8 +72,8 @@ describe('reduceVimKey', () => {
     })
   })
 
-  it('turns dd/cc/yy into linewise commands', () => {
-    for (const key of ['d', 'c', 'y'] as const) {
+  it('turns dd/yy into linewise commands', () => {
+    for (const key of ['d', 'y'] as const) {
       const armed = press(INITIAL_VIM_STATE, key)
       expect(armed.state.pendingOperator).toBe(key)
       expect(armed.command).toBeNull()
@@ -110,18 +110,28 @@ describe('reduceVimKey', () => {
     expect(result.handled).toBe(true)
   })
 
-  it('enters insert mode for each placement key', () => {
-    const placements = {
-      i: 'before',
-      a: 'after',
-      I: 'line-start',
-      A: 'line-end',
-      o: 'open-below',
-      O: 'open-above',
-    } as const
-    for (const [key, placement] of Object.entries(placements)) {
-      expect(press(INITIAL_VIM_STATE, key).command).toEqual({ type: 'enter-insert', placement })
+  it('enters insert mode only through i and I', () => {
+    expect(press(INITIAL_VIM_STATE, 'i').command).toEqual({
+      type: 'enter-insert',
+      placement: 'before',
+    })
+    expect(press(INITIAL_VIM_STATE, 'I').command).toEqual({
+      type: 'enter-insert',
+      placement: 'line-start',
+    })
+    for (const key of ['a', 'A', 'o', 'O', 's', 'S', 'C']) {
+      const result = press(INITIAL_VIM_STATE, key)
+      expect(result.command).toBeNull()
+      expect(result.state.mode).toBe('normal')
+      expect(result.handled).toBe(true)
     }
+  })
+
+  it('does not treat c as an operator', () => {
+    const result = press(INITIAL_VIM_STATE, 'c')
+    expect(result.state.pendingOperator).toBeNull()
+    expect(result.command).toBeNull()
+    expect(press(result.state, 'w').command).toEqual({ type: 'motion', motion: 'w', count: 0 })
   })
 
   it('handles x/X/p/P/u/J', () => {

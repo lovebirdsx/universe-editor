@@ -18,12 +18,7 @@ import {
   type IStatusBarService,
 } from '@universe-editor/platform'
 import { reduceVimKey } from './vimKeymap.js'
-import {
-  clampNormalPosition,
-  firstNonBlankColumn,
-  lineLength,
-  resolveMotion,
-} from './vimMotions.js'
+import { clampNormalPosition, firstNonBlankColumn, resolveMotion } from './vimMotions.js'
 import { linewiseRange, resolveOperatorRange } from './vimOperators.js'
 import { getVimRegister, setVimRegister } from './vimRegisters.js'
 import {
@@ -147,7 +142,7 @@ export function createVimEditorController(
     editor.revealPositionInCenterIfOutsideViewport(toMonacoPosition(position))
   }
 
-  function applyDelete(range: VimRange, enterInsert: boolean): void {
+  function applyDelete(range: VimRange): void {
     if (range.startLineNumber === range.endLineNumber && range.startColumn === range.endColumn) {
       return
     }
@@ -161,7 +156,6 @@ export function createVimEditorController(
       column: range.startColumn,
     })
     editor.setPosition(toMonacoPosition(target), 'vim')
-    if (enterInsert) setMode('insert')
   }
 
   function visibleRowCount(): number {
@@ -251,22 +245,16 @@ export function createVimEditorController(
         return
       }
       case 'operator': {
-        const opRange = resolveOperatorRange(
-          lines,
-          from,
-          command.motion,
-          command.count,
-          command.operator,
-        )
+        const opRange = resolveOperatorRange(lines, from, command.motion, command.count)
         if (opRange === null) return
-        // Vim's delete/change operators also yank into the unnamed register, so
+        // Vim's delete operator also yanks into the unnamed register, so
         // `dd` followed by `p` is the everyday move-line idiom.
         setVimRegister({
           text: model.getValueInRange(opRange.range),
           linewise: opRange.linewise,
         })
         if (command.operator === 'y') return
-        applyDelete(opRange.range, command.operator === 'c')
+        applyDelete(opRange.range)
         return
       }
       case 'linewise': {
@@ -277,19 +265,7 @@ export function createVimEditorController(
           linewise: true,
         })
         if (command.operator === 'y') return
-        if (command.operator === 'c') {
-          // `cc`/`2cc` change the lines in place: the line break survives, so an
-          // empty line is left behind for Insert mode.
-          const range = {
-            startLineNumber: startLine,
-            startColumn: 1,
-            endLineNumber: endLine,
-            endColumn: lineLength(lines, endLine) + 1,
-          }
-          applyDelete(range, true)
-          return
-        }
-        applyDelete(linewiseRange(lines, startLine, endLine), false)
+        applyDelete(linewiseRange(lines, startLine, endLine))
         return
       }
       case 'enter-insert': {
@@ -321,57 +297,15 @@ export function createVimEditorController(
   }
 
   function enterInsert(command: Extract<VimCommand, { type: 'enter-insert' }>): void {
-    const model = editor.getModel()
-    if (!model) return
+    if (!editor.getModel()) return
     const from = primaryPosition()
-    const lineLength = model.getLineContent(from.line).length
     switch (command.placement) {
       case 'before':
         setPosition(from)
         break
-      case 'after':
-        setPosition({ line: from.line, column: Math.min(lineLength + 1, from.column + 1) })
-        break
       case 'line-start':
         setPosition({ line: from.line, column: 1 })
         break
-      case 'line-end':
-        setPosition({ line: from.line, column: lineLength + 1 })
-        break
-      case 'open-below': {
-        editor.pushUndoStop()
-        editor.executeEdits('vim', [
-          {
-            range: {
-              startLineNumber: from.line,
-              startColumn: lineLength + 1,
-              endLineNumber: from.line,
-              endColumn: lineLength + 1,
-            },
-            text: '\n',
-          },
-        ])
-        editor.pushUndoStop()
-        setPosition({ line: from.line + 1, column: 1 })
-        break
-      }
-      case 'open-above': {
-        editor.pushUndoStop()
-        editor.executeEdits('vim', [
-          {
-            range: {
-              startLineNumber: from.line,
-              startColumn: 1,
-              endLineNumber: from.line,
-              endColumn: 1,
-            },
-            text: '\n',
-          },
-        ])
-        editor.pushUndoStop()
-        setPosition({ line: from.line, column: 1 })
-        break
-      }
     }
     setMode('insert')
   }

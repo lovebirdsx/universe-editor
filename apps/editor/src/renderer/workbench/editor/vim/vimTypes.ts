@@ -8,7 +8,7 @@
 
 export type VimMode = 'normal' | 'insert'
 
-export type VimOperator = 'd' | 'c' | 'y'
+export type VimOperator = 'd' | 'y'
 
 /** A motion is linewise when it targets whole lines (j/k/gg/G/{/}), charwise otherwise. */
 export type VimMotionKind = 'linewise' | 'charwise'
@@ -59,13 +59,7 @@ export const INITIAL_VIM_STATE: VimState = {
   countAfterOperator: false,
 }
 
-export type VimInsertPlacement =
-  | 'before'
-  | 'after'
-  | 'line-start'
-  | 'line-end'
-  | 'open-below'
-  | 'open-above'
+export type VimInsertPlacement = 'before' | 'line-start'
 
 export type VimCommand =
   | { readonly type: 'motion'; readonly motion: VimMotion; readonly count: number }
@@ -75,7 +69,7 @@ export type VimCommand =
       readonly motion: VimMotion
       readonly count: number
     }
-  /** `dd`/`cc`/`yy`: `count` whole lines starting at the cursor. */
+  /** `dd`/`yy`: `count` whole lines starting at the cursor. */
   | { readonly type: 'linewise'; readonly operator: VimOperator; readonly count: number }
   | { readonly type: 'enter-insert'; readonly placement: VimInsertPlacement }
   | { readonly type: 'delete-char'; readonly count: number; readonly backward: boolean }

@@ -217,30 +217,6 @@ describe('createVimEditorController', () => {
     controller.dispose()
   })
 
-  it('changes a line in place so an empty line is left behind', () => {
-    const fake = createFakeEditor(['one', 'two', 'three'])
-    const controller = createVimEditorController({
-      editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
-      contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
-    })
-    fake.focus()
-    fake.editor.setPosition({ lineNumber: 2, column: 1 })
-    vi.mocked(fake.editor.executeEdits).mockClear()
-
-    controller.handleKeyDown(key('c'))
-    controller.handleKeyDown(key('c'))
-
-    expect(fake.editor.executeEdits).toHaveBeenCalledWith('vim', [
-      {
-        range: { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 4 },
-        text: '',
-      },
-    ])
-    controller.dispose()
-  })
-
   it('joins as many lines as the count asks for', () => {
     const fake = createFakeEditor(['one', 'two', 'three', 'four'])
     const controller = createVimEditorController({

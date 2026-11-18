@@ -156,7 +156,7 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
     return motion(state, '0')
   }
 
-  if (key === 'd' || key === 'c' || key === 'y') {
+  if (key === 'd' || key === 'y') {
     const operator = key as VimOperator
     if (state.pendingOperator === operator) {
       return emit(state, {
@@ -179,16 +179,8 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
   switch (key) {
     case 'i':
       return emit(state, { type: 'enter-insert', placement: 'before' })
-    case 'a':
-      return emit(state, { type: 'enter-insert', placement: 'after' })
     case 'I':
       return emit(state, { type: 'enter-insert', placement: 'line-start' })
-    case 'A':
-      return emit(state, { type: 'enter-insert', placement: 'line-end' })
-    case 'o':
-      return emit(state, { type: 'enter-insert', placement: 'open-below' })
-    case 'O':
-      return emit(state, { type: 'enter-insert', placement: 'open-above' })
     case 'x':
       return emit(state, { type: 'delete-char', count: Math.max(1, state.count), backward: false })
     case 'X':
