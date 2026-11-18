@@ -173,6 +173,34 @@ describe('createVimEditorController', () => {
     controller.dispose()
   })
 
+  it('moves with navigation keys in Normal mode and leaves F-keys to the workbench', () => {
+    const fake = createFakeEditor(['abc', '  def', 'ghi'])
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      contextKeyService: createContext() as never,
+      statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
+    })
+    fake.focus()
+
+    expect(controller.handleKeyDown(key('ArrowDown'))).toBe(true)
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    expect(controller.handleKeyDown(key('End'))).toBe(true)
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 5 })
+    expect(controller.handleKeyDown(key('Home'))).toBe(true)
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    expect(controller.handleKeyDown(key('PageDown'))).toBe(true)
+    expect(fake.selection()).toMatchObject({ startLineNumber: 3 })
+    expect(controller.handleKeyDown(key('PageUp'))).toBe(true)
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1 })
+
+    // F2 must reach the workbench/Monaco instead of being swallowed.
+    expect(controller.handleKeyDown(key('F2'))).toBe(false)
+
+    controller.dispose()
+  })
+
   it('switches to Insert on i and back on Escape', () => {
     const fake = createFakeEditor(['abc'])
     const context = createContext()

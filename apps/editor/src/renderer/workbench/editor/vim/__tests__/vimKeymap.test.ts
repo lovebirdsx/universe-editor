@@ -160,9 +160,94 @@ describe('reduceVimKey', () => {
   })
 
   it('swallows unknown printable keys in normal mode', () => {
-    const result = press(INITIAL_VIM_STATE, 'q')
-    expect(result.handled).toBe(true)
-    expect(result.command).toBeNull()
+    // Emoji is a surrogate pair (`length === 2`) but still text, not a key name.
+    for (const key of ['q', ' ', 'й', '😀']) {
+      const result = press(INITIAL_VIM_STATE, key)
+      expect(result.handled).toBe(true)
+      expect(result.command).toBeNull()
+    }
+  })
+
+  it('maps navigation keys to their Vim equivalents instead of swallowing them', () => {
+    const cases = [
+      ['ArrowLeft', 'h'],
+      ['ArrowRight', 'l'],
+      ['ArrowUp', 'k'],
+      ['ArrowDown', 'j'],
+      ['Home', '0'],
+      ['End', '$'],
+      ['PageUp', 'pageUp'],
+      ['PageDown', 'pageDown'],
+      ['Backspace', 'h'],
+    ] as const
+    for (const [key, motion] of cases) {
+      const result = press(INITIAL_VIM_STATE, key)
+      expect(result.command).toEqual({ type: 'motion', motion, count: 0 })
+      expect(result.handled).toBe(true)
+    }
+  })
+
+  it('lets counts and operators combine with navigation keys', () => {
+    const three = press(INITIAL_VIM_STATE, '3').state
+    expect(press(three, 'ArrowDown').command).toEqual({
+      type: 'motion',
+      motion: 'j',
+      count: 3,
+    })
+    expect(press(press(INITIAL_VIM_STATE, 'd').state, 'ArrowDown').command).toEqual({
+      type: 'operator',
+      operator: 'd',
+      motion: 'j',
+      count: 0,
+    })
+  })
+
+  it('maps Enter to <CR> and Delete to x', () => {
+    expect(press(INITIAL_VIM_STATE, 'Enter').command).toEqual({
+      type: 'motion',
+      motion: 'enter',
+      count: 0,
+    })
+    expect(press(INITIAL_VIM_STATE, 'Delete').command).toEqual({
+      type: 'delete-char',
+      count: 1,
+      backward: false,
+    })
+  })
+
+  it('swallows Tab and Insert, which Monaco would turn into a buffer edit', () => {
+    for (const key of ['Tab', 'Insert']) {
+      const result = press(INITIAL_VIM_STATE, key)
+      expect(result.handled).toBe(true)
+      expect(result.command).toBeNull()
+    }
+  })
+
+  it('passes non-text keys through to the workbench and Monaco', () => {
+    for (const key of [
+      'F2',
+      'F12',
+      'Shift',
+      'Control',
+      'Alt',
+      'Meta',
+      'Process',
+      'Dead',
+      'Unidentified',
+      'MediaPlayPause',
+    ]) {
+      const result = press(INITIAL_VIM_STATE, key)
+      expect(result.handled).toBe(false)
+      expect(result.command).toBeNull()
+      expect(result.state).toEqual(INITIAL_VIM_STATE)
+    }
+  })
+
+  it('aborts a pending operator when a non-text key passes through', () => {
+    const armed = press(INITIAL_VIM_STATE, 'd').state
+    const result = press(armed, 'F2')
+    expect(result.handled).toBe(false)
+    expect(result.state.pendingOperator).toBeNull()
   })
 
   it('passes everything except Escape through in insert mode', () => {

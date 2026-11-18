@@ -35,6 +35,22 @@ const MOTION_KEYS = new Set<string>([
   '}',
 ])
 
+/**
+ * `event.key` names for the navigation keys, mapped to their Vim equivalent.
+ * Without this they would fall into the Normal-mode "swallow unexpected keys"
+ * branch and never reach Monaco (arrows/HOME/END would simply do nothing).
+ */
+const NAVIGATION_MOTIONS = new Map<string, VimMotion>([
+  ['ArrowLeft', 'h'],
+  ['ArrowRight', 'l'],
+  ['ArrowUp', 'k'],
+  ['ArrowDown', 'j'],
+  ['Home', '0'],
+  ['End', '$'],
+  ['PageUp', 'pageUp'],
+  ['PageDown', 'pageDown'],
+])
+
 function idle(state: VimState): VimState {
   return {
     ...state,
@@ -90,6 +106,47 @@ export function pagingMotion(key: string): VimMotion {
   }
 }
 
+/**
+ * `event.key` for non-text keys is an ASCII identifier (`ArrowDown`, `F2`,
+ * `Shift`, `MediaPlayPause`). A printable character can be a surrogate pair
+ * (`'😀'.length === 2`), so length alone must not decide.
+ */
+function isFunctionKeyName(key: string): boolean {
+  return key.length > 1 && /^[A-Za-z][A-Za-z0-9]*$/.test(key)
+}
+
+/**
+ * Resolve a multi-character `event.key` (arrows, Home/End, PageUp/PageDown,
+ * Backspace/Delete/Enter). Returns `null` for keys the reducer does not own —
+ * F-keys, lone modifiers, media keys, IME's `Process`/`Dead` — which must keep
+ * bubbling to the workbench and Monaco.
+ */
+function functionalKeyResult(state: VimState, key: string): VimKeyResult | null {
+  const navigation = NAVIGATION_MOTIONS.get(key)
+  if (navigation !== undefined) return motion(state, navigation)
+
+  switch (key) {
+    case 'Backspace':
+      // Vim's `<BS>` is a synonym for `h`.
+      return motion(state, 'h')
+    case 'Enter':
+      // Vim's `<CR>` (`+`): down one line onto the first non-blank.
+      return motion(state, 'enter')
+    case 'Delete':
+      // Vim's `<Del>` deletes under the cursor, like `x`.
+      return emit(state, {
+        type: 'delete-char',
+        count: Math.max(1, state.count),
+        backward: false,
+      })
+    case 'Tab':
+    case 'Insert':
+      return { state: idle(state), command: null, handled: true }
+    default:
+      return null
+  }
+}
+
 export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult {
   if (state.mode === 'insert') {
     if (input.key === 'Escape' && !input.ctrl && !input.alt && !input.meta) {
@@ -124,8 +181,12 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
     return { state: idle(state), command: null, handled: true }
   }
 
+  const functional = functionalKeyResult(state, key)
+  if (functional !== null) return functional
+
   if (state.pendingG) {
     if (key === 'g') return motion(state, 'gg')
+    if (isFunctionKeyName(key)) return { state: idle(state), command: null, handled: false }
     return { state: idle(state), command: null, handled: true }
   }
 
@@ -194,8 +255,11 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
     case 'J':
       return emit(state, { type: 'join-lines', count: Math.max(1, state.count) })
     default:
-      // An unimplemented Normal-mode key is still ours: swallow it so it never
-      // types into the buffer.
+      // Unhandled function keys (F-keys, lone modifiers, media keys, IME's
+      // `Process`/`Dead`) belong to the workbench and Monaco — swallowing them
+      // would break F2/F12 and friends. Printable input stays swallowed so a
+      // stray `q` (or emoji) never types into the buffer.
+      if (isFunctionKeyName(key)) return { state: idle(state), command: null, handled: false }
       return { state: idle(state), command: null, handled: true }
   }
 }

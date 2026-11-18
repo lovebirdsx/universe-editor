@@ -101,6 +101,22 @@ describe('resolveMotion', () => {
     })
   })
 
+  it("moves with <CR> to the next line's first non-blank and stops at EOF", () => {
+    const multi = ['abc', '  def', 'last']
+    expect(resolveMotion(multi, { line: 1, column: 3 }, 'enter', 0)).toEqual({
+      line: 2,
+      column: 3,
+    })
+    expect(resolveMotion(multi, { line: 1, column: 1 }, 'enter', 2)).toEqual({
+      line: 3,
+      column: 1,
+    })
+    expect(resolveMotion(multi, { line: 3, column: 2 }, 'enter', 1)).toEqual({
+      line: 3,
+      column: 2,
+    })
+  })
+
   it('returns null for paging motions (the controller hands those to Monaco)', () => {
     expect(resolveMotion(lines, { line: 1, column: 1 }, 'pageDown', 1)).toBeNull()
     expect(resolveMotion(lines, { line: 1, column: 1 }, 'halfPageUp', 1)).toBeNull()

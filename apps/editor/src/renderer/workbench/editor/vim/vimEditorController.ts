@@ -260,6 +260,11 @@ export function createVimEditorController(
         return clampColumn(Math.min(model.getLineCount(), from.line + steps), from.column)
       case 'k':
         return clampColumn(Math.max(1, from.line - steps), from.column)
+      case 'enter': {
+        if (from.line >= model.getLineCount()) return from
+        const targetLine = Math.min(model.getLineCount(), from.line + steps)
+        return { line: targetLine, column: firstNonBlankColumn(model.getLineContent(targetLine)) }
+      }
       default:
         return undefined
     }

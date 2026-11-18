@@ -29,6 +29,7 @@ export type VimMotion =
   | '$'
   | 'gg'
   | 'G'
+  | 'enter'
   | '{'
   | '}'
   | 'pageDown'

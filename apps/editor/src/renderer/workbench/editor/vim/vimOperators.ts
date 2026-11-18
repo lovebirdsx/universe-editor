@@ -107,6 +107,14 @@ export function resolveOperatorRange(
       return { range: linewiseRange(lines, from.line, from.line + steps), linewise: true }
     case 'k':
       return { range: linewiseRange(lines, from.line - steps, from.line), linewise: true }
+    case 'enter': {
+      const destination = target(motion)
+      if (destination === null) return null
+      return {
+        range: linewiseRange(lines, from.line, Math.max(from.line, destination.line)),
+        linewise: true,
+      }
+    }
     case 'gg': {
       // gg/G take a line number, not a repetition; a count may point either
       // direction from the cursor.

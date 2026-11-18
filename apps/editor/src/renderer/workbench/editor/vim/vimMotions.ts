@@ -201,6 +201,16 @@ export function resolveMotion(
         column: firstNonBlankColumn(lines[targetLine - 1] ?? ''),
       })
     }
+    case 'enter': {
+      // `<CR>` (`+`): down `steps` lines onto the first non-blank. At EOF the
+      // motion fails and the cursor stays put.
+      if (from.line >= lines.length) return clampNormalPosition(lines, from)
+      const targetLine = Math.min(lines.length, from.line + steps)
+      return {
+        line: targetLine,
+        column: firstNonBlankColumn(lines[targetLine - 1] ?? ''),
+      }
+    }
     case '{':
       return clampNormalPosition(lines, {
         line: paragraphBoundary(lines, from.line, -1),

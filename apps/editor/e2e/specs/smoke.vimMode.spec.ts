@@ -110,6 +110,24 @@ test.describe('@p1 vim mode', () => {
       await expect.poll(() => cursor(page)).toEqual({ lineNumber: 1, column: 1 })
     })
 
+    await test.step('arrow/Home/End/Enter navigate instead of being swallowed', async () => {
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
+      await page.keyboard.press('ArrowDown')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 2, column: 1 })
+      await page.keyboard.press('ArrowUp')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 1, column: 1 })
+      await page.keyboard.press('ArrowRight')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 1, column: 2 })
+      await page.keyboard.press('ArrowLeft')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 1, column: 1 })
+      await page.keyboard.press('End')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 1, column: 10 })
+      await page.keyboard.press('Home')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 1, column: 1 })
+      await page.keyboard.press('Enter')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 2, column: 1 })
+    })
+
     await test.step('0/$ and w/b jump to line and word boundaries', async () => {
       await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
       await page.keyboard.press('$')
@@ -156,7 +174,7 @@ test.describe('@p1 vim mode', () => {
       await expect.poll(() => text(page)).toBe('one\nthree\n')
     })
 
-    await test.step('Ctrl+F pages the editor instead of opening find', async () => {
+    await test.step('Ctrl+F and PageUp/PageDown page the editor instead of opening find', async () => {
       await setText(page, TALL_BODY)
       await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
       const before = (await firstVisibleLine(page)) ?? 1
@@ -164,6 +182,12 @@ test.describe('@p1 vim mode', () => {
       await expect
         .poll(() => firstVisibleLine(page), { message: 'the page-scroll left the viewport put' })
         .toBeGreaterThan(before)
+      const afterCtrlF = (await firstVisibleLine(page)) ?? before
+      await page.keyboard.press('PageDown')
+      await expect.poll(() => firstVisibleLine(page)).toBeGreaterThan(afterCtrlF)
+      const afterPageDown = (await firstVisibleLine(page)) ?? afterCtrlF
+      await page.keyboard.press('PageUp')
+      await expect.poll(() => firstVisibleLine(page)).toBeLessThan(afterPageDown)
       await expect.poll(() => workbench.getContextKey<boolean>('findWidgetVisible')).toBe(false)
       expect(await text(page)).toBe(TALL_BODY)
     })
