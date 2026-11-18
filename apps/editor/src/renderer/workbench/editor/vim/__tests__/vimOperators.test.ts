@@ -89,6 +89,15 @@ describe('resolveOperatorRange', () => {
     })
   })
 
+  it('deletes through the next line end for a counted $', () => {
+    expect(resolveOperatorRange(['abc', 'defgh'], { line: 1, column: 1 }, '$', 2)?.range).toEqual({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: 2,
+      endColumn: 6,
+    })
+  })
+
   it('treats dw as exclusive of the next word start', () => {
     expect(resolveOperatorRange(['foo bar'], { line: 1, column: 1 }, 'w', 1)?.range).toEqual({
       startLineNumber: 1,

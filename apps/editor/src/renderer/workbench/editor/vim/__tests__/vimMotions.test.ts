@@ -61,6 +61,14 @@ describe('resolveMotion', () => {
     expect(resolveMotion(indented, { line: 1, column: 1 }, '$', 1)).toEqual({ line: 1, column: 7 })
   })
 
+  it('drops N-1 lines before a counted $', () => {
+    const multi = ['abc', 'defgh', 'ij']
+    expect(resolveMotion(multi, { line: 1, column: 1 }, '$', 2)).toEqual({ line: 2, column: 5 })
+    expect(resolveMotion(multi, { line: 2, column: 1 }, '$', 3)).toEqual({ line: 3, column: 2 })
+    // A count past EOF stays on the last line instead of overshooting.
+    expect(resolveMotion(multi, { line: 1, column: 1 }, '$', 9)).toEqual({ line: 3, column: 2 })
+  })
+
   it('clamps vertical movement to line bounds', () => {
     const multi = ['abcdef', 'xy']
     expect(resolveMotion(multi, { line: 1, column: 6 }, 'j', 1)).toEqual({ line: 2, column: 2 })

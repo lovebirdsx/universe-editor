@@ -162,6 +162,26 @@ test.describe('@p1 vim mode', () => {
       await expect.poll(() => statusIcon(page)).toBe('vim-normal')
     })
 
+    await test.step('a appends after the cursor and A after the line', async () => {
+      await setText(page, BODY)
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
+      await page.keyboard.press('a')
+      await expect.poll(() => statusIcon(page)).toBe('vim-insert')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 1, column: 2 })
+      await page.keyboard.type('X')
+      await expect.poll(() => text(page)).toBe(`aX${BODY.slice(1)}`)
+      await page.keyboard.press('Escape')
+
+      await page.keyboard.press('A')
+      await expect.poll(() => statusIcon(page)).toBe('vim-insert')
+      // "alpha beta" + the inserted X → the insert position is column 12.
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 1, column: 12 })
+      await page.keyboard.type('Y')
+      await expect.poll(() => text(page)).toBe(`aXlpha betaY${BODY.slice(10)}`)
+      await page.keyboard.press('Escape')
+      await expect.poll(() => statusIcon(page)).toBe('vim-normal')
+    })
+
     await test.step('dd deletes the line, p pastes it back, u undoes the paste', async () => {
       await setText(page, 'one\ntwo\nthree\n')
       await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(2, 1))

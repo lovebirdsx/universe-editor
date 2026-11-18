@@ -273,6 +273,37 @@ describe('createVimEditorController', () => {
     controller.dispose()
   })
 
+  it('enters Insert after the cursor with a, and after the line with A', () => {
+    const fake = createFakeEditor(['abc', 'de'])
+    const context = createContext()
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      contextKeyService: context as never,
+      statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
+    })
+    fake.focus()
+
+    fake.editor.setPosition({ lineNumber: 1, column: 2 })
+    controller.handleKeyDown(key('a'))
+    expect(context.get('vimMode')).toBe('insert')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 3 })
+    controller.handleKeyDown(key('Escape'))
+
+    // `a` on the last character lands on the insert position after it.
+    fake.editor.setPosition({ lineNumber: 2, column: 2 })
+    controller.handleKeyDown(key('a'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 3 })
+    controller.handleKeyDown(key('Escape'))
+
+    fake.editor.setPosition({ lineNumber: 2, column: 1 })
+    controller.handleKeyDown(key('A'))
+    expect(context.get('vimMode')).toBe('insert')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 3 })
+    controller.dispose()
+  })
+
   it('ignores IME composition strokes', () => {
     const fake = createFakeEditor(['abc'])
     const controller = createVimEditorController({

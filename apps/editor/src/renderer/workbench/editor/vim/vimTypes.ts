@@ -65,7 +65,7 @@ export const INITIAL_VIM_STATE: VimState = {
   countAfterOperator: false,
 }
 
-export type VimInsertPlacement = 'before' | 'line-start'
+export type VimInsertPlacement = 'before' | 'after' | 'line-start' | 'line-end'
 
 export type VimCommand =
   | { readonly type: 'motion'; readonly motion: VimMotion; readonly count: number }

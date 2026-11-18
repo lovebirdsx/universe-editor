@@ -146,16 +146,10 @@ export function resolveOperatorRange(
       }
     }
     case '$': {
-      const endColumn = Math.max(from.column, lineLength(lines, from.line) + 1)
-      return {
-        range: {
-          startLineNumber: from.line,
-          startColumn: from.column,
-          endLineNumber: from.line,
-          endColumn,
-        },
-        linewise: false,
-      }
+      const destination = target('$')
+      return destination === null
+        ? null
+        : { range: charwiseRange(lines, from, destination, true, true), linewise: false }
     }
     case 'w':
     case 'W': {

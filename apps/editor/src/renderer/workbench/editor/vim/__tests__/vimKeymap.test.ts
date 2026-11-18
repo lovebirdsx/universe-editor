@@ -110,16 +110,17 @@ describe('reduceVimKey', () => {
     expect(result.handled).toBe(true)
   })
 
-  it('enters insert mode only through i and I', () => {
-    expect(press(INITIAL_VIM_STATE, 'i').command).toEqual({
-      type: 'enter-insert',
-      placement: 'before',
-    })
-    expect(press(INITIAL_VIM_STATE, 'I').command).toEqual({
-      type: 'enter-insert',
-      placement: 'line-start',
-    })
-    for (const key of ['a', 'A', 'o', 'O', 's', 'S', 'C']) {
+  it('enters insert mode through i/a/I/A', () => {
+    const placements = {
+      i: 'before',
+      a: 'after',
+      I: 'line-start',
+      A: 'line-end',
+    } as const
+    for (const [key, placement] of Object.entries(placements)) {
+      expect(press(INITIAL_VIM_STATE, key).command).toEqual({ type: 'enter-insert', placement })
+    }
+    for (const key of ['o', 'O', 's', 'S', 'C']) {
       const result = press(INITIAL_VIM_STATE, key)
       expect(result.command).toBeNull()
       expect(result.state.mode).toBe('normal')

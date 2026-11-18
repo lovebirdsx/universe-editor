@@ -184,8 +184,10 @@ export function resolveMotion(
         column: firstNonBlankColumn(lines[from.line - 1] ?? ''),
       })
     case '$': {
-      const len = lineLength(lines, from.line)
-      return clampNormalPosition(lines, { line: from.line, column: Math.max(1, len) })
+      // `N$` drops N-1 lines first, then stops on the last character there.
+      const line = Math.max(1, Math.min(lines.length, from.line + steps - 1))
+      const len = lineLength(lines, line)
+      return clampNormalPosition(lines, { line, column: Math.max(1, len) })
     }
     case 'gg':
       return clampNormalPosition(lines, {

@@ -268,8 +268,12 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
       return emit(state, { type: 'search-repeat', reverse: true, count: Math.max(1, state.count) })
     case 'i':
       return emit(state, { type: 'enter-insert', placement: 'before' })
+    case 'a':
+      return emit(state, { type: 'enter-insert', placement: 'after' })
     case 'I':
       return emit(state, { type: 'enter-insert', placement: 'line-start' })
+    case 'A':
+      return emit(state, { type: 'enter-insert', placement: 'line-end' })
     case 'x':
       return emit(state, { type: 'delete-char', count: Math.max(1, state.count), backward: false })
     case 'X':

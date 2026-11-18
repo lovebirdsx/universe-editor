@@ -935,14 +935,22 @@ export function createVimEditorController(
   }
 
   function enterInsert(command: Extract<VimCommand, { type: 'enter-insert' }>): void {
-    if (!editor.getModel()) return
+    const model = editor.getModel()
+    if (!model) return
     const from = primaryPosition()
+    const lineEnd = model.getLineContent(from.line).length + 1
     switch (command.placement) {
       case 'before':
         setPosition(from)
         break
+      case 'after':
+        setPosition({ line: from.line, column: Math.min(lineEnd, from.column + 1) })
+        break
       case 'line-start':
         setPosition({ line: from.line, column: 1 })
+        break
+      case 'line-end':
+        setPosition({ line: from.line, column: lineEnd })
         break
     }
     setMode('insert')
