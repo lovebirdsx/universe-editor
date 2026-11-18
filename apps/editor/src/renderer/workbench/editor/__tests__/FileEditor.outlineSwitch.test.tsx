@@ -124,6 +124,7 @@ import { MonacoModelRegistry } from '../monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
 import { IOutlineService } from '../../../services/languageFeatures/OutlineService.js'
+import { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
 import { IUserKeybindingsService } from '../../../services/keybindings/UserKeybindingsService.js'
 import { ServicesContext } from '../../useService.js'
 import { EditorGroupContext } from '../EditorGroupContext.js'
@@ -273,6 +274,10 @@ function makeServices() {
     revealSymbol: () => {},
   }
   services.set(IOutlineService, { ...outlineStub, forGroup: () => outlineStub } as never)
+  services.set(IVimInputMethodService, {
+    switchToEnglish: async () => false,
+    restore: async () => undefined,
+  } as never)
   const instantiation = new InstantiationService(services)
   const inputA = instantiation.createInstance(FileEditorInput, uriA)
   const inputB = instantiation.createInstance(FileEditorInput, uriB)

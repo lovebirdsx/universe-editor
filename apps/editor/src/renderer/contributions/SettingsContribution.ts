@@ -345,6 +345,14 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Show the current Vim mode as a status-bar icon while an editor has text focus.',
             ),
           },
+          'editor.vimMode.autoSwitchInputMethod': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.editor.vimMode.autoSwitchInputMethod.description',
+              'Switch the OS input method to English in Normal mode and restore it in Insert mode, so a Chinese IME does not type into the buffer. Windows only; ignored elsewhere.',
+            ),
+          },
         },
       }),
     )

@@ -131,6 +131,13 @@ function createStatusBar() {
   }
 }
 
+function createInputMethodService() {
+  return {
+    switchToEnglish: vi.fn(async () => true),
+    restore: vi.fn(async () => undefined),
+  }
+}
+
 describe('createVimEditorController', () => {
   it('does nothing while disabled', () => {
     const fake = createFakeEditor(['abc', 'def'])
@@ -139,6 +146,7 @@ describe('createVimEditorController', () => {
       configService: createFakeConfig({}) as never,
       contextKeyService: createContext() as never,
       statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
     expect(controller.handleKeyDown(key('j'))).toBe(false)
@@ -152,6 +160,7 @@ describe('createVimEditorController', () => {
       configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
       contextKeyService: createContext() as never,
       statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
     expect(controller.handleKeyDown(key('j'))).toBe(true)
@@ -172,6 +181,7 @@ describe('createVimEditorController', () => {
       configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
       contextKeyService: context as never,
       statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
     controller.handleKeyDown(key('i'))
@@ -192,9 +202,68 @@ describe('createVimEditorController', () => {
       configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
       contextKeyService: createContext() as never,
       statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
     expect(controller.handleKeyDown(key('j', { isComposing: true }))).toBe(false)
+    controller.dispose()
+  })
+
+  it('switches the input method to English in Normal mode and restores it in Insert', async () => {
+    const fake = createFakeEditor(['abc'])
+    const inputMethod = createInputMethodService()
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      contextKeyService: createContext() as never,
+      statusBarService: createStatusBar() as never,
+      inputMethodService: inputMethod as never,
+    })
+    fake.focus()
+    await vi.waitFor(() => expect(inputMethod.switchToEnglish).toHaveBeenCalledTimes(1))
+
+    controller.handleKeyDown(key('i'))
+    await vi.waitFor(() => expect(inputMethod.restore).toHaveBeenCalledTimes(1))
+
+    controller.handleKeyDown(key('Escape'))
+    await vi.waitFor(() => expect(inputMethod.switchToEnglish).toHaveBeenCalledTimes(2))
+    controller.dispose()
+  })
+
+  it('restores the input method when the editor loses text focus', async () => {
+    const fake = createFakeEditor(['abc'])
+    const inputMethod = createInputMethodService()
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      contextKeyService: createContext() as never,
+      statusBarService: createStatusBar() as never,
+      inputMethodService: inputMethod as never,
+    })
+    fake.focus()
+    await vi.waitFor(() => expect(inputMethod.switchToEnglish).toHaveBeenCalledTimes(1))
+
+    fake.blur()
+    await vi.waitFor(() => expect(inputMethod.restore).toHaveBeenCalledTimes(1))
+    controller.dispose()
+  })
+
+  it('leaves the input method alone when auto-switching is disabled', async () => {
+    const fake = createFakeEditor(['abc'])
+    const inputMethod = createInputMethodService()
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      configService: createFakeConfig({
+        'editor.vimMode.enabled': true,
+        'editor.vimMode.autoSwitchInputMethod': false,
+      }) as never,
+      contextKeyService: createContext() as never,
+      statusBarService: createStatusBar() as never,
+      inputMethodService: inputMethod as never,
+    })
+    fake.focus()
+    await Promise.resolve()
+    expect(inputMethod.switchToEnglish).not.toHaveBeenCalled()
     controller.dispose()
   })
 
@@ -210,6 +279,7 @@ describe('createVimEditorController', () => {
       configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
       contextKeyService: createContext() as never,
       statusBarService: statusBar as never,
+      inputMethodService: createInputMethodService() as never,
     })
 
     fake.focus()
@@ -235,6 +305,7 @@ describe('createVimEditorController', () => {
       configService: config as never,
       contextKeyService: context as never,
       statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
     controller.handleKeyDown(key('i'))
@@ -252,6 +323,7 @@ describe('createVimEditorController', () => {
       configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
       contextKeyService: createContext() as never,
       statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
     vi.mocked(fake.editor.trigger).mockClear()
@@ -273,6 +345,7 @@ describe('createVimEditorController', () => {
       configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
       contextKeyService: createContext() as never,
       statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
     vi.mocked(fake.editor.trigger).mockClear()
@@ -292,6 +365,7 @@ describe('createVimEditorController', () => {
       configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
       contextKeyService: createContext() as never,
       statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
     controller.handleKeyDown(key('d'))

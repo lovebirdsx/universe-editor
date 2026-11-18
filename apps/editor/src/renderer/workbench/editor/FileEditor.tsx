@@ -37,6 +37,7 @@ import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { createWorkbenchEditor } from './monaco/workbenchEditorFactory.js'
 import { createVimEditorController } from './vim/vimEditorController.js'
 import { registerVimEditor } from './vim/vimEditorRegistry.js'
+import { IVimInputMethodService } from '../../../shared/ipc/vimInputMethodService.js'
 import {
   computeEditorContextMenuAnchor,
   isEditorContextMenuKey,
@@ -145,6 +146,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const contextKeyService = useService(IContextKeyService)
   const focusStackService = useService(IFocusStackService)
   const statusBarService = useService(IStatusBarService)
+  const vimInputMethodService = useService(IVimInputMethodService)
   const recentEditsTracker = useService(IRecentEditsTracker)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -334,6 +336,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       configService,
       contextKeyService,
       statusBarService,
+      inputMethodService: vimInputMethodService,
     })
     const vimRegistration = registerVimEditor(vimController)
     editorRef.current = ed

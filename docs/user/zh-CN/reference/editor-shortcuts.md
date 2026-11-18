@@ -131,6 +131,8 @@
 
 默认关闭；关闭时本文其余键位表保持原样。开启且任意窗口的编辑器持有文本焦点时，状态栏右侧显示当前模式图标（Normal 为 `N`、Insert 为 `I`，悬停可查看说明，点击可切换 Vim 模式）；不需要这个指示可把 `editor.vimMode.showStatusBar` 设为 `false`。
 
+Normal 模式会临时把系统输入法切到英文（Insert 模式恢复），因此中文输入法下按 `j` / `k` 等键不会被当成拼音输入，也不会把字符写进缓冲区。该行为由 `editor.vimMode.autoSwitchInputMethod` 控制（默认开启，仅 Windows 生效）。
+
 ### Normal 模式
 
 | 操作 | 键位 |

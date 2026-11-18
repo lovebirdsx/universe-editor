@@ -18,6 +18,7 @@ import {
   type IStatusBarEntryAccessor,
   type IStatusBarService,
 } from '@universe-editor/platform'
+import type { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
 import { reduceVimKey } from './vimKeymap.js'
 import { clampNormalPosition, firstNonBlankColumn, resolveMotion } from './vimMotions.js'
 import { linewiseRange, resolveOperatorRange } from './vimOperators.js'
@@ -36,6 +37,15 @@ import {
 const VIM_STATUS_ENTRY_ID = 'vim-mode'
 const VIM_STATUS_PRIORITY = 5000
 
+/**
+ * Shared by every controller in this window. Main keeps one saved input method
+ * per window (`VimInputMethodMainService.saved`), so ownership has to be
+ * tracked at the same granularity — a per-controller copy would let a newly
+ * mounted editor group restore Chinese under the focused group's feet.
+ */
+let inputMethodState: 'english' | 'native' | null = null
+let inputMethodChain: Promise<void> = Promise.resolve()
+
 export interface IVimEditorController extends IDisposable {
   readonly editor: VimEditor
   isEnabled(): boolean
@@ -50,6 +60,7 @@ export interface IVimEditorControllerOptions {
   readonly configService: IConfigurationService
   readonly contextKeyService: IContextKeyService
   readonly statusBarService: IStatusBarService
+  readonly inputMethodService: IVimInputMethodService
 }
 
 function readLines(model: VimTextModel): string[] {
@@ -66,9 +77,11 @@ function toMonacoPosition(position: VimPosition): { lineNumber: number; column: 
 export function createVimEditorController(
   options: IVimEditorControllerOptions,
 ): IVimEditorController {
-  const { editor, configService, contextKeyService, statusBarService } = options
+  const { editor, configService, contextKeyService, statusBarService, inputMethodService } = options
   let state: VimState = INITIAL_VIM_STATE
   let enabled = configService.get<boolean>('editor.vimMode.enabled') === true
+  let autoSwitchInputMethod =
+    configService.get<boolean>('editor.vimMode.autoSwitchInputMethod') !== false
   let textFocused = false
   let statusEntry: IStatusBarEntryAccessor | undefined
 
@@ -115,7 +128,40 @@ export function createVimEditorController(
     statusEntry.update(entry)
   }
 
+  /**
+   * Renderer keystrokes cannot suppress IME composition, so Normal mode leaves
+   * the input method instead: main switches the focused window to English there
+   * and Insert mode restores it. Only mode *transitions* reach main — this runs
+   * on every keystroke via `syncContextKeys`, and the guard collapses those.
+   */
+  function syncInputMethod(): void {
+    const desired: 'english' | 'native' =
+      enabled && autoSwitchInputMethod && textFocused && state.mode === 'normal'
+        ? 'english'
+        : 'native'
+    if (desired === inputMethodState) return
+    inputMethodState = desired
+    // Serialize: a fast Esc → i pair must not reorder the two IPC calls.
+    inputMethodChain = inputMethodChain
+      .then(async () => {
+        if (desired === 'native') {
+          await inputMethodService.restore()
+          return
+        }
+        // `switchToEnglish` reports whether English is active, not whether it
+        // switched, so an already-English IME stays deduped; a refusal (null
+        // HWND, no IME context) falls back to `native` and retries next stroke.
+        if (!(await inputMethodService.switchToEnglish()) && inputMethodState === 'english') {
+          inputMethodState = 'native'
+        }
+      })
+      .catch(() => {
+        inputMethodState = 'native'
+      })
+  }
+
   function syncContextKeys(): void {
+    syncInputMethod()
     // Report a mode only while this editor owns text focus; an unfocused
     // controller's `normal` would otherwise claim the key with nothing behind it.
     if (!enabled || !textFocused) {
@@ -456,6 +502,11 @@ export function createVimEditorController(
     if (event.affectsConfiguration('editor.vimMode.showStatusBar')) {
       syncStatusBar()
     }
+    if (event.affectsConfiguration('editor.vimMode.autoSwitchInputMethod')) {
+      autoSwitchInputMethod =
+        configService.get<boolean>('editor.vimMode.autoSwitchInputMethod') !== false
+      syncInputMethod()
+    }
   })
   disposables.push(configSubscription)
 
@@ -470,6 +521,15 @@ export function createVimEditorController(
       for (const disposable of disposables) disposable.dispose()
       disposables.length = 0
       disposeStatusEntry()
+      // Only the controller holding text focus may leave English: main's saved
+      // input method is shared, so a background group's disposal must not yank
+      // Chinese back under the focused group.
+      if (textFocused && inputMethodState === 'english') {
+        inputMethodState = 'native'
+        inputMethodChain = inputMethodChain
+          .then(() => inputMethodService.restore())
+          .catch(() => undefined)
+      }
       // Only clear the keys this controller owns: another editor group's
       // controller may hold text focus right now.
       if (textFocused) {

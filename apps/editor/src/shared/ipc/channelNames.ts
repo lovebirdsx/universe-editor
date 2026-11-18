@@ -59,6 +59,7 @@ export const ServiceChannels = {
   MobileBridge: 'mobileBridge',
   Triggers: 'triggers',
   TriggerRunHost: 'triggerRunHost',
+  VimInputMethod: 'vimInputMethod',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

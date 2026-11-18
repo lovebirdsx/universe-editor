@@ -32,6 +32,7 @@ import { WorkspaceMainService } from '../workspace/workspaceMainService.js'
 import { UserDataMainService } from '../userData/userDataMainService.js'
 import { TerminalMainService } from '../terminal/terminalMainService.js'
 import { FileWatcherMainService } from '../fileWatcher/fileWatcherMainService.js'
+import { VimInputMethodMainService } from '../vimInputMethod/vimInputMethodMainService.js'
 import { ElectronFolderDialog } from '../workspace/electronFolderDialog.js'
 import { getDefaultStorage } from '../../storage.js'
 import type {
@@ -192,6 +193,9 @@ export async function createWindowScopedServices(opts: {
     terminal,
     fileWatcher,
     auxiliaryWindows: new WindowScopedAuxiliaryWindowsService(auxiliaryWindows, win.id),
+    vimInputMethod: new VimInputMethodMainService(
+      logService.createLogger({ id: 'vimInputMethod', name: 'VimInputMethod' }),
+    ),
   }
 
   const windowsService = disposables.add(

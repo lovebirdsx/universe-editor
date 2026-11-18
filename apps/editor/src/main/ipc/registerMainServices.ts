@@ -160,6 +160,10 @@ export function bootstrapWindowIpc(
     ServiceChannels.Triggers,
     ProxyChannel.fromService(createWindowScopedTriggerMainService(app.triggers, win.id)),
   )
+  server.registerChannel(
+    ServiceChannels.VimInputMethod,
+    ProxyChannel.fromService(window.vimInputMethod),
+  )
 
   const rendererLifecycle = ProxyChannel.toService<IRendererLifecycleService>(
     client.getChannel(ServiceChannels.Lifecycle),

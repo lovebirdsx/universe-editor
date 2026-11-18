@@ -65,8 +65,9 @@ describe('WindowScopedServices type', () => {
       terminal: {} as WindowScopedServices['terminal'],
       fileWatcher: {} as WindowScopedServices['fileWatcher'],
       auxiliaryWindows: {} as WindowScopedServices['auxiliaryWindows'],
+      vimInputMethod: {} as WindowScopedServices['vimInputMethod'],
     }
-    expect(Object.keys(svc)).toHaveLength(10)
+    expect(Object.keys(svc)).toHaveLength(11)
   })
 })
 

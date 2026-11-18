@@ -137,6 +137,7 @@ import { IRecentEditsTracker, RecentEditsTracker } from '../../../services/ai/Re
 import { MonacoModelRegistry } from '../monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { IOutlineService } from '../../../services/languageFeatures/OutlineService.js'
+import { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
 import { ServicesContext } from '../../useService.js'
 
 function makeOutlineStub() {
@@ -277,6 +278,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/bom.txt'))
     services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
     services.set(IOutlineService, makeOutlineStub() as never)
+    services.set(IVimInputMethodService, {
+      switchToEnglish: async () => false,
+      restore: async () => undefined,
+    } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -313,6 +318,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/mixed.md'))
     services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
     services.set(IOutlineService, makeOutlineStub() as never)
+    services.set(IVimInputMethodService, {
+      switchToEnglish: async () => false,
+      restore: async () => undefined,
+    } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -349,6 +358,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     const groups = new FakeGroupsService([group])
     services.set(IEditorGroupsService, groups as unknown as IEditorGroupsService)
     services.set(IOutlineService, makeOutlineStub() as never)
+    services.set(IVimInputMethodService, {
+      switchToEnglish: async () => false,
+      restore: async () => undefined,
+    } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -398,6 +411,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
     services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
     services.set(IOutlineService, makeOutlineStub() as never)
+    services.set(IVimInputMethodService, {
+      switchToEnglish: async () => false,
+      restore: async () => undefined,
+    } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -446,6 +463,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
     services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
     services.set(IOutlineService, makeOutlineStub() as never)
+    services.set(IVimInputMethodService, {
+      switchToEnglish: async () => false,
+      restore: async () => undefined,
+    } as never)
 
     render(
       <ServicesContext.Provider value={inst}>

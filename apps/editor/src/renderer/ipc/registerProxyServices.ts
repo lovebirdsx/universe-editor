@@ -54,6 +54,7 @@ import { IConfigLocationService } from '../../shared/ipc/configLocationService.j
 import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
 import { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
+import { IVimInputMethodService } from '../../shared/ipc/vimInputMethodService.js'
 import { IAuxiliaryWindowsService } from '../../shared/ipc/auxiliaryWindowService.js'
 import { ISessionChangesStoreService } from '../../shared/ipc/sessionChangesStoreService.js'
 import { IMobileGatewayService } from '../../shared/ipc/mobileGatewayService.js'
@@ -111,6 +112,7 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: IIssueReporterService, channel: ServiceChannels.IssueReporter },
   { id: IProcessMonitorService, channel: ServiceChannels.ProcessMonitor },
   { id: IFileClipboardService, channel: ServiceChannels.FileClipboard },
+  { id: IVimInputMethodService, channel: ServiceChannels.VimInputMethod },
   { id: IMobileGatewayService, channel: ServiceChannels.MobileGateway },
 ]
 

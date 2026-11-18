@@ -5,6 +5,7 @@ packages:
 allowBuilds:
   esbuild: true
   electron: true
+  koffi: true
   '@parcel/watcher': false
   electron-winstaller: false
   # install 脚本是 node-gyp rebuild(无 prebuilds),win32 放行以从源码重建 .node。
@@ -30,6 +31,9 @@ catalog:
   # 版本同 minor，避免两边协议行为漂移。
   '@modelcontextprotocol/sdk': 1.32.1
   zod: ^3.25.0
+  # Vim 模式切换输入法用：N-API prebuilt 的 FFI，main 进程直接调 Win32 imm32/user32，
+  # 无需 node-gyp（同 @lydell/node-pty 的无编译路线）。
+  koffi: ^3.3.8
   # TypeScript native (Go port) LSP preview — opt-in via UNIVERSE_TS_SERVER=native
   '@typescript/native-preview': 7.0.0-dev.20260707.2
 

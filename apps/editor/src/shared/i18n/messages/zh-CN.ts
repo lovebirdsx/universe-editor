@@ -1283,6 +1283,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '在代码编辑器与列表导航中启用 Vim 键位（Normal / Insert 双模式）。Normal 模式下 h/j/k/l 移动、w/b/e 按词跳转、gg/G 跳到首末行、Ctrl+F/B/D/U 翻页。',
   'settings.editor.vimMode.showStatusBar.description':
     '编辑器持有文本焦点时，在状态栏显示当前 Vim 模式的图标。',
+  'settings.editor.vimMode.autoSwitchInputMethod.description':
+    '进入 Normal 模式时把系统输入法切到英文，回到 Insert 模式时恢复，避免中文输入法把拼音写进缓冲区。仅 Windows 生效。',
   'settings.files.nativeDialog.enable.description':
     '打开文件/文件夹及保存时使用操作系统文件对话框，而不是内置对话框。',
   'settings.issueReporter': '问题报告器',

@@ -74,6 +74,8 @@ React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keyb
 
 **状态栏**：右侧的 `vim-mode` 图标条目（Normal/Insert 两种徽标）只在任意窗口的编辑器文本聚焦且开启时存在（`editor.vimMode.showStatusBar` 可关）。用户可见键位见 `docs/user/zh-CN/reference/editor-shortcuts.md` 的「Vim 模式」一节。
 
+**中文输入法（IME）**：`keydown` 的 `preventDefault()` 取消不了 IME 组合（Windows 上组合中的按键是 `keyCode === 229`），把 Monaco textarea 设 `readonly` 也实测无效，所以 Normal 模式改为**切走输入法**：契约在 `shared/ipc/vimInputMethodService.ts`，main 侧 `main/services/vimInputMethod/vimInputMethodMainService.ts` 用 koffi 调 `LoadKeyboardLayoutW` + `WM_INPUTLANGCHANGEREQUEST`（无 en-US 布局时回退 `ImmSetConversionStatus`），renderer 的 `vimEditorController.syncInputMethod()` 在模式切换时经 IPC 触发。输入法归属是 **window 级**（main 每个窗口只存一份 `saved`），renderer 的去重状态 `inputMethodState` 也必须 module 级共享——per-controller 会让新建 editor group 的初始化把焦点组的英文切回中文。`editor.vimMode.autoSwitchInputMethod`（默认开，仅 Windows）可关。
+
 ## 焦点类上下文键：一律 DOM 派生
 
 **全局键盘守卫**：`apps/editor/src/renderer/workbench/useGlobalKeybindingHandler.ts` 有一道「无 ctrl/alt/meta 的裸字符键与 Delete/Backspace 保留给文本面」的守卫，判据 `isEditableTarget(target) || editorTextFocus === true || acpPromptInputFocused === true`（inTextSurface / isPrintableTyping / isNativeEditing 三处，紧挨 chord 分支）。任一 key 残留 true，即便 registry 已解析出 `EXECUTE` 也会被吞。**签名症状**：`Ctrl+F` 正常、`runCommand` 正常、裸字母（如 markdown 预览 link hints 的 `f`）无反应。

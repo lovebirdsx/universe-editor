@@ -43,6 +43,7 @@ const BESPOKE_KEYS = new Set<string>([
   // `affectsBridgedEditorOption` trigger a full option update on every toggle.
   'editor.vimMode.enabled',
   'editor.vimMode.showStatusBar',
+  'editor.vimMode.autoSwitchInputMethod',
 ])
 
 // Prefixes whose whole subtree is owned elsewhere. `unicodeHighlight` is forced

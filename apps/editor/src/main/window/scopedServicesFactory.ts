@@ -47,6 +47,7 @@ import type { ErrorSinkMainService } from '../services/telemetry/errorSinkMainSe
 import type { DiagnosticsMainService } from '../services/diagnostics/diagnosticsMainService.js'
 import type { BugRecordingMainService } from '../services/bugRecording/bugRecordingMainService.js'
 import type { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
+import type { IVimInputMethodService } from '../../shared/ipc/vimInputMethodService.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
 import type { SessionSwitcherMainService } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
@@ -164,4 +165,6 @@ export interface WindowScopedServices {
   readonly terminal: ITerminalService
   readonly fileWatcher: IFileWatcherService
   readonly auxiliaryWindows: IAuxiliaryWindowsService
+  /** Vim Normal/Insert mode input-method switching (Windows; no-op elsewhere). */
+  readonly vimInputMethod: IVimInputMethodService
 }
