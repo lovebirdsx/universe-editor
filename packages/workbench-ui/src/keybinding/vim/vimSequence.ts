@@ -53,6 +53,9 @@ export class VimSequenceEngine {
 
   /** Keymaps change with configuration; pending state is intentionally kept. */
   setEntries(entries: readonly IVimKeymapEntry[]): void {
+    // The service caches the effective keymap per (kind, leader, config
+    // version), so an unchanged reference means no configuration change.
+    if (this._entries === entries) return
     this._entries = entries
   }
 

@@ -116,6 +116,13 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
   // scroller (external scrollers only resolve their ref after this component's
   // child layout effects, which would leave the list window empty on mount).
   const listPaneRef = useRef<HTMLDivElement | null>(null)
+  // The pane unmounts when a search has zero results. The focus/context-key
+  // listeners below must follow the mounted element, not the first one.
+  const [listPane, setListPane] = useState<HTMLDivElement | null>(null)
+  const setListPaneElement = useCallback((element: HTMLDivElement | null) => {
+    listPaneRef.current = element
+    setListPane(element)
+  }, [])
   const [focusedKey, setFocusedKey] = useState<string | undefined>(undefined)
   const pendingControlKey = useRef<string | null>(null)
   const doc = useOwnerDocument()
@@ -150,8 +157,8 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
   useEffect(() => {
     if (contextKeyService === undefined) return undefined
     const key = contextKeyService.createKey<boolean>('settingsListControlFocus', false)
-    const pane = listPaneRef.current
-    if (pane === null) return () => key.reset()
+    if (listPane === null) return () => key.reset()
+    const pane = listPane
 
     const sync = (): void => {
       const active = pane.ownerDocument.activeElement
@@ -171,7 +178,7 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
       pane.ownerDocument.removeEventListener(SETTINGS_EDITOR_FOCUS_LIST_EVENT, focusList)
       key.reset()
     }
-  }, [contextKeyService])
+  }, [contextKeyService, listPane])
 
   // Track workspace open/close to enable/disable the Workspace tab.
   useEffect(() => {
@@ -490,7 +497,7 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
               onActivate={handleTocActivate}
             />
             <div
-              ref={listPaneRef}
+              ref={setListPaneElement}
               className={styles['listPane']}
               data-testid="settings-list"
               {...listContainerProps}

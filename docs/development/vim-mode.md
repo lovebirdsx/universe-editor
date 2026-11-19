@@ -114,6 +114,7 @@ useVimSurface({
 - 多段 token 即序列：`['g','g']`、`['<leader>','e']`。`<leader>` 在 `VimModeService.getEffectiveKeymap` 里替换为 `vim.leader`（默认 `space`）。
 - `surfaces` 省略时条目在所有 kind 可见。编辑器实际只把 leader 与已开始的序列送进共享引擎，所以裸编辑器键仍由 `vimEditorController` 的内核处理。
 - 序列引擎接受 `1`–`9` 起头的计数、`0` 续接计数；`Esc` 取消待定状态。`z` 等「既完整又是更长前缀」的键延迟到下一击或 `vim.sequenceTimeoutMs` 超时再执行。
+- **三段及以上的歧义序列**：`a` / `ab` / `abc` 同时存在时，引擎只保留**最近一层**的完整匹配作为超时回退。依次按 `a`、`b` 后停在 `ab`：此时超时（或下一个不延续前缀的键）执行 **`ab` 的命令**；若继续按 `c` 则执行 `abc`。更早的 `a` 不会在超时后补发——待定分支始终是当前最长前缀，回退目标是这条分支上最后一个既完整又是前缀的条目。
 - `runMatches` 会先尝试带 `when` 的条目，再尝试默认条目，取第一条匹配；因此同一键的「视图专用含义」不会被注册顺序遮蔽。所有候选都不匹配时**消费但不执行**。
 - 用户 `vim.keymap` 在服务里按 `id` 覆盖内置条目、其余追加；编辑器内核的 Normal 键不受该表覆盖。
 
@@ -150,7 +151,7 @@ KeybindingsRegistry.hasBindingAtOrAbove(
 
 ## 模式记忆与 surfaceKey 约定
 
-`IVimModeService` 用 `Map<surfaceKey, mode>` 保存**内存态**模式；`getMode(key, defaultMode)` 在无记录时返回默认值，`setMode` 触发 `onDidChangeMode` 并刷新活跃 surface 的 context key / 状态栏，`forgetSurface` 删除记录。焦点切换时 `useVimDispatcher` 调 `dispatcher.resetAll()` 清掉待定计数，避免 `5` 从列表带进编辑器。
+`IVimModeService` 用 `Map<surfaceKey, mode>` 保存**内存态**模式；`getMode(key, defaultMode)` 在无记录时返回默认值，`setMode` 触发 `onDidChangeMode` 并刷新活跃 surface 的 context key / 状态栏，`forgetSurface` 删除记录。焦点切换时 `useVimDispatcher` 调 `dispatcher.resetAll(doc)`：清掉待定计时器并把该文档所有 surface 的序列引擎归零，避免 `5` 或未完成的 leader 从列表带进编辑器。
 
 约定：
 

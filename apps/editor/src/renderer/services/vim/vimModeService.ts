@@ -98,10 +98,12 @@ const CONFIG_KEYS = [
 ] as const
 
 function readStringArray(value: unknown, fallback: readonly string[]): readonly string[] {
+  // A non-array means "not configured" (fall back); an empty array is a real
+  // user choice and must clear the list.
   if (!Array.isArray(value)) return fallback
   const out: string[] = []
   for (const item of value) if (typeof item === 'string') out.push(item)
-  return out.length > 0 ? out : fallback
+  return out
 }
 
 function normalizeReservedToken(token: string): string {
@@ -164,6 +166,8 @@ export class VimModeService extends Disposable implements IVimModeService {
   private _reservedKeys: readonly string[] = DEFAULT_RESERVED_KEYS
   private _passThroughUnmappedKeys = false
   private _userKeymap: readonly IVimKeymapEntry[] = []
+  private _configVersion = 0
+  private readonly _keymapCache = new Map<string, readonly IVimKeymapEntry[]>()
   private _surfaceToggles: Record<
     'lists' | 'tabs' | 'activityBar' | 'terminalNormalMode',
     boolean
@@ -247,6 +251,9 @@ export class VimModeService extends Disposable implements IVimModeService {
   }
 
   getEffectiveKeymap(kind: VimSurfaceKind): readonly IVimKeymapEntry[] {
+    const cacheKey = `${kind}\u0000${this._leader}\u0000${this._configVersion}`
+    const cached = this._keymapCache.get(cacheKey)
+    if (cached !== undefined) return cached
     const leader = this._leader
     const overrides = new Map(this._userKeymap.map((entry) => [entry.id, entry]))
     const merged: IVimKeymapEntry[] = []
@@ -261,6 +268,7 @@ export class VimModeService extends Disposable implements IVimModeService {
       if (entry.surfaces !== undefined && !entry.surfaces.includes(kind)) continue
       merged.push({ ...entry, keys: replaceLeader(entry.keys, leader) })
     }
+    this._keymapCache.set(cacheKey, merged)
     return merged
   }
 
@@ -309,6 +317,8 @@ export class VimModeService extends Disposable implements IVimModeService {
   }
 
   private readConfiguration(): void {
+    this._configVersion++
+    this._keymapCache.clear()
     const config = this._configurationService
     this._enabled = config.get<boolean>('vim.enabled') === true
     this._showStatusBar = config.get<boolean>('vim.showStatusBar') !== false

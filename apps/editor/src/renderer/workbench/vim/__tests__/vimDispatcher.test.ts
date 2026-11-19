@@ -261,6 +261,89 @@ describe('VimDispatcher', () => {
     expect(commands).not.toHaveBeenCalled()
   })
 
+  it('keeps the rest of a pending sequence with Vim despite a User binding', () => {
+    const el = element()
+    registerVimSurface(surface('list', el), doc)
+    el.focus()
+    const registration: IDisposable = KeybindingsRegistry.registerKeybinding({
+      key: 'e',
+      command: 'user.explorer',
+      weight: KeybindingWeight.User,
+    })
+    cleanups.push(() => registration.dispose())
+    const leaderKeymap: readonly IVimKeymapEntry[] = [
+      { id: 'leader.explorer', keys: ['space', 'e'], command: 'workbench.view.explorer' },
+    ]
+    const vim = createVim({ getEffectiveKeymap: () => leaderKeymap, getLeader: () => 'space' })
+    const { dispatcher, commands } = createDispatcher({ vim })
+
+    expect(dispatcher.handleKeyDown(doc, press(' '))).toBe(true)
+    expect(dispatcher.handleKeyDown(doc, press('e'))).toBe(true)
+    expect(commands).toHaveBeenCalledWith('workbench.view.explorer', { count: 1 })
+    expect(commands).not.toHaveBeenCalledWith('user.explorer', expect.anything())
+  })
+
+  it('clears sequences on reset so a count cannot leak between surfaces', () => {
+    const el = element()
+    registerVimSurface(surface('list', el), doc)
+    el.focus()
+    const { dispatcher, commands } = createDispatcher()
+    dispatcher.handleKeyDown(doc, press('3'))
+    dispatcher.resetAll(doc)
+    dispatcher.handleKeyDown(doc, press('j'))
+    expect(commands).toHaveBeenCalledWith('list.focusDown', { count: 1 })
+  })
+
+  it('does not replay a pending timeout after dispose', () => {
+    vi.useFakeTimers()
+    const el = element()
+    registerVimSurface(surface('list', el), doc)
+    el.focus()
+    const { dispatcher, commands } = createDispatcher()
+    dispatcher.handleKeyDown(doc, press('g'))
+    dispatcher.dispose(doc)
+    vi.advanceTimersByTime(100)
+    expect(commands).not.toHaveBeenCalled()
+    expect(dispatcher.handleKeyDown(doc, press('j'))).toBe(false)
+  })
+
+  it('does not replay a pending timeout for an unmounted surface', () => {
+    vi.useFakeTimers()
+    const el = element()
+    const registration = registerVimSurface(surface('list', el), doc)
+    el.focus()
+    const ambiguous: readonly IVimKeymapEntry[] = [
+      { id: 'z', keys: ['z'], command: 'z.command' },
+      { id: 'za', keys: ['z', 'a'], command: 'za.command' },
+    ]
+    const vim = createVim({ getEffectiveKeymap: () => ambiguous })
+    const { dispatcher, commands } = createDispatcher({ vim })
+    expect(dispatcher.handleKeyDown(doc, press('z'))).toBe(true)
+    registration.dispose()
+    vi.advanceTimersByTime(100)
+    expect(commands).not.toHaveBeenCalled()
+  })
+
+  it('catches command execution failures instead of leaking a rejection', async () => {
+    const el = element()
+    registerVimSurface(surface('list', el), doc)
+    el.focus()
+    const commands = vi.fn(async () => {
+      throw new Error('boom')
+    })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const dispatcher = new VimDispatcher({
+      commandService: { executeCommand: commands } as never,
+      contextKeyService: createContext(),
+      vimModeService: createVim(),
+    })
+    expect(dispatcher.handleKeyDown(doc, press('j'))).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(errorSpy).toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
   it('in Insert mode only routes Escape to an editor surface', () => {
     const container = element()
     const textarea = doc.createElement('textarea')

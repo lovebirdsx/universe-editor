@@ -21,10 +21,13 @@ import {
   KeybindingsRegistry,
   KeybindingWeight,
   ContextKeyExpr,
+  type ContextKeyExpression,
 } from '@universe-editor/platform'
 import {
   getActiveVimSurface,
   isEditableElement,
+  isVimSurfaceEngineRegistered,
+  resetVimSequences,
   vimKeyToken,
   type IActiveVimSurface,
   type IVimKeymapEntry,
@@ -74,6 +77,17 @@ function hasRendererDialog(doc: Document): boolean {
   return doc.querySelector('[data-renderer-dialog]') !== null
 }
 
+// `when` strings come from the keymap table (bounded) and never change during a
+// session, so parsing them once avoids rebuilding the AST on every stroke.
+const whenExpressions = new Map<string, ContextKeyExpression | undefined>()
+
+function whenExpression(when: string): ContextKeyExpression | undefined {
+  if (whenExpressions.has(when)) return whenExpressions.get(when)
+  const expression = ContextKeyExpr.deserialize(when)
+  whenExpressions.set(when, expression)
+  return expression
+}
+
 function mergeCommandArgs(entry: IVimKeymapEntry, rawCount: number): Record<string, unknown> {
   // Vim's implicit count is 1; the sequence engine reports 0 when no digits
   // were typed, but adapters should never have to special-case it.
@@ -86,6 +100,7 @@ function mergeCommandArgs(entry: IVimKeymapEntry, rawCount: number): Record<stri
 
 export class VimDispatcher {
   private readonly _pending = new Map<string, PendingSequence>()
+  private _disposed = false
 
   constructor(private readonly _options: VimDispatcherOptions) {}
 
@@ -98,18 +113,29 @@ export class VimDispatcher {
   }
 
   /** Focus moved: a count typed in one surface must not carry into the next. */
-  resetAll(): void {
+  resetAll(doc?: Document): void {
+    this.clearTimers()
+    if (doc !== undefined) resetVimSequences(doc)
+  }
+
+  /** The hook is unmounting: drop timers and any in-flight sequence state. */
+  dispose(doc?: Document): void {
+    this._disposed = true
+    this.resetAll(doc)
+  }
+
+  private clearTimers(): void {
     for (const pending of this._pending.values()) clearTimeout(pending.timer)
     this._pending.clear()
   }
 
   private dispatch(doc: Document, event: KeyboardEvent): boolean {
+    if (this._disposed) return false
     if (event.defaultPrevented) return false
     if (event.isComposing || event.keyCode === 229) return false
     const vim = this._options.vimModeService
     if (!vim.getEnabled()) return false
     if (isWebviewFocus(doc)) return false
-    if (hasRendererDialog(doc)) return false
     if (this._options.contextKeyService.get('quickInputVisible') === true) return false
 
     const active = getActiveVimSurface(doc)
@@ -132,6 +158,9 @@ export class VimDispatcher {
 
     if (mode === 'insert') {
       if (token !== 'escape') return false
+      // Keep checking the dialog here: opening the settings modal while an
+      // editor is in Insert mode must still leave Escape to the dialog.
+      if (hasRendererDialog(doc)) return false
       if (kind === 'editor') return this.editorStroke(active, event)
       // Non-editor surfaces have no insert mode of their own; Esc returns to
       // Normal so the next keystroke is Vim's again.
@@ -149,23 +178,31 @@ export class VimDispatcher {
       }
     }
 
+    // Checked only once a registered, enabled surface is about to act: this
+    // query runs on every Normal stroke and must stay off the Insert/IME path.
+    if (hasRendererDialog(doc)) return false
+
     // User keybindings outrank Vim except for the small reserved set (Esc/i/a/:
-    // /?/leader by default). Ctrl+F/B/D/U are deliberately not reserved.
-    const keyString = buildKeyString(event)
+    // /?/leader by default) and while a sequence is in flight: the second
+    // stroke of `<leader>X` belongs to the leader command even if the user
+    // bound `X` globally, otherwise the engine would stay pending forever.
+    const sequencePending = active.sequence.isPending
     const reserved = this.isReserved(token)
-    if (
-      !reserved &&
-      KeybindingsRegistry.hasBindingAtOrAbove(
-        keyString,
-        KeybindingWeight.User,
-        this._options.contextKeyService,
-      )
-    ) {
-      if (debug?.enabled) {
-        const command = this.userCommand(keyString)
-        debug.append(formatVimUserShadow(trace, command ?? '<unknown>'))
+    if (!reserved && !sequencePending) {
+      const keyString = buildKeyString(event)
+      if (
+        KeybindingsRegistry.hasBindingAtOrAbove(
+          keyString,
+          KeybindingWeight.User,
+          this._options.contextKeyService,
+        )
+      ) {
+        if (debug?.enabled) {
+          const command = this.userCommand(keyString)
+          debug.append(formatVimUserShadow(trace, command ?? '<unknown>'))
+        }
+        return false
       }
-      return false
     }
 
     if (debug?.enabled) debug.append(formatVimSurface(trace))
@@ -173,7 +210,7 @@ export class VimDispatcher {
     if (kind === 'editor') {
       // The leader and an in-flight sequence belong to the shared engine even
       // on editors; every other Normal-mode stroke is the editor's Vim core.
-      if (this.dispatchEditorSequence(active, token, surfaceKey, trace, debug)) return true
+      if (this.dispatchEditorSequence(doc, active, token, surfaceKey, trace, debug)) return true
       return this.editorStroke(active, event)
     }
 
@@ -185,7 +222,7 @@ export class VimDispatcher {
         this.clearPending(surfaceKey)
         return true
       case 'pending':
-        this.armPending(active, surfaceKey, trace)
+        this.armPending(active, doc, surfaceKey, trace)
         if (debug?.enabled) {
           debug.append(formatVimPending(trace, [...step.prefix]))
         }
@@ -207,6 +244,7 @@ export class VimDispatcher {
    * engine; a broken prefix falls back to the controller like any other key.
    */
   private dispatchEditorSequence(
+    doc: Document,
     active: IActiveVimSurface,
     token: string,
     surfaceKey: string,
@@ -222,7 +260,7 @@ export class VimDispatcher {
         this.clearPending(surfaceKey)
         return true
       case 'pending':
-        this.armPending(active, surfaceKey, trace)
+        this.armPending(active, doc, surfaceKey, trace)
         if (debug?.enabled) debug.append(formatVimPending(trace, [...step.prefix]))
         return true
       case 'execute':
@@ -266,11 +304,18 @@ export class VimDispatcher {
       : undefined
   }
 
-  private armPending(active: IActiveVimSurface, surfaceKey: string, trace: VimTrace): void {
+  private armPending(
+    active: IActiveVimSurface,
+    doc: Document,
+    surfaceKey: string,
+    trace: VimTrace,
+  ): void {
     this.clearPending(surfaceKey)
     const timeoutMs = this._options.vimModeService.getSequenceTimeoutMs()
     const timer = setTimeout(() => {
       this._pending.delete(surfaceKey)
+      // The surface may have unmounted while the timer was in flight.
+      if (this._disposed || !isVimSurfaceEngineRegistered(doc, active.sequence)) return
       const step = active.sequence.flush()
       if (step.kind === 'execute') this.runMatches(step.matches, step.count, trace, undefined)
     }, timeoutMs)
@@ -299,12 +344,18 @@ export class VimDispatcher {
     )
     const entry = ordered.find((candidate) => {
       if (candidate.when === undefined) return true
-      return context.contextMatchesRules(ContextKeyExpr.deserialize(candidate.when))
+      return context.contextMatchesRules(whenExpression(candidate.when))
     })
     if (entry === undefined) return
-    if (debug?.enabled) debug.append(formatVimExecute(trace, entry.command, count))
-    console.debug(`[vim] execute ${entry.command} count=${count}`)
-    void this._options.commandService.executeCommand(entry.command, mergeCommandArgs(entry, count))
+    if (debug?.enabled) {
+      debug.append(formatVimExecute(trace, entry.command, count))
+      console.debug(`[vim] execute ${entry.command} count=${count}`)
+    }
+    void this._options.commandService
+      .executeCommand(entry.command, mergeCommandArgs(entry, count))
+      .catch((error: unknown) => {
+        console.error(`[vim] command failed: ${entry.command}`, error)
+      })
   }
 
   private handleUnmapped(

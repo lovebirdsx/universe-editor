@@ -68,7 +68,12 @@ export function onDidChangeVimSurfaces(doc: Document, listener: () => void): { d
   state.listeners.add(listener)
   return {
     dispose: () => {
-      state.listeners.delete(listener)
+      if (!state.listeners.delete(listener)) return
+      // Do not keep a closed document (and its DOM) alive through an empty
+      // state entry once its last surface and listener are gone.
+      if (state.surfaces.size === 0 && state.listeners.size === 0) {
+        if (documents.get(doc) === state) documents.delete(doc)
+      }
     },
   }
 }
@@ -150,6 +155,25 @@ export function getActiveVimSurface(doc: Document): IActiveVimSurface | undefine
 }
 
 /**
+ * Drop every in-flight count / prefix on `doc`. Focus moving between surfaces
+ * must not carry a sequence across, and unmounting the dispatcher must not let
+ * a pending timer replay a command on a dead document.
+ */
+export function resetVimSequences(doc: Document): void {
+  const state = documents.get(doc)
+  if (state === undefined) return
+  for (const entry of state.surfaces.values()) entry.engine.reset()
+}
+
+/** Whether `engine` still belongs to a registered surface on `doc`. */
+export function isVimSurfaceEngineRegistered(doc: Document, engine: VimSequenceEngine): boolean {
+  const state = documents.get(doc)
+  if (state === undefined) return false
+  for (const entry of state.surfaces.values()) if (entry.engine === engine) return true
+  return false
+}
+
+/**
  * React binding. The registration is read through a ref so per-render handler
  * identities do not tear down and re-register the surface on every keystroke.
  * `targetDocument` wins over the owner-document context for portals whose host
@@ -185,4 +209,9 @@ export function __resetVimSurfacesForTests(): void {
 /** Test-only: number of live surfaces for a document. */
 export function __getVimSurfaceCountForTests(doc: Document): number {
   return documents.get(doc)?.surfaces.size ?? 0
+}
+
+/** Test-only: whether the registry still holds an entry for `doc`. */
+export function __hasVimDocumentStateForTests(doc: Document): boolean {
+  return documents.has(doc)
 }

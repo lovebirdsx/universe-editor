@@ -9,9 +9,12 @@ import { cleanup, render } from '@testing-library/react'
 import { useRef } from 'react'
 import {
   __getVimSurfaceCountForTests,
+  __hasVimDocumentStateForTests,
   __resetVimSurfacesForTests,
   getActiveVimSurface,
+  onDidChangeVimSurfaces,
   registerVimSurface,
+  resetVimSequences,
   useVimSurface,
 } from '../keybinding/vim/vimSurfaceRegistry.js'
 import type { IVimSurfaceRegistration, VimSurfaceKind } from '../keybinding/vim/vimTypes.js'
@@ -108,6 +111,31 @@ describe('vimSurfaceRegistry', () => {
     first!.sequence.feed('2')
     b.focus()
     expect(getActiveVimSurface(document)!.sequence.isPending).toBe(false)
+  })
+
+  it('resets every surface sequence on a document', () => {
+    const a = element()
+    const b = element()
+    registerVimSurface(surface('list', a, 'list:a'))
+    registerVimSurface(surface('list', b, 'list:b'))
+    a.focus()
+    const first = getActiveVimSurface(document)!
+    first.sequence.setEntries([{ id: 'gg', keys: ['g', 'g'], command: 'x' }])
+    first.sequence.feed('g')
+    expect(first.sequence.isPending).toBe(true)
+
+    resetVimSequences(document)
+
+    expect(first.sequence.isPending).toBe(false)
+    b.focus()
+    expect(getActiveVimSurface(document)!.sequence.isPending).toBe(false)
+  })
+
+  it('drops the document state when the last listener goes away', () => {
+    const subscription = onDidChangeVimSurfaces(document, () => undefined)
+    expect(__hasVimDocumentStateForTests(document)).toBe(true)
+    subscription.dispose()
+    expect(__hasVimDocumentStateForTests(document)).toBe(false)
   })
 
   it('drops a disposed surface', () => {

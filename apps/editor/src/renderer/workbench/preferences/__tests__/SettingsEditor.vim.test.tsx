@@ -14,8 +14,10 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import {
   ConfigurationRegistry,
   ConfigurationService,
+  ContextKeyService,
   Event as PlatformEvent,
   IConfigurationService,
+  IContextKeyService,
   INotificationService,
   IStorageService,
   IWorkspaceService,
@@ -27,6 +29,7 @@ import { __resetVimSurfacesForTests, getActiveVimSurface } from '@universe-edito
 import { ServicesContext } from '../../useService.js'
 import { SettingsEditor } from '../SettingsEditor.js'
 import { SettingsEditorInput } from '../../../services/editor/SettingsEditorInput.js'
+import { dispatchSettingsEditorFocusList } from '../preferencesFocus.js'
 
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: ({
@@ -114,12 +117,13 @@ const notificationStub = {
   markAllAsRead: () => void 0,
 }
 
-function mount() {
+function mount(contextKeyService?: ContextKeyService) {
   const services = new ServiceCollection()
   services.set(IConfigurationService, new ConfigurationService())
   services.set(IWorkspaceService, workspaceStub as never)
   services.set(INotificationService, notificationStub as never)
   services.set(IStorageService, new FakeStorage())
+  if (contextKeyService !== undefined) services.set(IContextKeyService, contextKeyService)
   const instantiation = new InstantiationService(services)
   return render(
     <ServicesContext.Provider value={instantiation}>
@@ -224,6 +228,49 @@ describe('SettingsEditor Vim surfaces', () => {
     act(() => actions.activate?.(1, false))
     expect(document.activeElement).toBe(list)
     expect(focusedRowKey(container)).toBe('beta.one')
+  })
+
+  it('keeps the focus wiring after a zero-result search remounts the list', async () => {
+    registerSchema()
+    const context = new ContextKeyService()
+    const { container } = mount(context)
+    const search = container.querySelector<HTMLInputElement>('input[type="search"]')!
+
+    await act(async () => {
+      fireEvent.change(search, { target: { value: 'zzz-no-such-setting' } })
+      await Promise.resolve()
+    })
+    expect(container.querySelector('[data-testid="settings-list"]')).toBeNull()
+
+    await act(async () => {
+      fireEvent.change(search, { target: { value: '' } })
+      await Promise.resolve()
+    })
+    const list = container.querySelector<HTMLElement>('[data-testid="settings-list"]')!
+    expect(list).not.toBeNull()
+
+    act(() => list.focus())
+    const actions = getActiveVimSurface(document)!.surface.actions
+    act(() => actions.move?.('down', 1))
+    act(() => actions.activate?.(1, false))
+    const input = row(container, 'alpha.two').querySelector('input')
+    expect(document.activeElement).toBe(input)
+    expect(context.get('settingsListControlFocus')).toBe(true)
+
+    // Escape inside the control returns to the list.
+    act(() => {
+      fireEvent.keyDown(input!, { key: 'Escape' })
+    })
+    expect(document.activeElement).toBe(list)
+    expect(context.get('settingsListControlFocus')).toBe(false)
+
+    // The document-level "focus the list" event must reach the remounted pane.
+    act(() => input!.focus())
+    await act(async () => {
+      dispatchSettingsEditorFocusList()
+      await Promise.resolve()
+    })
+    expect(document.activeElement).toBe(list)
   })
 
   it('keeps the search box typing to itself', () => {

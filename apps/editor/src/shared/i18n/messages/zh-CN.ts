@@ -1332,9 +1332,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '保存时要运行的代码操作，按操作类型（如 "source.organizeImports"、"source.fixAll"）配置。"always" 表示每次保存都运行，"explicit" 表示仅在显式保存时运行，"never" 表示禁用该类型。',
   'settings.editor.semanticHighlighting.description': '控制对支持该特性的语言是否显示语义高亮。',
   'settings.vim.enabled.description':
-    '在代码编辑器与列表导航中启用 Vim 键位（Normal / Insert 双模式）。Normal 模式下 h/j/k/l 移动、w/b/e 按词跳转、gg/G 跳到首末行、Ctrl+F/B/D/U 翻页。',
+    '在编辑器、列表、标签栏、活动栏、设置、通知与 Chat 等界面启用 Vim 键位（Normal / Insert 双模式），并启用终端 Normal 模式。Normal 模式下 h/j/k/l 移动、w/b/e 按词跳转、gg/G 跳到首末行、Ctrl+F/B/D/U 翻页。',
   'settings.vim.showStatusBar.description':
-    '编辑器持有文本焦点时，在状态栏显示当前 Vim 模式的图标。',
+    '任一活跃的 Vim 界面持有焦点时，在状态栏显示当前 Vim 模式的图标。',
   'settings.vim.autoSwitchInputMethod.description':
     '进入 Normal 模式时把系统输入法切到英文，回到 Insert 模式时恢复，避免中文输入法把拼音写进缓冲区。仅 Windows 生效。',
   'settings.vim.searchCaseSensitivity.description':
@@ -1351,7 +1351,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.vim.reservedKeys.description':
     '即使存在同键的 User 键位绑定，也保留给 Vim 的按键。其余按键让给 User 绑定。',
   'settings.vim.passThroughUnmappedKeys.description':
-    'Normal 模式下让未映射的可打印按键穿透到列表/菜单/浮层，而不是吞掉。',
+    'Normal 模式下让未映射的可打印按键穿透到列表/菜单/浮层，以及终端 Normal 模式，而不是吞掉。',
   'settings.vim.keymap.description':
     '用户 Vim 映射。`id` 与内置条目相同的会覆盖内置，其余追加。按键使用 Vim token（`j`、`G`、`ctrl+d`、`<leader>`），未写 surfaces 时作用于所有非编辑器 surface。',
   'settings.vim.surfaces.lists.description': '在树、列表、菜单与浮层上启用 Vim 按键。',

@@ -334,7 +334,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: false,
             description: localize(
               'settings.vim.enabled.description',
-              'Enable Vim keybindings (Normal/Insert modes) in code editors and list navigation. In Normal mode, h/j/k/l move, w/b/e jump by word, gg/G go to the first/last line, and Ctrl+F/B/D/U page.',
+              'Enable Vim keybindings (Normal/Insert modes) across the workbench: editors, lists, tab strips, Activity Bar, Settings, notifications and Chat, plus terminal Normal mode. In Normal mode, h/j/k/l move, w/b/e jump by word, gg/G go to the first/last line, and Ctrl+F/B/D/U page.',
             ),
           },
           'vim.showStatusBar': {
@@ -342,7 +342,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: true,
             description: localize(
               'settings.vim.showStatusBar.description',
-              'Show the current Vim mode as a status-bar icon while an editor has text focus.',
+              'Show the current Vim mode as a status-bar icon while any active Vim surface holds the keyboard.',
             ),
           },
           'vim.autoSwitchInputMethod': {
@@ -409,7 +409,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: false,
             description: localize(
               'settings.vim.passThroughUnmappedKeys.description',
-              'Let unmapped printable keys reach list/menu/overlay surfaces instead of swallowing them in Normal mode.',
+              'Let unmapped printable keys reach list/menu/overlay surfaces and the terminal in Normal mode instead of swallowing them.',
             ),
           },
           'vim.keymap': {

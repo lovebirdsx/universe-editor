@@ -12,7 +12,7 @@
  *  right after.
  *--------------------------------------------------------------------------------------------*/
 
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import {
   IContextKeyService,
   IDialogService,
@@ -107,6 +107,13 @@ export function focusActiveEditorTabs(): boolean {
 const heldTabStrips = new WeakMap<HTMLElement, () => void>()
 
 /**
+ * A pending "refocus the tab after closing" retry belongs to one gesture. Any
+ * newer h/l / Enter / Escape / close invalidates it so it cannot steal focus
+ * back from the destination the user just chose.
+ */
+let focusRetryGeneration = 0
+
+/**
  * Hold the "activation must not pull focus into Monaco" intent for as long as
  * the strip owns DOM focus. A fixed timer is not enough: the newly activated
  * editor's cached-model swap is scheduled two frames out and may land after it,
@@ -149,7 +156,25 @@ export function holdEditorTabsFocus(
   strip.addEventListener('focusout', onFocusOut)
 }
 
+/**
+ * Release the preserve-focus hold for `bar`, whether or not focusout already
+ * did so. The hook calls this on unmount: a strip that disappears while it owns
+ * the hold must not leave `preserveFocusOnActivation` stuck on.
+ */
+export function releaseEditorTabsFocus(
+  group: IEditorGroup,
+  bar: HTMLElement | null = findEditorTabList(group.id),
+): void {
+  const release = bar === null ? undefined : heldTabStrips.get(bar)
+  if (release !== undefined) {
+    release()
+    return
+  }
+  group.preserveFocusOnActivation?.(false)
+}
+
 function scheduleFocusActiveTab(group: IEditorGroup, bar: HTMLElement | null): void {
+  const generation = ++focusRetryGeneration
   const ownerDocument = bar?.ownerDocument ?? currentWorkbenchDocumentOrUndefined()
   const view = ownerDocument?.defaultView
   if (ownerDocument === undefined || ownerDocument === null || view === undefined || view === null)
@@ -165,11 +190,13 @@ function scheduleFocusActiveTab(group: IEditorGroup, bar: HTMLElement | null): v
   // The group activation effect focuses Monaco one commit later, after the tab
   // for the new active editor already exists — so refocusing once here can be
   // undone. Retry across a frame while focus is still inside this group (never
-  // after the user moved it elsewhere).
+  // after the user moved it elsewhere, and never after a newer gesture).
   const attempt = (remaining: number): void => {
+    if (generation !== focusRetryGeneration) return
     focusActive()
     if (remaining <= 1) return
     view.requestAnimationFrame(() => {
+      if (generation !== focusRetryGeneration) return
       const current = ownerDocument.activeElement
       const onTab = tabElements(bar).some((tab) => tab === current)
       if (onTab) return
@@ -195,6 +222,9 @@ function activeTabElement(state: TabState): HTMLElement | null {
 }
 
 function activateIndex(state: TabState, index: number, preserveFocus: boolean): void {
+  // A new move/activate gesture supersedes a pending refocus from an earlier
+  // close (h/l or Enter is about to choose the real focus destination).
+  focusRetryGeneration++
   const editors = state.group.editors
   if (editors.length === 0) return
   const target = editors[Math.max(0, Math.min(editors.length - 1, index))]
@@ -235,6 +265,18 @@ export function useEditorTabsVim(options: UseEditorTabsVimOptions): void {
     contextKeyService,
     getTabBar: options.getTabBar,
   }
+
+  // The hold outlives focusout only while the strip is mounted; unmounting the
+  // hook (group teardown) must release it unconditionally.
+  const releaseFocusRef = useRef<() => void>(() => undefined)
+  releaseFocusRef.current = () => releaseEditorTabsFocus(options.group, options.getTabBar())
+  useEffect(
+    () => () => {
+      focusRetryGeneration++
+      releaseFocusRef.current()
+    },
+    [],
+  )
 
   useVimSurface({
     id: editorTabsSurfaceKey(options.group.id),
@@ -309,6 +351,7 @@ export function useEditorTabsVim(options: UseEditorTabsVimOptions): void {
         if (tab !== null) dispatchKeyboardContextMenu(tab, true)
       },
       escape: () => {
+        focusRetryGeneration++
         const state = stateRef.current
         const editor = state.group.activeEditor
         if (editor !== undefined) {

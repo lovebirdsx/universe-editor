@@ -214,6 +214,28 @@ describe('VimModeService', () => {
     expect(service.reservedKeys).not.toContain('<leader>')
   })
 
+  it('lets an empty vim.reservedKeys clear the reserved set', () => {
+    const { service } = create({ 'vim.enabled': true, 'vim.reservedKeys': [] })
+    expect(service.reservedKeys).toEqual([])
+  })
+
+  it('falls back to the defaults when vim.reservedKeys is not an array', () => {
+    const { service } = create({ 'vim.enabled': true, 'vim.reservedKeys': 'escape' })
+    expect(service.reservedKeys.length).toBeGreaterThan(0)
+  })
+
+  it('caches the effective keymap until configuration changes', () => {
+    const { service, config } = create({ 'vim.enabled': true })
+    const first = service.getEffectiveKeymap('list')
+    expect(service.getEffectiveKeymap('list')).toBe(first)
+
+    config.set('vim.leader', ',')
+    config.fire('vim.leader')
+    const next = service.getEffectiveKeymap('list')
+    expect(next).not.toBe(first)
+    expect(next.find((entry) => entry.id === 'leader.quickOpen')?.keys).toEqual([',', 'f'])
+  })
+
   it('honours per-surface switches', () => {
     const { service } = create({
       'vim.enabled': true,

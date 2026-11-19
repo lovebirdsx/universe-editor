@@ -52,6 +52,13 @@ function findContainerTab(header: HTMLElement | null, id: string): HTMLElement |
   return findRowElement(header, 'data-testid', `view-container-tab-${id}`)
 }
 
+/**
+ * A pending "re-assert strip focus" pass belongs to one switch gesture. A newer
+ * h/l or Enter/Escape (which moves focus into content) invalidates it so it
+ * cannot pull focus back to the strip afterwards.
+ */
+let switchRefocusGeneration = 0
+
 export function useViewContainerTabsVim(options: UseViewContainerTabsVimOptions): void {
   const viewsService = useService(IViewsService)
   const layoutService = useService(ILayoutService)
@@ -70,6 +77,7 @@ export function useViewContainerTabsVim(options: UseViewContainerTabsVimOptions)
   }
 
   const switchTo = (id: string): void => {
+    const generation = ++switchRefocusGeneration
     const state = stateRef.current
     viewsService.openViewContainer(id)
     // All container tabs are mounted at once, so the new tab exists already —
@@ -86,7 +94,9 @@ export function useViewContainerTabsVim(options: UseViewContainerTabsVimOptions)
       return
     const partRoot = header.closest('[data-testid^="part-"]') ?? header
     view.requestAnimationFrame(() => {
+      if (generation !== switchRefocusGeneration) return
       view.requestAnimationFrame(() => {
+        if (generation !== switchRefocusGeneration) return
         const active = ownerDocument.activeElement
         if (active === null || active === findContainerTab(state.getHeader(), id)) return
         if (partRoot.contains(active)) findContainerTab(state.getHeader(), id)?.focus()
@@ -111,6 +121,9 @@ export function useViewContainerTabsVim(options: UseViewContainerTabsVimOptions)
   }
 
   const focusContainerContent = (): void => {
+    // Enter/Escape is choosing the content as the focus destination; cancel any
+    // pending strip refocus from the switch that showed it.
+    switchRefocusGeneration++
     const state = stateRef.current
     const activeId = viewsService.getActiveViewContainerId(state.location)
     const container = state.getContainers().find((candidate) => candidate.id === activeId)

@@ -161,6 +161,18 @@ export function TerminalInstance({
     const normalModeRegistration =
       normalMode === undefined ? undefined : registerTerminalNormalModeController(normalMode)
 
+    // The instance unmounts when the view is reparented (panel <-> editor) and
+    // the xterm holder survives that, so mode memory may only be dropped when
+    // the terminal process itself is removed.
+    const forgetSurfaceOnClose =
+      vimModeService === undefined
+        ? undefined
+        : markAsSingleton(
+            manager.onDidRemoveTerminal(({ id: removedId }) => {
+              if (removedId === id) vimModeService.forgetSurface(surfaceKey)
+            }),
+          )
+
     const selectionSub = markAsSingleton(
       holder.onDidChangeSelection(() => setHasSelection(holder.hasSelection())),
     )
@@ -171,6 +183,7 @@ export function TerminalInstance({
     return () => {
       observer?.disconnect()
       selectionSub.dispose()
+      forgetSurfaceOnClose?.dispose()
       normalModeRegistration?.dispose()
       normalMode?.dispose()
       vimSurface?.dispose()
@@ -178,7 +191,7 @@ export function TerminalInstance({
       holder.wrapper.remove()
       holderRef.current = null
     }
-  }, [id, xtermService, surfaceKey, vimModeService, vimInputMethodService, configService])
+  }, [id, xtermService, surfaceKey, vimModeService, vimInputMethodService, configService, manager])
 
   // Becoming active may follow a display:none (size 0) phase; refit, then focus
   // only the instance that should own focus (the active one within its group).

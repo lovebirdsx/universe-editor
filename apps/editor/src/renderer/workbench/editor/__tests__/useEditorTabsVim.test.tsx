@@ -5,7 +5,7 @@
  *  on the active tab.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ComponentType } from 'react'
 import { act, cleanup, render } from '@testing-library/react'
 import {
@@ -196,5 +196,22 @@ describe('EditorGroupView vim tabs surface', () => {
 
     expect(focusActiveEditorTabs()).toBe(true)
     expect(document.activeElement).toBe(tabFor(b.id))
+  })
+
+  it('releases the preserve-focus hold when the strip unmounts', () => {
+    const svc = new EditorGroupsService()
+    const a = new FakeEditor('a')
+    const b = new FakeEditor('b')
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+    const preserve = vi.spyOn(svc.activeGroup, 'preserveFocusOnActivation')
+    const view = renderGroup(svc.activeGroup, svc)
+
+    tabFor(b.id).focus()
+    act(() => surfaceActions().previous?.(1))
+    expect(preserve).toHaveBeenCalledWith(true)
+
+    view.unmount()
+    expect(preserve).toHaveBeenLastCalledWith(false)
   })
 })
