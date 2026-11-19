@@ -16,7 +16,7 @@
 - [代码编辑](#代码编辑)
 - [代码折叠](#代码折叠)
 - [导航](#导航)
-- [Vim 模式（可选，默认关闭）](#vim-模式可选默认关闭)
+- [全局 Vim 模式（可选，默认关闭）](#全局-vim-模式可选默认关闭)
 - [平台差异：Windows / Mac / Linux](#平台差异windows--mac--linux)
 - [被本编辑器占用的键](#被本编辑器占用的键)
 
@@ -122,18 +122,35 @@
 | 下一个 / 上一个错误或警告 | `Alt+F8` / `Shift+Alt+F8` | Go to Next / Previous Error or Warning |
 | 下一个 / 上一个符号高亮 | `F7` / `Shift+F7` | Go to Next / Previous Symbol Highlight |
 
-## Vim 模式（可选，默认关闭）
+## 全局 Vim 模式（可选，默认关闭）
 
-开启后，编辑器文本区与列表 / 树 / 菜单都进入 Vim 的 **Normal / Insert 双模式**，日常编辑可以双手不离开主键盘区。开启方式二选一：
+开启后，Vim 键位覆盖**整个工作台**：编辑器文本、列表 / 树、菜单 / 浮层、标签栏、ActivityBar、设置页、通知中心、Chat 时间线，以及终端的 Normal Mode。它不依赖扩展，也不修改 Monaco 的原生键位；关闭时本文其余键位表保持原样。
+
+### 开启与关闭
+
+三选一：
 
 - 设置里把 `vim.enabled` 设为 `true`；
-- 命令面板执行「切换 Vim 模式」（命令 id `workbench.action.toggleVimMode`）。
+- 命令面板执行「切换 Vim 模式」（命令 id `workbench.action.toggleVimMode`）；
+- 点击状态栏右侧的模式图标（悬停显示当前模式，点击即切换开关）。
 
-默认关闭；关闭时本文其余键位表保持原样。开启且任意窗口的编辑器持有文本焦点时，状态栏右侧显示当前模式图标（Normal 为 `N`、Insert 为 `I`，悬停可查看说明，点击可切换 Vim 模式）；不需要这个指示可把 `vim.showStatusBar` 设为 `false`。
+任一窗口有 Vim surface 持有焦点时，状态栏显示当前模式图标（Normal 以及终端 Normal 为 `N`、Insert 为 `I`）；不需要可把 `vim.showStatusBar` 设为 `false`。关闭 `vim.enabled` 会立即恢复所有界面的普通键位。
 
-Normal 模式会临时把系统输入法切到英文（Insert 模式恢复），因此中文输入法下按 `j` / `k` 等键不会被当成拼音输入，也不会把字符写进缓冲区。该行为由 `vim.autoSwitchInputMethod` 控制（默认开启，仅 Windows 生效）。
+可以按界面单独关闭：`vim.surfaces.lists`（树 / 列表 / 菜单 / 浮层）、`vim.surfaces.tabs`（编辑器标签栏）、`vim.surfaces.activityBar`（ActivityBar 与视图容器标题）、`vim.surfaces.terminalNormalMode`（终端 Normal Mode）。编辑器文本区没有单独的 surface 开关，只受 `vim.enabled` 控制。
 
-### Normal 模式
+### 模式、记忆与透传
+
+- **Normal / Insert**：编辑器文本有这两个模式；其它第一方 surface 没有自己的 Insert，`Esc` 会回到 Normal 并把后续按键交还给 Vim。
+- **模式按 surface 实例记忆**（仅内存，重启后重置）：编辑器按「编辑器组 + 输入」记忆，同一个文件在两个分屏里互不影响；关闭标签页会忘掉该输入的模式，重新打开从 Normal 开始。终端按终端实例记忆，默认是 Insert。列表 / 菜单 / 浮层 / 标签栏 / ActivityBar / 视图容器标题默认 Normal。
+- **Insert 模式只处理 `Esc`**：其余按键全部原样输入。编辑器与终端在切到 Normal 时，`vim.autoSwitchInputMethod`（默认开启，仅 Windows）会把系统输入法临时切到英文，Insert 恢复；输入法组合期间的按键（`isComposing` / `keyCode 229`）一律放行。
+- **输入框、Quick Input、对话框透传**：普通可编辑控件（搜索框、行内输入框、Chat 输入框等）聚焦时，裸键保持普通输入；Quick Input（快速打开 / 命令面板等）打开期间 Vim 完全不介入；带 `[data-renderer-dialog]` 的模态对话框同样透传。
+- **Webview 不支持**：焦点进入 iframe（例如 HTML 预览）时 Vim 不介入，按键留在 frame 内。需要宿主标记的场景使用 `data-vim-surface="webview"`。
+- **未映射键**：Normal 模式下，列表 / 菜单 / 浮层 / 终端里未映射的可打印键会被 Vim 吞掉，不会触发 Quick Open 或输入到别处；功能键和组合键照常交给工作台。把 `vim.passThroughUnmappedKeys` 设为 `true` 可让这些可打印键继续下传。
+- **计数与前缀**：支持数字前缀（如 `3j`、`2dd`）。待定的计数或前缀在 `vim.sequenceTimeoutMs`（默认 800ms）内等待下一键，`Esc` 会取消；焦点移出 surface 时计数重置。`z` 这类既可能是命令又可能是前缀的键，会等到下一键或超时再决定。
+
+### 编辑器
+
+Normal 模式：
 
 | 操作 | 键位 |
 | --- | --- |
@@ -153,7 +170,7 @@ Normal 模式会临时把系统输入法切到英文（Insert 模式恢复），
 | 合并行 | `J` |
 | 下移一行到行首非空白 | `Enter`（同 Vim 的 `<CR>`） |
 
-数字前缀（如 `3j`、`2dd`）可用。Normal 模式下**未实现的字符键会被吞掉**，不会输入到缓冲区；`F1`–`F12`、媒体键、输入法组合键等非文本功能键不拦截，仍交给工作台和编辑器处理。
+Normal 模式下**未实现的字符键会被吞掉**，不会输入到缓冲区；`F1`–`F12`、媒体键、输入法组合键等非文本功能键不拦截，仍交给工作台和编辑器处理。`Ctrl+H` / `Ctrl+J` / `Ctrl+K` / `Ctrl+L` 仍归工作台（替换 / 切换底栏 / 和弦 / 扩选），Vim 只接管 `Ctrl+F` / `Ctrl+B` / `Ctrl+D` / `Ctrl+U`；`Ctrl+K` 和弦照常可用。
 
 搜索为**字面量**（不支持正则或多行查询），默认 smartcase：查询全小写时忽略大小写，含大写字母时区分。可在查询后加 `\c` 忽略大小写、`\C` 强制区分（对本次搜索生效），也可点击搜索框右侧的 `Aa` 切换本次策略；默认策略由 `vim.searchCaseSensitivity` 控制（`smart` / `sensitive` / `insensitive`，默认 `smart`）。区分大小写且无匹配时会提示可加 `\c`。连续两个反斜杠 `\\` 表示字面反斜杠（如 `C:\\config` 搜索 `C:\config`）。没有更多匹配时会环绕整个文件（wrapscan）。
 
@@ -161,15 +178,139 @@ Normal 模式会临时把系统输入法切到英文（Insert 模式恢复），
 
 和 Vim 一致，起始搜索会跳过光标所在的那个匹配，`n` / `N` 也跳过当前匹配，重叠的匹配按 Vim 的不重叠规则推进；没有下一个匹配时环绕回来。搜索框聚焦期间 `Ctrl+F` / `Ctrl+H` / `F3` / `Shift+F3` 不会打开或操作编辑器查找框，以免查询内容丢失。搜索框关闭后可用 `n` / `N` 继续跳转。`d/`、`dn`、`dN` 这类「操作符 + 搜索」组合暂不支持。
 
-> Normal 模式只接管 `Ctrl+F` / `Ctrl+B` / `Ctrl+D` / `Ctrl+U`；`Ctrl+H` / `Ctrl+J` / `Ctrl+K` / `Ctrl+L` 仍归工作台（替换、切换底栏、和弦、扩选），`Ctrl+K` 和弦照常可用。Insert 模式完全保持现有行为。
+Insert 模式：所有键原样输入，`Esc` 回到 Normal 模式。
 
-### Insert 模式
+### 列表 / 树 / 菜单 / 浮层
 
-所有键原样输入，`Esc` 回到 Normal 模式。
+这些 surface 没有 Insert 模式（不输入文本），聚焦时按 Normal 处理。通用键位：
 
-### 列表 / 树 / 菜单
+| 操作 | 键位 |
+| --- | --- |
+| 上 / 下移动 | `k` / `j`（树、菜单还可 `h` / `l` 向左折叠回父 / 向右展开进子；菜单里 `h` / `l` 收起 / 展开子菜单；浮层由宿主决定左右语义） |
+| 首项 / 末项 | `gg` / `G` |
+| 翻页 | `Ctrl+U` / `Ctrl+D`（菜单没有视口，落到首 / 末项） |
+| 激活 | `Enter` 或 `o` |
+| 预览 | `p`（宿主支持预览时；菜单里等同激活） |
+| 展开 / 折叠 / 切换 | `zo` / `zc` / `za`（树、Chat 等支持折叠的宿主） |
+| 右键菜单 | `m` |
+| 复制 / 删除 | `yy` / `dd`（宿主实现时） |
+| 退出 surface | `Esc`（具体动作由宿主决定：菜单收一层或关闭、浮层关闭等） |
 
-这些表面没有 Insert 模式（不输入文本），聚焦时直接支持 `h` `j` `k` `l` 移动、`gg` / `G` 跳到首 / 末行；列表与树另支持 `Ctrl+D` / `Ctrl+U` 翻页（菜单不翻页）。可编辑控件（搜索框、行内输入框）里裸键仍是普通输入。
+列表内的搜索框、行内输入框等**可编辑控件**聚焦时，裸键仍是普通输入，Vim 不会接管。Git / Perforce 图谱、Explorer、搜索结果、SCM、Outline、快捷键编辑器、扩展列表、MCP Servers、Process Explorer 等共享同一套列表 surface。
+
+设置页：行列表里 `j` / `k` 移动、`gg` / `G` 首末、`Ctrl+D` / `Ctrl+U` 翻页、`Enter` 聚焦当前行的控件、`/` 聚焦设置搜索框；左侧目录（TOC）里 `j` / `k` 选分区、`Enter`（或 `l`）跳到该分区、`/` 同样聚焦搜索框。行内控件里按 `Esc` 回到行列表。
+
+通知中心：`j` / `k` 选通知、`gg` / `G` 首末、`Ctrl+D` / `Ctrl+U` 每页 5 条、`Enter` 执行该通知的主操作（进度通知则取消）、`x` 关闭该通知、`Esc` 关闭通知中心。
+
+Chat 时间线（焦点在时间线而非输入框时）：`j` / `k` 上下选行、`h` / `l` 折叠层级出 / 入、`gg` / `G` 首 / 末、`Ctrl+D` / `Ctrl+U` 翻页、`zo` / `zc` / `za` 或 `Enter` / `o` 展开折叠、`m` 打开当前卡片右键菜单、`yy` 复制当前行文本；`i` 把焦点送回输入框，`a` / `e` 跳到时间线顶部 / 底部。输入框本身保持普通输入。
+
+### 编辑器标签栏
+
+先用 `Esc` 或 `workbench.action.focusEditorTabs` 把焦点交给标签栏，再使用：
+
+| 操作 | 键位 |
+| --- | --- |
+| 上一个 / 下一个标签 | `h` / `l`（同时激活该编辑器，但焦点留在标签栏） |
+| 第一个 / 最后一个 | `0` / `gg`、`$` / `G` |
+| 打开并聚焦编辑器正文 | `Enter` |
+| 关闭当前标签 | `x`（固定标签不可关闭） |
+| 固定 / 取消固定 | `p` |
+| 标签右键菜单 | `m` |
+| 回到编辑器正文 | `Esc` |
+
+### ActivityBar 与视图容器标题
+
+ActivityBar 聚焦时：`j` / `k` 在容器间移动光标，`gg` / `G` 首 / 末，`Enter` 或 `l` 打开当前容器并把焦点交给它的第一个视图。
+
+Panel / 辅助侧边栏的**标签式**容器标题聚焦时：`h` / `l` 切换上一个 / 下一个容器，`j` 或 `Enter` 聚焦当前容器的内容，`gg` / `G` 首 / 末，`Esc` 同 `Enter`。标签式标题之外的标签栏（如主侧边栏的图标标题）不注册此 surface。
+
+### Leader
+
+默认 leader 为 `Space`（`vim.leader` 可改，值用 Vim token，如 `space`、`,`）。Leader 序列可在任意 Normal surface（含编辑器）使用：
+
+| 序列 | 动作 |
+| --- | --- |
+| `<leader> e` | 聚焦资源管理器 |
+| `<leader> f` | 快速打开文件 |
+| `<leader> p` | 打开命令面板 |
+| `<leader> s` | 全局搜索 |
+| `<leader> g` | 聚焦源代码管理 |
+| `<leader> x` | 聚焦扩展 |
+| `<leader> b` | 聚焦主侧边栏 |
+| `<leader> j` | 聚焦底栏 |
+| `<leader> t` | 聚焦终端 |
+| `<leader> o` | 聚焦大纲 |
+| `<leader> q` | 关闭当前编辑器 |
+| `<leader> n` / `<leader> N` | 下一个 / 上一个编辑器 |
+| `<leader> w h/j/k/l` | 聚焦左 / 下 / 上 / 右编辑器组 |
+| `<leader> w w` | 聚焦下一个编辑器组 |
+| `<leader> w s` | 向下拆分编辑器 |
+| `<leader> w c` | 关闭当前编辑器 |
+
+列表 / 树 / 菜单 / 浮层里的裸 `Space` 让给 leader；预览用 `p`，激活用 `Enter` 或 `o`。
+
+### 终端 Normal Mode
+
+终端的默认模式是 Insert（所有按键直接送给 shell）。聚焦终端时按 `Ctrl+Shift+Space`（`workbench.action.terminal.enterNormalMode`）进入 Normal Mode；进入时会按 `vim.autoSwitchInputMethod` 把输入法切到英文。Normal Mode 下：
+
+| 操作 | 键位 |
+| --- | --- |
+| 上 / 下滚动一行 | `k` / `j` |
+| 半页 / 整页 | `Ctrl+U` / `Ctrl+D`、`Ctrl+B` / `Ctrl+F` |
+| 滚动到顶部 / 底部 | `gg` / `G` |
+| 开始按行选择 | `v`（之后 `j` / `k` 扩展选择） |
+| 复制选中并退出 Normal | `y` |
+| 退出 Normal 回到 shell | `i`、`a`、`q` 或 `Esc`（有选区时先清除选区并保持 Normal，再按一次才退出） |
+
+`vim.surfaces.terminalNormalMode` 设为 `false` 可整体关闭终端 Normal Mode。Insert 模式下终端保持原有的 Ctrl 组合与 shell 行为。
+
+### 优先级：用户键位、保留集与自定义映射
+
+- **用户键位优先**：某个键存在 weight ≥ User 的键位绑定时，Vim 会让行（不执行 Vim 命令），交给全局快捷键分发器执行用户绑定的命令。这里比较的是**同一次击键**，与用户绑定声明的 `when` 是否成立有关。
+- **保留集例外**：`vim.reservedKeys` 里的键不会被 User 绑定抢走（具体执行什么仍由 Vim 键位表决定）。默认保留 `escape`、`ctrl+[`、`i`、`a`、`:`、`/`、`?`、`<leader>`；把某个键从列表里删掉，用户绑定即可胜出。`Ctrl+D` / `Ctrl+U` 在列表里也映射翻页，`Ctrl+F` / `Ctrl+B` 主要用于编辑器与终端 Normal；它们都不在保留集里，有同键 User 绑定时用户键位优先。
+- **`Ctrl+H` / `Ctrl+J` / `Ctrl+K` / `Ctrl+L` 不走 Vim**：在列表、树、菜单、浮层聚焦期间它们是工作台的方向别名；`Ctrl+P` / `Ctrl+N` 始终是快速打开 / 新建文件。`Ctrl+J` / `Ctrl+K` 等别名与 `Ctrl+K` 和弦的互斥规则见[快捷键速查表](./keyboard-shortcuts.md#菜单内键盘操作)。
+- **自定义映射**：`vim.keymap` 是对象数组，字段为 `id`、`keys`（Vim token 数组，多段即序列）、`command`（命令 id）、`args`（可选）、`when`（可选上下文表达式）、`surfaces`（可选 surface 种类数组）。`id` 与内置条目相同时覆盖内置，否则追加。省略 `surfaces` 时对所有 surface 生效（编辑器只处理 leader 与已开始的序列）。例如：
+
+```json
+"vim.keymap": [
+  { "id": "user.saveAll", "keys": ["<leader>", "S"], "command": "workbench.action.files.saveAll" },
+  { "id": "list.activate.o", "keys": ["l"], "command": "list.activate" }
+]
+```
+
+### 全部 `vim.*` 配置
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `vim.enabled` | `false` | 全局开关。关闭后所有 Vim surface 恢复普通键位 |
+| `vim.showStatusBar` | `true` | 状态栏显示当前 surface 的模式图标 |
+| `vim.autoSwitchInputMethod` | `true` | Normal / 终端 Normal 时切英文输入法，Insert 恢复；仅 Windows 生效 |
+| `vim.searchCaseSensitivity` | `smart` | 编辑器 `/` 与 `?` 搜索的大小写策略：`smart` / `sensitive` / `insensitive` |
+| `vim.highlightSearch` | `false` | 编辑器搜索：高亮全部匹配并在编辑时刷新；Normal 下 `Esc` 清除 |
+| `vim.leader` | `space` | Leader 键的 Vim token |
+| `vim.sequenceTimeoutMs` | `800` | 待定计数 / 前缀等待下一键的超时（毫秒） |
+| `vim.reservedKeys` | `["escape","ctrl+[","i","a",":","/","?","<leader>"]` | 永不让给 User 键位的键 |
+| `vim.passThroughUnmappedKeys` | `false` | 未映射的可打印键是否继续下传 |
+| `vim.keymap` | `[]` | 用户自定义映射，见上节 |
+| `vim.surfaces.lists` | `true` | 树 / 列表 / 菜单 / 浮层 |
+| `vim.surfaces.tabs` | `true` | 编辑器标签栏 |
+| `vim.surfaces.activityBar` | `true` | ActivityBar 与视图容器标题 |
+| `vim.surfaces.terminalNormalMode` | `true` | 终端 Normal Mode |
+
+### 排障：当前键位与分发轨迹
+
+- **Vim：显示当前键位映射**（命令 id `workbench.action.vim.showActiveKeymap`）把当前生效的键位表写入 Output 的 **Vim Keymap** 通道，包括：全局开关 / leader、当前活跃 surface 与模式、合并后的有效 keymap、`vim.keymap` 用户覆盖、保留集，以及被 User 绑定遮蔽的键。先聚焦目标界面再执行，才能看到该 surface 的键位。
+- **键盘快捷方式故障排查**：执行「开发人员：切换键盘快捷方式故障排查」（`Developer: Toggle Keyboard Shortcuts Troubleshooting`），会在 Output 的 **Keyboard Shortcuts Troubleshooting** 通道逐键记录分发结果。开启 Vim 后同样会记录 Vim 的决策，常见行：
+
+```text
+→ vim surface=list(list:explorer) mode=normal
+→ vim surface=list(list:explorer) mode=normal / sequence pending [g]
+→ vim surface=list(list:explorer) mode=normal / EXECUTE list.focusFirst(1)
+→ vim surface=list(list:explorer) mode=normal / ⤫ user binding shadows Vim — workbench.action.togglePanel
+→ vim surface=list(list:explorer) mode=normal / ⤫ editable target
+```
+
+看到 `⤫ user binding shadows Vim` 说明用户键位优先；看到 `⤫ editable target`、没有 Vim 行或 `vimSurfaceId` 为空，说明焦点不在 Vim surface（输入框、Quick Input、对话框或 Webview）。也可以检查 `vimEnabled` / `vimMode` / `vimSurface` / `vimSurfaceId` / `vimTerminalNormalMode` 这些上下文键（Keyboard Shortcuts 的 when 表达式里可引用）。
 
 ## 平台差异：Windows / Mac / Linux
 

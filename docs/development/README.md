@@ -34,6 +34,7 @@ App 本体的发布（版本 bump、打包、上传，及 push `vX.Y.Z` tag 后�
 - [Allotment 分割布局](allotment-layout.md) — SplitView 重挂载空窗（未传 `defaultSizes` 时 viewItems 懒填充）、imperative `resize()` 的守卫纪律、`onChange` 构造期闭包与瞬态帧持久化、最大化重启宽度重置的复盘与 e2e 窗口尺寸约束。
 - [嵌入 Monaco](monaco-embedding.md) — 嵌入编辑器的四类陷阱：宿主 `automaticLayout` 经 `getRawOptions` 渗进所有嵌入编辑器（peek / hover / diff）与 `inline-block` 容器互相观察成环（Peek References 预览 blank 的根因与 CSS 断环）；`editContext` 下的输入事件派发边界（宿主元素 + capture）；嵌入实例的焦点桥接（专用 context key，勿冒充 `editorTextFocus`）；standalone `addCommand` 的跨编辑器键泄漏；0.55 升级（命名空间顶层化 / NLS 索引制英文桥接）。
 - [命令、快捷键与上下文键](commands-and-context-keys.md) — `Action2` 的 `menu`（`precondition` 会 AND 进每一行、面板打开时 `editorAreaFocus` 必为 false）、快捷键解析（weight 优先、`when` 只过滤）、焦点类上下文键一律 DOM 派生、`ScopedContextKeyService` 的静默 dispose、异步 run 的 accessor 寿命、扩展命令遮蔽 renderer Action2——六条会静默失效的判据与正确写法。
+- [全局 Vim 模式](vim-mode.md) — 分层与唯一 window-capture 入口、surface 注册与仲裁、keymap/`when`、User 让行、context key、per-surface 模式记忆、终端 Normal、Webview 排除与测试清单。
 - [Quick-navigate picker](quick-navigate-pickers.md) — 「按住修饰键、松开即选中」手势：`IQuickNavigateOptions`（modifier / triggerKey / initialSelectionIndex）、面板锁定态与 keyup-accept 语义、两条边界（宿主 `when: '!quickInputVisible'` 管不到 IPC 窗口、quickNavigate 下 `activeItemId` 惰性）与验证资产。
 - [Git 提交信息规范](git-commit-msg-rule.md) — 提交格式、类型前缀（发布说明不再由提交生成，见下条）。
 - [远程开发（remote-ssh / WSL）](remote-dev.md) — daemon+TCP 传输与协议 bump 自愈链、URI/scheme 与 authority 规范形、部署链（tar/scp 盘符、bundle 哈希）、Windows 远端主机（平台探测 / cmd 契约 / WMI 逃 job kill / 路径展示）、WSL 直连、远端终端与 extension host、远端 agent 二进制受管下载、实机验收方法论与已知限制。

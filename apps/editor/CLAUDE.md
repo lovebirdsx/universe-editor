@@ -168,7 +168,7 @@ entry.update({ text: '完成' })
 entry.dispose()
 ```
 
-要点：**生命周期由你管**。React 组件 `useRef` 持 accessor、`useEffect` cleanup dispose；Contribution 成员字段、`_hide()` dispose。
+要点：**生命周期自己管**：React `useRef` + `useEffect` cleanup dispose；Contribution 成员字段 / `_hide()` dispose。
 
 ## 右键菜单图标：新增菜单项一律写 `icon`
 
@@ -194,13 +194,13 @@ test.describe('@p0 my thing', () => {
 
 **3. 探针 API 不够用**：先扩 `src/shared/e2e/contract.ts`，再实现 `src/renderer/e2e/probe.ts`；保持白名单原则。
 
-**跑**：`pnpm e2e:smoke`（只跑 @p0）/ `pnpm e2e specs/<x>.spec.ts`。fixture 选型、tag 矩阵、踩坑见 `apps/editor/e2e/CLAUDE.md`。
+**跑**：`pnpm e2e:smoke` / `pnpm e2e specs/<x>.spec.ts`。fixture 选型、tag 矩阵、踩坑见 `apps/editor/e2e/CLAUDE.md`。
 
 ## 套路 G：加一个性能打点 / 启动耗时检测
 
 1. **加打点**：`shared/perf/marks.ts` 的 `PerfMarks` 加常量（`code/<proc>/<event>` 约定），打点处 `mark(PerfMarks.xxx)`（来自 `@universe-editor/platform`）。
 2. **main 端 marks 走 IPC**：已由 `IPerformanceMarksService` + `ServiceChannels.Performance` 暴露，main 只 `mark()`。
-3. **聚合/计算**：renderer `ITimerService`（`services/performance/TimerService.ts`）合并 marks，`getStartupMetrics()` 按 `MILESTONES` 算耗时；新里程碑加进 MILESTONES。
+3. **聚合/计算**：renderer `ITimerService` 合并 marks 并按 `MILESTONES` 算耗时；新里程碑加进 MILESTONES。
 4. **展示**：Developer: Startup Performance 命令；状态栏警示由 `StartupPerformanceStatusContribution` 控制。
 
 响应性监控/卡顿报告见 [cases-interaction-perf.md](cases-interaction-perf.md) 和 skill `analyze-interaction-performance`。
@@ -249,3 +249,4 @@ AI 服务三层：platform 契约（`IAiModelService` / `IAiModelProvider` / `Ai
 ## 其它
 
 - 对标 vscode 的功能保持默认按键和 command id 一致；用户可见文本走 `localize()`（改文案先读 [shared/i18n](src/shared/i18n/CLAUDE.md)）。
+- 全局 Vim 分发 / surface 接入：[docs/development/vim-mode.md](../../docs/development/vim-mode.md)。

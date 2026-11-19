@@ -57,27 +57,14 @@ React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keyb
 
 ## Vim 模式：Normal 模式的按键归属
 
-`vim.enabled` 打开后，Normal 模式的裸键（`h/j/k/l`、`w/b/e`、`gg`/`G`、`d`/`y` + motion、`x`/`p`/`u`/`J` 等）必须**先于**全局 dispatcher 被认领，否则 `d` 会触发删除、`p` 会打开 Quick Open 之类。
+`vim.enabled` 打开后，Normal 模式的裸键必须先于全局 dispatcher 被认领，否则 `d` 会触发删除、`p` 会打开 Quick Open 之类。机制、surface API 与排障见 [Vim 模式](vim-mode.md)，这里只列会静默失效的判据：
 
-- 唯一 window-capture 入口是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts`：保留 `Ctrl+J/K/H/L` 别名仲裁，其余按键交给 `setVimKeyHandlerProvider` 注入的 `VimDispatcher`（`apps/editor/src/renderer/workbench/vim/vimDispatcher.ts`）。
-- 活跃 surface 由 `getActiveVimSurface`（`packages/workbench-ui/src/keybinding/vim/vimSurfaceRegistry.ts`）按 `menu > overlay > list > terminal > editor > chrome` 解析；编辑器 Normal 下把 `handleStroke` 交给 `vimEditorController`，只有 leader 与已在途的序列例外（走共享序列引擎执行工作台命令）。**不要用 `editor.addCommand`**——standalone Monaco 的 keybinding service 跨实例共享，会吞掉其它编辑器的键。
-- 列表 / 树 / 菜单 / 浮层同样注册为 surface，可编辑焦点一律拒绝。
-
-**上下文键**：`vimMode`（`'normal' | 'insert' | ''`）、`vimNormalMode`（活跃 surface 处于 Normal）、`vimSurface` / `vimSurfaceId` / `vimTerminalNormalMode` 由 `IVimModeService` 写入；`vimNormalMode` 同时是全局分发器 paging 安全网的放行条件。
-
-**必须让行的三种情况**（否则会抢走别人的键）：
-
-1. `keybindingChordPending` 为真——`Ctrl+K` 和弦第二击属于 dispatcher；
-2. 模态面打开（`[data-renderer-dialog]` / `[role="menu"]`）——虚拟焦点可能停在编辑器文本下；
-3. IME 组合中（`isComposing || keyCode === 229`）。
-
-**`Ctrl+H/J/K/L` 不走 Vim**：Normal 模式下它们仍归工作台（替换 / 切换底栏 / 和弦 / 扩选），Vim 只认领 `Ctrl+F/B/D/U`；Insert 模式完全放行。
-
-**状态栏**：右侧的 `vim-mode` 图标条目（Normal/Insert 两种徽标）只在任意窗口的编辑器文本聚焦且开启时存在（`editor.vimMode.showStatusBar` 可关）。用户可见键位见 `docs/user/zh-CN/reference/editor-shortcuts.md` 的「Vim 模式」一节。
-
-**中文输入法（IME）**：`keydown` 的 `preventDefault()` 取消不了 IME 组合（Windows 上组合中的按键是 `keyCode === 229`），把 Monaco textarea 设 `readonly` 也实测无效，所以 Normal 模式改为**切走输入法**：契约在 `shared/ipc/vimInputMethodService.ts`，main 侧 `main/services/vimInputMethod/vimInputMethodMainService.ts` 用 koffi 调 `LoadKeyboardLayoutW` + `WM_INPUTLANGCHANGEREQUEST`（无 en-US 布局时回退 `ImmSetConversionStatus`），renderer 的 `vimEditorController.syncInputMethod()` 在模式切换时经 IPC 触发。输入法归属是 **window 级**（main 每个窗口只存一份 `saved`），renderer 的去重状态 `inputMethodState` 也必须 module 级共享——per-controller 会让新建 editor group 的初始化把焦点组的英文切回中文。`editor.vimMode.autoSwitchInputMethod`（默认开，仅 Windows）可关。
-
-**Vim 搜索（`/` `?` `n` `N`）**：`vimKeymap.ts` 只把 `/`/`?` 翻译成 `search-open`（带数字前缀）、`n`/`N` 翻译成 `search-repeat`；查询文本由 `vimSearchWidget.ts` 渲染在编辑器右上角的**可聚焦 input**（overlay widget，尺寸/配色对齐 Monaco 查找框，含 `Aa` 大小写指示器；自带 `z-index: 35` 对齐 Monaco find widget，否则会被 `z-index: 4` 的 sticky scroll 盖住）收集。input 获得焦点后 Monaco text focus 丢失，`vimNormalMode` 清空、registry 停止路由，Enter/Esc 与组合输入由 input 自己的监听处理；关闭时 `editor.focus()` 恢复 Normal。因此搜索框**不复用 Monaco find widget、不写 `findWidgetVisible`**。但 overlay 在 `.monaco-editor` 内，`editorFocus` 仍为真，文档级 capture dispatcher 会先于 input 拿到 `Ctrl+F`/`F3`——控制器在 input 聚焦期间写 **`vimSearchFocused`**，Find 家族的这四条 keybinding 都带 `when: '!vimSearchFocused'`，input 的 keydown 还会再吞一次（防 Monaco 容器监听）；只有编辑器文本焦点重新拿回后 `Ctrl+F` 才是翻页。搜索语义按 Vim 的不重叠匹配推进（`aa` 在 `aaaa` 中只命中第 1、3 列），起始搜索和 `n`/`N` 都跳过光标所在的整个匹配。大小写优先级：输入中的 `\c` / `\C`（最后一个生效，匹配前剥离、输入框保留）> `Aa` 按钮的本次覆盖 > `editor.vimMode.searchCaseSensitivity`（`smart` / `sensitive` / `insensitive`，默认 `smart`）；`n` / `N` 沿用 last search 保存的有效 `caseSensitive`。失焦会提交当前预览并写入 last search（无匹配/空查询才回原点）。默认 `editor.vimMode.highlightSearch=false`：确认与 `n`/`N` 只跳光标并清除预览高亮；开启后 `findAllVimMatches` 扫描全部匹配（`VIM_SEARCH_HIGHLIGHT_LIMITS` 限制匹配数/行数/行长），`onDidChangeModelContent` 以 150ms debounce 刷新，Normal 模式 `Escape` 发 `search-highlight-clear`（等价 `:nohlsearch`，并抑制后续编辑自动重亮，直到下一次 `/ ? n N` 或提交）。预览的当前匹配用 `.vim-search-match-current`（`editor.findMatchBackground`），其它匹配用 `.vim-search-match`（`editor.findMatchHighlightBackground`），与 Ctrl+F 的 `.currentFindMatch` / `.findMatch` 一致。IME 走 `compositionstart` / `compositionend`：组合期间不搜索，`compositionend` 微任务兜底「最终 `input` 仍带 `isComposing=true`」的输入法。last search 是模块级状态（`vimSearch.ts`，仿 `vimRegisters.ts`），跨编辑器共享；`d/`、`dn`、`dN` 目前只取消待定 operator，不做组合。测试见 `vim/__tests__/vimSearch.test.ts` 与 `vimEditorController.test.tsx`。
+- **唯一 window-capture 入口**是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts`：先仲裁 `Ctrl+J/K/H/L` 别名（`menu > dialog > overlay > list`），其余交给 `setVimKeyHandlerProvider` 注入的 `VimDispatcher`。不要在组件里另装 window 监听。
+- **活跃 surface** 由 `getActiveVimSurface` 按 `menu > overlay > list > terminal > editor > chrome` 解析。编辑器 Normal 下把 `handleStroke` 交给 `vimEditorController`，只有 leader 与已在途的序列例外（走共享序列引擎）。**不要用 `editor.addCommand`**——standalone Monaco 的 keybinding service 跨实例共享，会吞掉其它编辑器的键。
+- **必须让行的六种情况**：chord pending、模态对话框（`[data-renderer-dialog]`）、Quick Input（`quickInputVisible`）、IME 组合、Webview 焦点、普通可编辑控件（editor / terminal 除外）。非保留键存在 weight ≥ `User` 的键位时 Vim 也让行；保留集由 `vim.reservedKeys` 配置。
+- **`Ctrl+H/J/K/L` 不走 Vim**：Normal 下列表 / 树 / 菜单仍把它们当方向别名；Vim 只认领 `Ctrl+F/B/D/U`。Insert 模式完全放行。
+- **上下文键**：`vimMode` / `vimNormalMode` / `vimEnabled` / `vimSurface` / `vimSurfaceId` / `vimTerminalNormalMode` 由 `IVimModeService` 写；`vimNormalMode` 同时是全局分发器 paging 安全网的放行条件。状态栏 `vim-mode` 条目只在有活跃 surface 且 `vim.showStatusBar` 开启时存在。
+- **IME 与 Vim 搜索**：Normal 模式切英文输入法的实现（窗口级共享状态、`vim.autoSwitchInputMethod`）与 `/ ? n N` 搜索框的 `vimSearchFocused` / sticky scroll / 大小写优先级，见 [Vim 模式](vim-mode.md) 与 `workbench/editor/vim/` 目录内实现。
 
 ## 焦点类上下文键：一律 DOM 派生
 
