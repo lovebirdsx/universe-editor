@@ -1,27 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  Installs the Vim-mode switch for list navigation. `packages/workbench-ui` is
- *  DI-free, so the renderer owns the one global provider the registry consults
- *  on every keystroke; the editor's Vim controller is wired separately in
- *  FileEditor.
+ *  Instantiates the workbench Vim service at startup. The window-capture
+ *  provider itself is installed by `useVimDispatcher` next to the global
+ *  keybinding handler; this contribution only anchors the service so mode
+ *  context keys and the status-bar entry exist before the first focus move.
  *--------------------------------------------------------------------------------------------*/
 
-import {
-  Disposable,
-  IConfigurationService,
-  IWorkbenchContribution,
-} from '@universe-editor/platform'
-import { setVimListNavigationEnabledProvider } from '@universe-editor/workbench-ui'
+import { Disposable, IWorkbenchContribution } from '@universe-editor/platform'
+import { IVimModeService } from '../services/vim/vimModeService.js'
 
 export class VimModeContribution extends Disposable implements IWorkbenchContribution {
-  constructor(@IConfigurationService configService: IConfigurationService) {
+  constructor(@IVimModeService vimModeService: IVimModeService) {
     super()
-    setVimListNavigationEnabledProvider(
-      () => configService.get<boolean>('editor.vimMode.enabled') === true,
-    )
-    this._register({
-      dispose: () => setVimListNavigationEnabledProvider(undefined),
-    })
+    void vimModeService.getEnabled()
   }
 }

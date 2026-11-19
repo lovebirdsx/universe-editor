@@ -20,6 +20,7 @@ import {
 } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { useService } from '../useService.js'
 import { useGlobalKeybindingHandler } from '../useGlobalKeybindingHandler.js'
+import { useVimDispatcher } from '../vim/useVimDispatcher.js'
 import { resolveShortcut } from '../titlebar/keybindingFormat.js'
 import { EditorArea } from '../editor/EditorArea.js'
 import { AuxiliaryTitleBar } from './AuxiliaryTitleBar.js'
@@ -27,6 +28,7 @@ import styles from './AuxiliaryWindowHost.module.css'
 
 function AuxiliaryWindowContent({ entry }: { entry: IAuxiliaryEditorWindow }) {
   useGlobalKeybindingHandler(entry.window.document)
+  useVimDispatcher(entry.window.document)
   // The drag session context is shared through the portal, but each auxiliary
   // document needs its own terminal-event listeners: a drag dropped or
   // cancelled there never reaches the main window's document.

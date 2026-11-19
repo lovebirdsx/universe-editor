@@ -17,6 +17,7 @@ import type { IDisposable, IEditorInput } from '@universe-editor/platform'
 import {
   cancelOwnerFrame,
   isKeyupContextMenuSupplement,
+  registerVimSurface,
   requestOwnerFrame,
   type OwnerFrame,
 } from '@universe-editor/workbench-ui'
@@ -26,7 +27,6 @@ import {
   IContextKeyService,
   IEditorGroupsService,
   IFocusStackService,
-  IStatusBarService,
   localize,
   markAsSingleton,
   PartId,
@@ -36,8 +36,8 @@ import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { createWorkbenchEditor } from './monaco/workbenchEditorFactory.js'
 import { createVimEditorController } from './vim/vimEditorController.js'
-import { registerVimEditor } from './vim/vimEditorRegistry.js'
 import { IVimInputMethodService } from '../../../shared/ipc/vimInputMethodService.js'
+import { IVimModeService } from '../../services/vim/vimModeService.js'
 import {
   computeEditorContextMenuAnchor,
   isEditorContextMenuKey,
@@ -138,6 +138,8 @@ const DROP_INTO_EDITOR_LINK: NonNullable<monaco.editor.IEditorOptions['dropIntoE
   showDropSelector: 'never',
 }
 
+let nextEditorSurfaceId = 1
+
 export function FileEditor({ input }: { input: IEditorInput }) {
   const fileInput = input as FileEditorInput
   const groupsService = useService(IEditorGroupsService)
@@ -145,12 +147,15 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const configService = useService(IConfigurationService)
   const contextKeyService = useService(IContextKeyService)
   const focusStackService = useService(IFocusStackService)
-  const statusBarService = useService(IStatusBarService)
+  const vimModeService = useService(IVimModeService)
   const vimInputMethodService = useService(IVimInputMethodService)
   const recentEditsTracker = useService(IRecentEditsTracker)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+  const surfaceKeyRef = useRef<string | null>(null)
+  if (surfaceKeyRef.current === null) surfaceKeyRef.current = `editor:${nextEditorSurfaceId++}`
+  const surfaceKey = surfaceKeyRef.current
   // Latest input, read by long-lived editor callbacks (e.g. the blur handler)
   // that must not be recreated on tab switch. Kept in sync by the model-swap
   // effect below so switching tabs stays a cheap setModel — no editor rebuild.
@@ -333,12 +338,21 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // subscriptions never observe a half-disposed instance.
     const vimController = createVimEditorController({
       editor: ed,
+      surfaceKey,
       configService,
       contextKeyService,
-      statusBarService,
+      vimModeService,
       inputMethodService: vimInputMethodService,
     })
-    const vimRegistration = registerVimEditor(vimController)
+    const vimRegistration = registerVimSurface({
+      id: surfaceKey,
+      kind: 'editor',
+      getElement: () => ed.getContainerDomNode(),
+      focus: 'within',
+      getSurfaceKey: () => surfaceKey,
+      defaultMode: 'normal',
+      actions: { handleStroke: (event) => vimController.handleKeyDown(event) },
+    })
     editorRef.current = ed
     return () => {
       dropContainer.removeEventListener('dragover', armDropIntoEditorOnShift, true)
@@ -365,15 +379,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // via `fileInputRef` (blur handler) and the model-swap effect handles input
     // changes with setModel, so neither is a dependency here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    monacoNs,
-    commandService,
-    configService,
-    contextKeyService,
-    focusStackService,
-    statusBarService,
-    group,
-  ])
+  }, [monacoNs, commandService, configService, contextKeyService, focusStackService, group])
 
   // Apply config changes to the live editor instance.
   useEffect(() => {

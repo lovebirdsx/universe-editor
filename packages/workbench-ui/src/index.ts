@@ -68,10 +68,16 @@ export * from './keybinding/KeybindingLabel.js'
 export * from './keybinding/ctrlNavigation.js'
 export {
   useCtrlNavigationLayer,
-  setVimListNavigationEnabledProvider,
+  setVimKeyHandlerProvider,
+  ensureNavigationDocument,
   type CtrlNavigationLayerKind,
   type ICtrlNavigationLayerOptions,
   type IVimListNavigationOptions,
 } from './keybinding/ctrlNavigationRegistry.js'
+export * from './keybinding/vim/navigationLayers.js'
+export * from './keybinding/vim/vimTypes.js'
+export * from './keybinding/vim/vimSequence.js'
+export * from './keybinding/vim/vimDefaultKeymap.js'
+export * from './keybinding/vim/vimSurfaceRegistry.js'
 export * from './keybinding/vimListNavigation.js'
 export * from './keybinding/keybindingChordState.js'

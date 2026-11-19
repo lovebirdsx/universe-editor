@@ -208,6 +208,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'command.category.json': 'JSON',
   'command.category.markdown': 'Markdown',
   'command.category.merge': '合并编辑器',
+  'command.category.vim': 'Vim',
+  'command.category.workbench': '工作台',
   'command.category.mergeConflict': '合并冲突',
   'command.category.perforceGraph': 'Perforce Graph',
   'command.category.perforce': 'Perforce',
@@ -856,6 +858,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.toggleTerminal.title': '切换终端',
   'action.toggleVimMode.title': '切换 Vim 模式',
   'action.toggleWordWrap.title': '切换自动换行',
+  'action.vim.showActiveKeymap.title': 'Vim：显示当前键位映射',
   'action.undo.title': '撤销',
   'action.unlockEditorGroup.title': '解锁组',
   'action.unpinEditor.title': '取消固定标签',
@@ -1289,19 +1292,33 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.editor.codeActionsOnSave.description':
     '保存时要运行的代码操作，按操作类型（如 "source.organizeImports"、"source.fixAll"）配置。"always" 表示每次保存都运行，"explicit" 表示仅在显式保存时运行，"never" 表示禁用该类型。',
   'settings.editor.semanticHighlighting.description': '控制对支持该特性的语言是否显示语义高亮。',
-  'settings.editor.vimMode.enabled.description':
+  'settings.vim.enabled.description':
     '在代码编辑器与列表导航中启用 Vim 键位（Normal / Insert 双模式）。Normal 模式下 h/j/k/l 移动、w/b/e 按词跳转、gg/G 跳到首末行、Ctrl+F/B/D/U 翻页。',
-  'settings.editor.vimMode.showStatusBar.description':
+  'settings.vim.showStatusBar.description':
     '编辑器持有文本焦点时，在状态栏显示当前 Vim 模式的图标。',
-  'settings.editor.vimMode.autoSwitchInputMethod.description':
+  'settings.vim.autoSwitchInputMethod.description':
     '进入 Normal 模式时把系统输入法切到英文，回到 Insert 模式时恢复，避免中文输入法把拼音写进缓冲区。仅 Windows 生效。',
-  'settings.editor.vimMode.searchCaseSensitivity.description':
+  'settings.vim.searchCaseSensitivity.description':
     '控制 Vim `/` 与 `?` 搜索的大小写策略。"smart" 仅在查询包含大写字母时区分；`\\c`/`\\C` 可对单次搜索覆盖该设置。',
-  'settings.editor.vimMode.searchCaseSensitivity.smart': '智能大小写',
-  'settings.editor.vimMode.searchCaseSensitivity.sensitive': '区分大小写',
-  'settings.editor.vimMode.searchCaseSensitivity.insensitive': '忽略大小写',
-  'settings.editor.vimMode.highlightSearch.description':
+  'settings.vim.searchCaseSensitivity.smart': '智能大小写',
+  'settings.vim.searchCaseSensitivity.sensitive': '区分大小写',
+  'settings.vim.searchCaseSensitivity.insensitive': '忽略大小写',
+  'settings.vim.highlightSearch.description':
     '高亮全部 Vim 搜索匹配，并在编辑时刷新。Normal 模式按 Esc 清除（等价 :nohlsearch）。大文件会限制扫描范围。',
+  'settings.vim.leader.description':
+    'Vim leader 键（默认 `space`）。`<leader>e` 这类映射会使用它。',
+  'settings.vim.sequenceTimeoutMs.description':
+    '待定的 Vim 序列（计数或前缀）等待下一次按键的超时时间（毫秒），超时后重置。',
+  'settings.vim.reservedKeys.description':
+    '即使存在同键的 User 键位绑定，也保留给 Vim 的按键。其余按键让给 User 绑定。',
+  'settings.vim.passThroughUnmappedKeys.description':
+    'Normal 模式下让未映射的可打印按键穿透到列表/菜单/浮层，而不是吞掉。',
+  'settings.vim.keymap.description':
+    '用户 Vim 映射。`id` 与内置条目相同的会覆盖内置，其余追加。按键使用 Vim token（`j`、`G`、`ctrl+d`、`<leader>`），未写 surfaces 时作用于所有非编辑器 surface。',
+  'settings.vim.surfaces.lists.description': '在树、列表、菜单与浮层上启用 Vim 按键。',
+  'settings.vim.surfaces.tabs.description': '在编辑器标签栏上启用 Vim 按键。',
+  'settings.vim.surfaces.activityBar.description': '在活动栏与视图容器标题上启用 Vim 按键。',
+  'settings.vim.surfaces.terminalNormalMode.description': '启用终端 Normal 模式 surface。',
   'settings.files.nativeDialog.enable.description':
     '打开文件/文件夹及保存时使用操作系统文件对话框，而不是内置对话框。',
   'settings.issueReporter': '问题报告器',

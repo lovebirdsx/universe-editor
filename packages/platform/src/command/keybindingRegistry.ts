@@ -248,6 +248,12 @@ function isRemovedByNegation(
 
 class KeybindingsRegistryImpl {
   private readonly _items: IResolvedKeybindingItem[] = []
+  /**
+   * First-stroke index. `hasBindingAtOrAbove` runs on every Vim Normal-mode
+   * stroke, so scanning every registered binding (thousands once Monaco is
+   * bridged) would put a linear cost on each key.
+   */
+  private readonly _byFirstKey = new Map<string, Set<IResolvedKeybindingItem>>()
 
   registerKeybinding(item: IKeybindingItem): IDisposable {
     const resolved: IResolvedKeybindingItem = {
@@ -270,13 +276,60 @@ class KeybindingsRegistryImpl {
       }
     }
     this._items.splice(idx, 0, resolved)
+    const first = resolved.chords[0]!
+    let bucket = this._byFirstKey.get(first)
+    if (bucket === undefined) {
+      bucket = new Set()
+      this._byFirstKey.set(first, bucket)
+    }
+    bucket.add(resolved)
 
     return toDisposable(() => {
       const i = this._items.indexOf(resolved)
       if (i !== -1) {
         this._items.splice(i, 1)
       }
+      const entries = this._byFirstKey.get(first)
+      if (entries !== undefined) {
+        entries.delete(resolved)
+        if (entries.size === 0) this._byFirstKey.delete(first)
+      }
     })
+  }
+
+  /**
+   * Whether a binding at or above `minWeight` claims the stroke. Used by the
+   * Vim dispatcher to yield to user bindings without paying for a full trace.
+   * Negated (`-command`) entries never count; a positive entry removed by one
+   * does not either. Chord first strokes count as bindings.
+   */
+  hasBindingAtOrAbove(
+    key: string,
+    minWeight: number,
+    contextKeyService?: IContextKeyService,
+    pending?: readonly string[],
+  ): boolean {
+    const normalized = normalizeKeybindingString(key)
+    const bucket =
+      pending && pending.length > 0
+        ? this._byFirstKey.get(normalizeKeybindingString(pending[0]!))
+        : this._byFirstKey.get(normalized)
+    if (bucket === undefined) return false
+    for (const binding of bucket) {
+      if (binding.isNegated) continue
+      if (binding.weight < minWeight) continue
+      if (pending && pending.length > 0) {
+        if (binding.chords.length !== 2 || binding.chords[1] !== normalized) continue
+      } else if (binding.chords[0] !== normalized) {
+        continue
+      }
+      if (binding.when !== undefined && contextKeyService) {
+        if (!contextKeyService.contextMatchesRules(binding.when)) continue
+      }
+      if (isRemovedByNegation(binding, this._items, contextKeyService)) continue
+      return true
+    }
+    return false
   }
 
   /**

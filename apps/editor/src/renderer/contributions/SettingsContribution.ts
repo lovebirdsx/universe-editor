@@ -329,56 +329,138 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Code actions to run on save, keyed by action kind (e.g. "source.organizeImports", "source.fixAll"). "always" runs on every save, "explicit" only on explicit saves, "never" disables the kind.',
             ),
           },
-          'editor.vimMode.enabled': {
+          'vim.enabled': {
             type: 'boolean',
             default: false,
             description: localize(
-              'settings.editor.vimMode.enabled.description',
+              'settings.vim.enabled.description',
               'Enable Vim keybindings (Normal/Insert modes) in code editors and list navigation. In Normal mode, h/j/k/l move, w/b/e jump by word, gg/G go to the first/last line, and Ctrl+F/B/D/U page.',
             ),
           },
-          'editor.vimMode.showStatusBar': {
+          'vim.showStatusBar': {
             type: 'boolean',
             default: true,
             description: localize(
-              'settings.editor.vimMode.showStatusBar.description',
+              'settings.vim.showStatusBar.description',
               'Show the current Vim mode as a status-bar icon while an editor has text focus.',
             ),
           },
-          'editor.vimMode.autoSwitchInputMethod': {
+          'vim.autoSwitchInputMethod': {
             type: 'boolean',
             default: true,
             description: localize(
-              'settings.editor.vimMode.autoSwitchInputMethod.description',
+              'settings.vim.autoSwitchInputMethod.description',
               'Switch the OS input method to English in Normal mode and restore it in Insert mode, so a Chinese IME does not type into the buffer. Windows only; ignored elsewhere.',
             ),
           },
-          'editor.vimMode.searchCaseSensitivity': {
+          'vim.searchCaseSensitivity': {
             type: 'string',
             default: 'smart',
             enum: ['smart', 'sensitive', 'insensitive'],
             enumItemLabels: {
-              smart: localize('settings.editor.vimMode.searchCaseSensitivity.smart', 'Smart case'),
-              sensitive: localize(
-                'settings.editor.vimMode.searchCaseSensitivity.sensitive',
-                'Match case',
-              ),
+              smart: localize('settings.vim.searchCaseSensitivity.smart', 'Smart case'),
+              sensitive: localize('settings.vim.searchCaseSensitivity.sensitive', 'Match case'),
               insensitive: localize(
-                'settings.editor.vimMode.searchCaseSensitivity.insensitive',
+                'settings.vim.searchCaseSensitivity.insensitive',
                 'Ignore case',
               ),
             },
             description: localize(
-              'settings.editor.vimMode.searchCaseSensitivity.description',
+              'settings.vim.searchCaseSensitivity.description',
               'Controls case sensitivity for Vim `/` and `?` searches. "smart" matches case only when the pattern contains an uppercase letter; `\\c`/`\\C` override it per search.',
             ),
           },
-          'editor.vimMode.highlightSearch': {
+          'vim.highlightSearch': {
             type: 'boolean',
             default: false,
             description: localize(
-              'settings.editor.vimMode.highlightSearch.description',
+              'settings.vim.highlightSearch.description',
               'Highlight all Vim search matches and keep them updated while editing. Press Escape in Normal mode to clear them (`:nohlsearch`). Large files are capped.',
+            ),
+          },
+          'vim.leader': {
+            type: 'string',
+            default: 'space',
+            description: localize(
+              'settings.vim.leader.description',
+              'Vim leader key token (default `space`). Leader mappings such as `<leader>e` use it.',
+            ),
+          },
+          'vim.sequenceTimeoutMs': {
+            type: 'number',
+            default: 800,
+            minimum: 1,
+            description: localize(
+              'settings.vim.sequenceTimeoutMs.description',
+              'How long a pending Vim sequence (count or prefix) waits for the next key before resetting.',
+            ),
+          },
+          'vim.reservedKeys': {
+            type: 'array',
+            items: { type: 'string' },
+            default: ['escape', 'ctrl+[', 'i', 'a', ':', '/', '?', '<leader>'],
+            description: localize(
+              'settings.vim.reservedKeys.description',
+              'Keys Vim keeps even when a User keybinding with the same stroke exists. All other keys yield to User bindings.',
+            ),
+          },
+          'vim.passThroughUnmappedKeys': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.vim.passThroughUnmappedKeys.description',
+              'Let unmapped printable keys reach list/menu/overlay surfaces instead of swallowing them in Normal mode.',
+            ),
+          },
+          'vim.keymap': {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                keys: { type: 'array', items: { type: 'string' } },
+                command: { type: 'string' },
+                args: { type: ['object', 'array', 'string', 'number', 'boolean'] },
+                when: { type: 'string' },
+                surfaces: { type: 'array', items: { type: 'string' } },
+              },
+            },
+            default: [],
+            description: localize(
+              'settings.vim.keymap.description',
+              'User Vim mappings. Entries with an existing `id` replace the built-in entry; others are appended. Keys use Vim tokens (`j`, `G`, `ctrl+d`, `<leader>`) and active surfaces default to all non-editor surfaces.',
+            ),
+          },
+          'vim.surfaces.lists': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.vim.surfaces.lists.description',
+              'Enable Vim keys on trees, lists, menus and overlays.',
+            ),
+          },
+          'vim.surfaces.tabs': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.vim.surfaces.tabs.description',
+              'Enable Vim keys on editor tab strips.',
+            ),
+          },
+          'vim.surfaces.activityBar': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.vim.surfaces.activityBar.description',
+              'Enable Vim keys on the activity bar and view container headers.',
+            ),
+          },
+          'vim.surfaces.terminalNormalMode': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.vim.surfaces.terminalNormalMode.description',
+              'Enable the terminal Normal Mode surface.',
             ),
           },
         },

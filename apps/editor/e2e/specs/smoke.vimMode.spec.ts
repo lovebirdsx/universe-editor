@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Vim mode (@p1).
  *
- *  Guards the Normal/Insert mode contract behind `editor.vimMode.enabled`:
+ *  Guards the Normal/Insert mode contract behind `vim.enabled`:
  *  bare-key navigation, operators, the Insert hand-off, the status-bar mode
  *  indicator, Ctrl+F paging (which must page the editor instead of opening the
  *  find widget), list navigation on the Explorer tree, and — most importantly —
@@ -53,15 +53,14 @@ async function setVimModeEnabled(page: Page, enabled: boolean): Promise<void> {
   // registered at the end of initialize()).
   await page.evaluate(() => window.__E2E__!.whenUserSettingsInitialized())
   await page.evaluate(
-    (value) =>
-      window.__E2E__!.runCommand('_workbench.updateConfiguration', 'editor.vimMode.enabled', value),
+    (value) => window.__E2E__!.runCommand('_workbench.updateConfiguration', 'vim.enabled', value),
     enabled,
   )
   await expect
     .poll(() =>
       page.evaluate(
         (key) => window.__E2E__!.runCommand('_workbench.getConfiguration', key),
-        'editor.vimMode.enabled',
+        'vim.enabled',
       ),
     )
     .toBe(enabled)

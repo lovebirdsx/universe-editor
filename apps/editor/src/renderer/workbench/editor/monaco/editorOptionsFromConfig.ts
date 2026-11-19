@@ -41,11 +41,11 @@ const BESPOKE_KEYS = new Set<string>([
   'editor.semanticHighlighting.enabled',
   // Vim mode owns these; Monaco would ignore them, but bridging them would make
   // `affectsBridgedEditorOption` trigger a full option update on every toggle.
-  'editor.vimMode.enabled',
-  'editor.vimMode.showStatusBar',
-  'editor.vimMode.autoSwitchInputMethod',
-  'editor.vimMode.searchCaseSensitivity',
-  'editor.vimMode.highlightSearch',
+  'vim.enabled',
+  'vim.showStatusBar',
+  'vim.autoSwitchInputMethod',
+  'vim.searchCaseSensitivity',
+  'vim.highlightSearch',
 ])
 
 // Prefixes whose whole subtree is owned elsewhere. `unicodeHighlight` is forced

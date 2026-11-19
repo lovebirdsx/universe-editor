@@ -213,7 +213,10 @@ import {
 } from './searchActions.js'
 import { FindWordAtCursorNextAction, FindWordAtCursorPreviousAction } from './findWordActions.js'
 import { ChangeLanguageModeAction } from './languageModeActions.js'
-import { ToggleVimModeAction } from './vimActions.js'
+import { ShowActiveVimKeymapAction, ToggleVimModeAction } from './vimActions.js'
+import { FOCUS_SURFACE_ACTIONS } from './focusSurfaceActions.js'
+import { VIM_SURFACE_ACTIONS } from './vimSurfaceActions.js'
+import { TERMINAL_NORMAL_ACTIONS } from './terminalNormalActions.js'
 import { CloseQuickInputAction } from './quickInputActions.js'
 import { FocusNextPartAction, FocusPreviousPartAction } from './focusActions.js'
 import { ClearHistoryAction, GoBackAction, GoForwardAction } from './historyActions.js'
@@ -535,6 +538,13 @@ registerAction2(ToggleMinimapAction)
 registerAction2(ToggleWordWrapAction)
 registerAction2(ChangeLanguageModeAction)
 registerAction2(ToggleVimModeAction)
+registerAction2(ShowActiveVimKeymapAction)
+
+// Global Vim surface commands, focus commands and terminal Normal Mode ids are
+// registered once here so later work packages never touch this file again.
+for (const action of VIM_SURFACE_ACTIONS) registerAction2(action)
+for (const action of FOCUS_SURFACE_ACTIONS) registerAction2(action)
+for (const action of TERMINAL_NORMAL_ACTIONS) registerAction2(action)
 
 // Editor — close
 registerAction2(CloseActiveEditorAction)

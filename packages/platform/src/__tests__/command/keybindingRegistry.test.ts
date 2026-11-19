@@ -329,3 +329,125 @@ describe('KeybindingsRegistry: inline-completion Tab vs extension Tab', () => {
     ctx.dispose()
   })
 })
+
+describe('KeybindingsRegistry.hasBindingAtOrAbove', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  it('reports a user binding at the requested weight', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'j',
+        command: 'user.down',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('j', KeybindingWeight.User)).toBe(true)
+  })
+
+  it('does not report a binding below the requested weight', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'j',
+        command: 'workbench.down',
+        weight: KeybindingWeight.WorkbenchContrib,
+      }),
+    )
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('j', KeybindingWeight.User)).toBe(false)
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('j', KeybindingWeight.WorkbenchContrib)).toBe(
+      true,
+    )
+  })
+
+  it('skips negated entries', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'j',
+        command: 'user.down',
+        isNegated: true,
+        weight: KeybindingWeight.User,
+      }),
+    )
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('j', KeybindingWeight.User)).toBe(false)
+  })
+
+  it('skips a positive binding removed by negation', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'j',
+        command: 'user.down',
+        isNegated: true,
+        weight: KeybindingWeight.User,
+      }),
+      KeybindingsRegistry.registerKeybinding({
+        key: 'j',
+        command: 'user.down',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('j', KeybindingWeight.User)).toBe(false)
+  })
+
+  it('honours the when-clause', () => {
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('editorTextFocus', false)
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'j',
+        command: 'user.down',
+        when: 'editorTextFocus',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('j', KeybindingWeight.User, ctx)).toBe(false)
+    ctx.createKey<boolean>('editorTextFocus', true).set(true)
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('j', KeybindingWeight.User, ctx)).toBe(true)
+    ctx.dispose()
+  })
+
+  it('counts the first stroke of a two-stroke chord', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        chords: ['ctrl+k', 'ctrl+s'],
+        command: 'user.chord',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('ctrl+k', KeybindingWeight.User)).toBe(true)
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('ctrl+s', KeybindingWeight.User)).toBe(false)
+  })
+
+  it('matches the second stroke when a pending chord is supplied', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        chords: ['ctrl+k', 'ctrl+s'],
+        command: 'user.chord',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    expect(
+      KeybindingsRegistry.hasBindingAtOrAbove('ctrl+s', KeybindingWeight.User, undefined, [
+        'ctrl+k',
+      ]),
+    ).toBe(true)
+    expect(
+      KeybindingsRegistry.hasBindingAtOrAbove('ctrl+s', KeybindingWeight.User, undefined, [
+        'ctrl+j',
+      ]),
+    ).toBe(false)
+  })
+
+  it('stops reporting after the binding is disposed', () => {
+    const disposable = KeybindingsRegistry.registerKeybinding({
+      key: 'j',
+      command: 'user.down',
+      weight: KeybindingWeight.User,
+    })
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('j', KeybindingWeight.User)).toBe(true)
+    disposable.dispose()
+    expect(KeybindingsRegistry.hasBindingAtOrAbove('j', KeybindingWeight.User)).toBe(false)
+  })
+})

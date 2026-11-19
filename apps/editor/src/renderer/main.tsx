@@ -148,6 +148,7 @@ import {
   IKeyboardDebugService,
   KeyboardDebugService,
 } from './services/keybinding/keyboardDebugService.js'
+import { IVimModeService, VimModeService } from './services/vim/vimModeService.js'
 import { LayoutService } from './services/layout/LayoutService.js'
 import { WorkbenchThemeService } from './services/themes/workbenchThemeService.js'
 import { ITextMateService, TextMateService } from './services/textmate/textMateService.js'
@@ -819,6 +820,9 @@ async function bootstrapWorkbench(): Promise<void> {
     IKeyboardDebugService,
     workbenchStore.add(instantiation.createInstance(KeyboardDebugService)),
   )
+
+  // Workbench-wide Vim state: mode memory, root context keys, status bar.
+  services.set(IVimModeService, workbenchStore.add(instantiation.createInstance(VimModeService)))
 
   // EditorResolverService depends on IInstantiationService + IEditorService +
   // IEditorGroupsService, all available now.

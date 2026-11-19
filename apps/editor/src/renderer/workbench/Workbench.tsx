@@ -12,6 +12,7 @@ import type { LifecycleService, InstantiationService, LayoutSizes } from '@unive
 import { PerfMarks } from '../../shared/perf/marks.js'
 import { ServicesContext, useService, useObservable } from './useService.js'
 import { useGlobalKeybindingHandler } from './useGlobalKeybindingHandler.js'
+import { useVimDispatcher } from './vim/useVimDispatcher.js'
 import {
   DragSessionProvider,
   OwnerDocumentProvider,
@@ -61,6 +62,7 @@ function useFileIconsEnabledGate(): void {
 
 function WorkbenchShell() {
   useGlobalKeybindingHandler(document)
+  useVimDispatcher(document)
   useFileIconsEnabledGate()
 
   const layoutService = useService(ILayoutService)

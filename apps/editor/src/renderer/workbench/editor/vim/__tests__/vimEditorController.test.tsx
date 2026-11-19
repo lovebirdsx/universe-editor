@@ -159,23 +159,27 @@ function createContext() {
   }
 }
 
-function createStatusBar() {
-  const records: { entry: unknown; disposed: boolean; updates: unknown[] }[] = []
+function createVimModeService() {
+  const modes = new Map<string, string>()
   return {
-    addEntry: (entry: unknown) => {
-      const record = { entry, disposed: false, updates: [] as unknown[] }
-      records.push(record)
-      return {
-        dispose: () => {
-          record.disposed = true
-        },
-        update: (next: unknown) => {
-          record.entry = next
-          record.updates.push(next)
-        },
-      }
+    _serviceBrand: undefined,
+    modes,
+    activeSurface: undefined,
+    onDidChangeMode: () => ({ dispose: () => undefined }),
+    getEnabled: () => true,
+    getMode: (key: string, fallback: string) => modes.get(key) ?? fallback,
+    setMode: (key: string, mode: string) => {
+      modes.set(key, mode)
     },
-    records,
+    activateSurface: () => undefined,
+    getEffectiveKeymap: () => [],
+    getUserKeymap: () => [],
+    reservedKeys: [],
+    getSequenceTimeoutMs: () => 800,
+    getPassThroughUnmappedKeys: () => false,
+    getLeader: () => 'space',
+    getShowStatusBar: () => true,
+    isSurfaceEnabled: () => true,
   }
 }
 
@@ -193,9 +197,10 @@ describe('createVimEditorController', () => {
     const fake = createFakeEditor(['abc', 'def'])
     const controller = createVimEditorController({
       editor: fake.editor,
+      surfaceKey: 'editor:test',
       configService: createFakeConfig({}) as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
@@ -207,9 +212,10 @@ describe('createVimEditorController', () => {
     const fake = createFakeEditor(['abc', 'def', 'ghi'])
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
@@ -227,9 +233,10 @@ describe('createVimEditorController', () => {
     const fake = createFakeEditor(['abc', '  def', 'ghi'])
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
@@ -254,40 +261,42 @@ describe('createVimEditorController', () => {
   it('switches to Insert on i and back on Escape', () => {
     const fake = createFakeEditor(['abc'])
     const context = createContext()
+    const vim = createVimModeService()
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: context as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: vim as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
     controller.handleKeyDown(key('i'))
-    expect(context.get('vimMode')).toBe('insert')
-    expect(context.get('vimNormalMode')).toBe(false)
+    expect(vim.modes.get('editor:test')).toBe('insert')
     // Insert mode lets printable keys through.
     expect(controller.handleKeyDown(key('j'))).toBe(false)
     controller.handleKeyDown(key('Escape'))
-    expect(context.get('vimMode')).toBe('normal')
-    expect(context.get('vimNormalMode')).toBe(true)
+    expect(vim.modes.get('editor:test')).toBe('normal')
     controller.dispose()
   })
 
   it('enters Insert after the cursor with a, and after the line with A', () => {
     const fake = createFakeEditor(['abc', 'de'])
     const context = createContext()
+    const vim = createVimModeService()
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: context as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: vim as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
 
     fake.editor.setPosition({ lineNumber: 1, column: 2 })
     controller.handleKeyDown(key('a'))
-    expect(context.get('vimMode')).toBe('insert')
+    expect(vim.modes.get('editor:test')).toBe('insert')
     expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 3 })
     controller.handleKeyDown(key('Escape'))
 
@@ -299,7 +308,7 @@ describe('createVimEditorController', () => {
 
     fake.editor.setPosition({ lineNumber: 2, column: 1 })
     controller.handleKeyDown(key('A'))
-    expect(context.get('vimMode')).toBe('insert')
+    expect(vim.modes.get('editor:test')).toBe('insert')
     expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 3 })
     controller.dispose()
   })
@@ -308,9 +317,10 @@ describe('createVimEditorController', () => {
     const fake = createFakeEditor(['abc'])
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
@@ -323,9 +333,10 @@ describe('createVimEditorController', () => {
     const inputMethod = createInputMethodService()
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: inputMethod as never,
     })
     fake.focus()
@@ -344,9 +355,10 @@ describe('createVimEditorController', () => {
     const inputMethod = createInputMethodService()
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: inputMethod as never,
     })
     fake.focus()
@@ -362,12 +374,13 @@ describe('createVimEditorController', () => {
     const inputMethod = createInputMethodService()
     const controller = createVimEditorController({
       editor: fake.editor,
+      surfaceKey: 'editor:test',
       configService: createFakeConfig({
-        'editor.vimMode.enabled': true,
-        'editor.vimMode.autoSwitchInputMethod': false,
+        'vim.enabled': true,
+        'vim.autoSwitchInputMethod': false,
       }) as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: inputMethod as never,
     })
     fake.focus()
@@ -376,51 +389,48 @@ describe('createVimEditorController', () => {
     controller.dispose()
   })
 
-  it('shows the icon entry for an editor in an auxiliary-window document', () => {
+  it('reports mode changes to the Vim mode service', () => {
     // Auxiliary windows portal their editor DOM into a separate document but
-    // share the main renderer's status-bar service; the entry must follow that
-    // editor's focus too (regression: it used to be limited to the main document).
+    // share the main renderer's Vim service.
     const auxDocument = document.implementation.createHTMLDocument('auxiliary')
     const fake = createFakeEditor(['abc'], auxDocument)
-    const statusBar = createStatusBar()
+    const vim = createVimModeService()
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: createContext() as never,
-      statusBarService: statusBar as never,
+      vimModeService: vim as never,
       inputMethodService: createInputMethodService() as never,
     })
 
     fake.focus()
 
-    expect(statusBar.records).toHaveLength(1)
-    expect(statusBar.records[0]?.entry).toMatchObject({
-      icon: 'vim-normal',
-      text: '',
-      alignment: 1,
-    })
+    expect(vim.modes.get('editor:test')).toBe('normal')
     controller.handleKeyDown(key('i'))
-    expect(statusBar.records[0]?.entry).toMatchObject({ icon: 'vim-insert' })
+    expect(vim.modes.get('editor:test')).toBe('insert')
     controller.dispose()
     auxDocument.body.removeChild(fake.container)
   })
 
   it('resets to Normal when the configuration is disabled', () => {
     const fake = createFakeEditor(['abc'])
-    const config = createFakeConfig({ 'editor.vimMode.enabled': true })
+    const config = createFakeConfig({ 'vim.enabled': true })
     const context = createContext()
+    const vim = createVimModeService()
     const controller = createVimEditorController({
       editor: fake.editor,
+      surfaceKey: 'editor:test',
       configService: config as never,
       contextKeyService: context as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: vim as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
     controller.handleKeyDown(key('i'))
-    config.set('editor.vimMode.enabled', false)
-    ;(config as unknown as { fire(key: string): void }).fire('editor.vimMode.enabled')
-    expect(context.get('vimMode')).toBe('')
+    config.set('vim.enabled', false)
+    ;(config as unknown as { fire(key: string): void }).fire('vim.enabled')
+    expect(vim.modes.get('editor:test')).toBe('normal')
     expect(controller.handleKeyDown(key('j'))).toBe(false)
     controller.dispose()
   })
@@ -429,9 +439,10 @@ describe('createVimEditorController', () => {
     const fake = createFakeEditor(['one', 'two', 'three', 'four'])
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
@@ -451,9 +462,10 @@ describe('createVimEditorController', () => {
     const fake = createFakeEditor(['one', 'two'])
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
@@ -471,9 +483,10 @@ describe('createVimEditorController', () => {
     const fake = createFakeEditor(['one', 'two', 'three'])
     const controller = createVimEditorController({
       editor: fake.editor,
-      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
@@ -498,14 +511,15 @@ describe('createVimEditorController', () => {
     const fake = createFakeEditor(lines)
     const context = createContext()
     const configService = createFakeConfig({
-      'editor.vimMode.enabled': true,
+      'vim.enabled': true,
       ...config,
     })
     const controller = createVimEditorController({
       editor: fake.editor,
+      surfaceKey: 'editor:test',
       configService: configService as never,
       contextKeyService: context as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
@@ -724,12 +738,13 @@ describe('createVimEditorController', () => {
 
   it('cleans up on model change, disable and dispose', async () => {
     const fake = createFakeEditor(['foo'])
-    const config = createFakeConfig({ 'editor.vimMode.enabled': true })
+    const config = createFakeConfig({ 'vim.enabled': true })
     const controller = createVimEditorController({
       editor: fake.editor,
+      surfaceKey: 'editor:test',
       configService: config as never,
       contextKeyService: createContext() as never,
-      statusBarService: createStatusBar() as never,
+      vimModeService: createVimModeService() as never,
       inputMethodService: createInputMethodService() as never,
     })
     fake.focus()
@@ -738,8 +753,8 @@ describe('createVimEditorController', () => {
     fake.modelChange()
     expect(fake.overlays()[0]?.getDomNode().hidden).toBe(true)
 
-    config.set('editor.vimMode.enabled', false)
-    ;(config as unknown as { fire(key: string): void }).fire('editor.vimMode.enabled')
+    config.set('vim.enabled', false)
+    ;(config as unknown as { fire(key: string): void }).fire('vim.enabled')
     controller.dispose()
     expect(fake.overlays()).toHaveLength(0)
   })
@@ -870,7 +885,7 @@ describe('createVimEditorController', () => {
 
   it('highlights every match when highlightSearch is enabled', async () => {
     const { fake, controller } = createSearchHarness(['foo bar', 'foo baz'], {
-      'editor.vimMode.highlightSearch': true,
+      'vim.highlightSearch': true,
     })
     const input = await openSearchBox(fake, controller, '/')
     type(input, 'foo')
@@ -885,7 +900,7 @@ describe('createVimEditorController', () => {
 
   it('refreshes hlsearch after edits', async () => {
     const { fake, controller } = createSearchHarness(['foo', 'foo'], {
-      'editor.vimMode.highlightSearch': true,
+      'vim.highlightSearch': true,
     })
     const input = await openSearchBox(fake, controller, '/')
     type(input, 'foo')
@@ -905,7 +920,7 @@ describe('createVimEditorController', () => {
 
   it('clears hlsearch on Normal-mode Escape until the next n/N', async () => {
     const { fake, controller } = createSearchHarness(['foo', 'foo'], {
-      'editor.vimMode.highlightSearch': true,
+      'vim.highlightSearch': true,
     })
     const input = await openSearchBox(fake, controller, '/')
     type(input, 'foo')
@@ -937,13 +952,13 @@ describe('createVimEditorController', () => {
     press(input, 'Enter')
     const setsBefore = fake.decorationSets().length
 
-    config.set('editor.vimMode.highlightSearch', true)
-    config.fire('editor.vimMode.highlightSearch')
+    config.set('vim.highlightSearch', true)
+    config.fire('vim.highlightSearch')
     expect(fake.decorationSets().length).toBeGreaterThan(setsBefore)
 
     const clearsBefore = fake.decorationClears()
-    config.set('editor.vimMode.highlightSearch', false)
-    config.fire('editor.vimMode.highlightSearch')
+    config.set('vim.highlightSearch', false)
+    config.fire('vim.highlightSearch')
     expect(fake.decorationClears()).toBeGreaterThan(clearsBefore)
     controller.dispose()
   })
@@ -960,9 +975,9 @@ describe('createVimEditorController', () => {
     controller.dispose()
   })
 
-  it('honors editor.vimMode.searchCaseSensitivity defaults', async () => {
+  it('honors vim.searchCaseSensitivity defaults', async () => {
     const { fake, controller } = createSearchHarness(['Foo', 'foo'], {
-      'editor.vimMode.searchCaseSensitivity': 'insensitive',
+      'vim.searchCaseSensitivity': 'insensitive',
     })
     const input = await openSearchBox(fake, controller, '/')
     type(input, 'foo')
@@ -975,15 +990,15 @@ describe('createVimEditorController', () => {
 
   it('stops refreshing hlsearch once Vim is disabled', async () => {
     const { fake, controller, config } = createSearchHarness(['foo', 'foo'], {
-      'editor.vimMode.highlightSearch': true,
+      'vim.highlightSearch': true,
     })
     const input = await openSearchBox(fake, controller, '/')
     type(input, 'foo')
     press(input, 'Enter')
     const setsBefore = fake.decorationSets().length
 
-    config.set('editor.vimMode.enabled', false)
-    config.fire('editor.vimMode.enabled')
+    config.set('vim.enabled', false)
+    config.fire('vim.enabled')
 
     vi.useFakeTimers()
     try {
@@ -1000,7 +1015,7 @@ describe('createVimEditorController', () => {
   it('keeps the preview match highlighted when the scan skips an overlong line', async () => {
     const longLine = `${'a'.repeat(20001)}foo`
     const { fake, controller } = createSearchHarness([longLine], {
-      'editor.vimMode.highlightSearch': true,
+      'vim.highlightSearch': true,
     })
     const input = await openSearchBox(fake, controller, '/')
     type(input, 'foo')
@@ -1016,7 +1031,7 @@ describe('createVimEditorController', () => {
 
   it('restores stored hlsearch when opening and cancelling a search', async () => {
     const { fake, controller } = createSearchHarness(['foo', 'foo'], {
-      'editor.vimMode.highlightSearch': true,
+      'vim.highlightSearch': true,
     })
     const input = await openSearchBox(fake, controller, '/')
     type(input, 'foo')
@@ -1042,8 +1057,8 @@ describe('createVimEditorController', () => {
     // lands on line 2.
     expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
 
-    config.set('editor.vimMode.searchCaseSensitivity', 'sensitive')
-    config.fire('editor.vimMode.searchCaseSensitivity')
+    config.set('vim.searchCaseSensitivity', 'sensitive')
+    config.fire('vim.searchCaseSensitivity')
     expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
     expect(fake.overlays()[0]!.getDomNode().querySelector('.vim-search-hint')?.textContent).toBe('')
     controller.dispose()

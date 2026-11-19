@@ -106,10 +106,23 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
     const focusedView = contextKeyService.createKey<string>('focusedView', '')
     const focusedViewPane = contextKeyService.createKey<string>('focusedViewPane', '')
     const terminalFocus = contextKeyService.createKey<boolean>('terminalFocus', false)
+    // Webview focus is DOM-derived: when an iframe (or a container marked
+    // `data-vim-surface="webview"`) holds focus, Vim must stay out of the way.
+    const webviewFocus = contextKeyService.createKey<boolean>('webviewFocus', false)
 
     const perPart = new Map<PartId, ReturnType<typeof contextKeyService.createKey<boolean>>>()
     for (const [id, key] of Object.entries(PART_KEY_BY_ID) as [PartId, string][]) {
       perPart.set(id, contextKeyService.createKey<boolean>(key, false))
+    }
+
+    const updateWebviewFocus = (active: Element | null): void => {
+      if (active === null) {
+        webviewFocus.set(false)
+        return
+      }
+      const inIframe = active.tagName.toUpperCase() === 'IFRAME'
+      const marked = active.closest?.('[data-vim-surface="webview"]') != null
+      webviewFocus.set(inIframe || marked)
     }
 
     const updateTerminalFocus = (active: Element | null): void => {
@@ -152,6 +165,7 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
       focusedView.set(closestAttr(active, 'data-view-id') ?? '')
       focusedViewPane.set(closestAttr(active, 'data-view-pane') ?? '')
       updateTerminalFocus(active)
+      updateWebviewFocus(active)
     }
 
     // Parts register after this contribution (blockStartup.ts orders us before
@@ -172,7 +186,9 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
     this._register(
       autorun((r) => {
         layoutService.visible.read(r)
-        updateTerminalFocus(getActiveWorkbenchDocument().activeElement)
+        const active = getActiveWorkbenchDocument().activeElement
+        updateTerminalFocus(active)
+        updateWebviewFocus(active)
       }),
     )
 

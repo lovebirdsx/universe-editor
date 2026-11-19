@@ -80,7 +80,11 @@ export function HtmlPreviewEditor({ input }: { input: IEditorInput }) {
   const src = ready ? withReloadToken(toResourceUrl(sourceUri.fsPath), reloadToken) : undefined
 
   return (
-    <div className={styles['htmlPreviewRoot']} data-testid="html-preview">
+    <div
+      className={styles['htmlPreviewRoot']}
+      data-testid="html-preview"
+      data-vim-surface="webview"
+    >
       {src !== undefined && (
         <iframe
           ref={iframeRef}
@@ -89,6 +93,7 @@ export function HtmlPreviewEditor({ input }: { input: IEditorInput }) {
           // allow-same-origin so the page's `universe-app://root` sub-resources
           // load; allow-scripts so the page's own JS runs (Live-Preview parity).
           sandbox="allow-scripts allow-same-origin"
+          data-vim-surface="webview"
           data-tooltip={(input as HtmlPreviewInput).getName()}
         />
       )}

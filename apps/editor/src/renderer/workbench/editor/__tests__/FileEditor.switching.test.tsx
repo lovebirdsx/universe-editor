@@ -119,6 +119,7 @@ import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
 import { IOutlineService } from '../../../services/languageFeatures/OutlineService.js'
 import { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
+import { IVimModeService } from '../../../services/vim/vimModeService.js'
 import { IUserKeybindingsService } from '../../../services/keybindings/UserKeybindingsService.js'
 import { ServicesContext } from '../../useService.js'
 import { EditorGroupContext } from '../EditorGroupContext.js'
@@ -306,6 +307,7 @@ describe('FileEditor tab switching', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
+    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
 
     const { rerender } = render(renderEditor(instantiation, group, inputA))
 

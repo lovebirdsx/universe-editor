@@ -9,15 +9,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
-  StatusBarAlignment,
   localize,
   type IConfigurationService,
   type IContextKeyService,
   type IDisposable,
-  type IStatusBarEntry,
-  type IStatusBarEntryAccessor,
-  type IStatusBarService,
 } from '@universe-editor/platform'
+import type { IVimModeService } from '../../../services/vim/vimModeService.js'
 import type { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
 import { reduceVimKey } from './vimKeymap.js'
 import { clampNormalPosition, firstNonBlankColumn, resolveMotion } from './vimMotions.js'
@@ -50,8 +47,6 @@ import {
   type VimTextModel,
 } from './vimTypes.js'
 
-const VIM_STATUS_ENTRY_ID = 'vim-mode'
-const VIM_STATUS_PRIORITY = 5000
 const SEARCH_HIGHLIGHT_REFRESH_MS = 150
 const PREVIEW_HIGHLIGHT_REFRESH_MS = 120
 /** Below this size a preview keystroke can afford a synchronous full-file scan. */
@@ -77,9 +72,11 @@ export interface IVimEditorController extends IDisposable {
 
 export interface IVimEditorControllerOptions {
   readonly editor: VimEditor
+  /** Identifies this editor instance for per-surface mode memory. */
+  readonly surfaceKey: string
   readonly configService: IConfigurationService
   readonly contextKeyService: IContextKeyService
-  readonly statusBarService: IStatusBarService
+  readonly vimModeService: IVimModeService
   readonly inputMethodService: IVimInputMethodService
 }
 
@@ -97,11 +94,17 @@ function toMonacoPosition(position: VimPosition): { lineNumber: number; column: 
 export function createVimEditorController(
   options: IVimEditorControllerOptions,
 ): IVimEditorController {
-  const { editor, configService, contextKeyService, statusBarService, inputMethodService } = options
+  const {
+    editor,
+    surfaceKey,
+    configService,
+    contextKeyService,
+    vimModeService,
+    inputMethodService,
+  } = options
   let state: VimState = INITIAL_VIM_STATE
-  let enabled = configService.get<boolean>('editor.vimMode.enabled') === true
-  let autoSwitchInputMethod =
-    configService.get<boolean>('editor.vimMode.autoSwitchInputMethod') !== false
+  let enabled = configService.get<boolean>('vim.enabled') === true
+  let autoSwitchInputMethod = configService.get<boolean>('vim.autoSwitchInputMethod') !== false
   let searchCaseMode: VimSearchCaseMode = readSearchCaseMode()
   let searchCaseOverride: VimSearchCaseOverride = null
   let highlightSearch = readHighlightSearch()
@@ -111,7 +114,6 @@ export function createVimEditorController(
   let searchRefreshTimer: ReturnType<typeof setTimeout> | null = null
   let previewHighlightTimer: ReturnType<typeof setTimeout> | null = null
   let textFocused = false
-  let statusEntry: IStatusBarEntryAccessor | undefined
   let searchWidget: VimSearchWidget | null = null
   let searchOrigin: VimPosition | null = null
   let searchDirection: VimSearchDirection = 'forward'
@@ -121,12 +123,12 @@ export function createVimEditorController(
   let closingSearch = false
 
   function readSearchCaseMode(): VimSearchCaseMode {
-    const value = configService.get<string>('editor.vimMode.searchCaseSensitivity')
+    const value = configService.get<string>('vim.searchCaseSensitivity')
     return value === 'sensitive' || value === 'insensitive' ? value : 'smart'
   }
 
   function readHighlightSearch(): boolean {
-    return configService.get<boolean>('editor.vimMode.highlightSearch') === true
+    return configService.get<boolean>('vim.highlightSearch') === true
   }
 
   function resolveCurrentSearch(raw: string): VimSearchPattern {
@@ -140,47 +142,6 @@ export function createVimEditorController(
   }
 
   const disposables: IDisposable[] = []
-
-  function showStatusBar(): boolean {
-    return (
-      enabled && textFocused && configService.get<boolean>('editor.vimMode.showStatusBar') !== false
-    )
-  }
-
-  function statusEntryData(): IStatusBarEntry {
-    return {
-      id: VIM_STATUS_ENTRY_ID,
-      // Icon-only: the glyph carries the mode, the tooltip names it. The old
-      // `-- NORMAL --` text was too loud for a persistent status-bar slot.
-      text: '',
-      icon: state.mode === 'insert' ? 'vim-insert' : 'vim-normal',
-      tooltip:
-        state.mode === 'insert'
-          ? localize('vim.status.insert', 'Vim: Insert (click to toggle)')
-          : localize('vim.status.normal', 'Vim: Normal (click to toggle)'),
-      alignment: StatusBarAlignment.Right,
-      priority: VIM_STATUS_PRIORITY,
-      command: 'workbench.action.toggleVimMode',
-    }
-  }
-
-  function disposeStatusEntry(): void {
-    statusEntry?.dispose()
-    statusEntry = undefined
-  }
-
-  function syncStatusBar(): void {
-    if (!showStatusBar()) {
-      disposeStatusEntry()
-      return
-    }
-    const entry = statusEntryData()
-    if (statusEntry === undefined) {
-      statusEntry = statusBarService.addEntry(entry)
-      return
-    }
-    statusEntry.update(entry)
-  }
 
   /**
    * Renderer keystrokes cannot suppress IME composition, so Normal mode leaves
@@ -216,21 +177,14 @@ export function createVimEditorController(
 
   function syncContextKeys(): void {
     syncInputMethod()
-    // Report a mode only while this editor owns text focus; an unfocused
-    // controller's `normal` would otherwise claim the key with nothing behind it.
-    if (!enabled || !textFocused) {
-      contextKeyService.set('vimMode', '')
-      contextKeyService.set('vimNormalMode', false)
-      return
-    }
-    contextKeyService.set('vimMode', state.mode)
-    contextKeyService.set('vimNormalMode', state.mode === 'normal')
+    // The service owns the root keys; report this editor's mode only while it
+    // holds text focus so an unfocused controller cannot claim the mode.
+    vimModeService.setMode(surfaceKey, textFocused ? state.mode : 'normal')
   }
 
   function setMode(mode: VimState['mode']): void {
     state = { ...state, mode }
     syncContextKeys()
-    syncStatusBar()
   }
 
   function setPosition(position: VimPosition): void {
@@ -1071,20 +1025,17 @@ export function createVimEditorController(
     event.stopImmediatePropagation()
     if (result.command !== null) executeCommand(result.command)
     syncContextKeys()
-    syncStatusBar()
     return true
   }
 
   const focusSubscription = editor.onDidFocusEditorText(() => {
     textFocused = true
     syncContextKeys()
-    syncStatusBar()
   })
   const blurSubscription = editor.onDidBlurEditorText(() => {
     textFocused = false
     state = { ...state, mode: 'normal', count: 0, pendingOperator: null, pendingG: false }
     syncContextKeys()
-    syncStatusBar()
   })
   const modelSubscription = editor.onDidChangeModel(() => {
     state = INITIAL_VIM_STATE
@@ -1092,7 +1043,6 @@ export function createVimEditorController(
     cancelPreviewHighlightTimer()
     closeSearch(false, false)
     syncContextKeys()
-    syncStatusBar()
     if (highlightSearch && !searchHighlightSuppressed) refreshSearchHighlights()
   })
   const contentSubscription = editor.onDidChangeModelContent(() => {
@@ -1101,8 +1051,8 @@ export function createVimEditorController(
   disposables.push(focusSubscription, blurSubscription, modelSubscription, contentSubscription)
 
   const configSubscription = configService.onDidChangeConfiguration((event) => {
-    if (event.affectsConfiguration('editor.vimMode.enabled')) {
-      enabled = configService.get<boolean>('editor.vimMode.enabled') === true
+    if (event.affectsConfiguration('vim.enabled')) {
+      enabled = configService.get<boolean>('vim.enabled') === true
       if (!enabled) {
         state = INITIAL_VIM_STATE
         cancelSearchRefreshTimer()
@@ -1111,22 +1061,17 @@ export function createVimEditorController(
         clearSearchHighlight()
       }
       syncContextKeys()
-      syncStatusBar()
       return
     }
-    if (event.affectsConfiguration('editor.vimMode.showStatusBar')) {
-      syncStatusBar()
-    }
-    if (event.affectsConfiguration('editor.vimMode.autoSwitchInputMethod')) {
-      autoSwitchInputMethod =
-        configService.get<boolean>('editor.vimMode.autoSwitchInputMethod') !== false
+    if (event.affectsConfiguration('vim.autoSwitchInputMethod')) {
+      autoSwitchInputMethod = configService.get<boolean>('vim.autoSwitchInputMethod') !== false
       syncInputMethod()
     }
-    if (event.affectsConfiguration('editor.vimMode.searchCaseSensitivity')) {
+    if (event.affectsConfiguration('vim.searchCaseSensitivity')) {
       searchCaseMode = readSearchCaseMode()
       if (searchOrigin !== null) previewSearch()
     }
-    if (event.affectsConfiguration('editor.vimMode.highlightSearch')) {
+    if (event.affectsConfiguration('vim.highlightSearch')) {
       highlightSearch = readHighlightSearch()
       cancelSearchRefreshTimer()
       searchHighlightSuppressed = false
@@ -1152,7 +1097,6 @@ export function createVimEditorController(
       for (const disposable of disposables) disposable.dispose()
       disposables.length = 0
       disposeSearch()
-      disposeStatusEntry()
       // Only the controller holding text focus may leave English: main's saved
       // input method is shared, so a background group's disposal must not yank
       // Chinese back under the focused group.
@@ -1161,12 +1105,6 @@ export function createVimEditorController(
         inputMethodChain = inputMethodChain
           .then(() => inputMethodService.restore())
           .catch(() => undefined)
-      }
-      // Only clear the keys this controller owns: another editor group's
-      // controller may hold text focus right now.
-      if (textFocused) {
-        contextKeyService.set('vimNormalMode', false)
-        contextKeyService.set('vimMode', '')
       }
     },
   }

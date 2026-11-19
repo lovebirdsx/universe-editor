@@ -249,6 +249,14 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // global dispatcher uses it to hand Ctrl+F/B/D/U to the editor.
     contextKeyService.createKey<string>('vimMode', '')
     contextKeyService.createKey<boolean>('vimNormalMode', false)
+    // Global Vim surface state. IVimModeService owns the values; seeding them
+    // here keeps keybinding `when` clauses resolvable before the workbench
+    // mounts (and gives the Keyboard Shortcuts editor candidates).
+    contextKeyService.createKey<boolean>('vimEnabled', false)
+    contextKeyService.createKey<string>('vimSurface', '')
+    contextKeyService.createKey<string>('vimSurfaceId', '')
+    contextKeyService.createKey<boolean>('vimTerminalNormalMode', false)
+    contextKeyService.createKey<boolean>('vimSearchFocused', false)
 
     // True while the ACP session prompt input (an embedded Monaco editor) holds
     // text focus. Written by PromptMonacoEditor. Deliberately separate from

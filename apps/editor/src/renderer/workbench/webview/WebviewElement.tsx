@@ -213,6 +213,7 @@ export function WebviewElement({ panel }: { panel: IWebviewPanelModel }) {
       ref={iframeRef}
       className={styles['webviewFrame']}
       data-testid="webview-frame"
+      data-vim-surface="webview"
       // Navigate to a real same-origin blank doc (NOT about:blank) so the
       // extension's <meta> CSP governs the frame; see header. The HTML is handed
       // to the doc's loader by postMessage once `frameLoaded` flips. The iframe is

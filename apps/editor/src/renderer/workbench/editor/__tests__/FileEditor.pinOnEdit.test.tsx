@@ -140,6 +140,7 @@ import { MonacoModelRegistry } from '../monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { IOutlineService } from '../../../services/languageFeatures/OutlineService.js'
 import { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
+import { IVimModeService } from '../../../services/vim/vimModeService.js'
 import { ServicesContext } from '../../useService.js'
 
 function makeOutlineStub() {
@@ -284,6 +285,7 @@ describe('FileEditor — auto-pin on first edit', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
+    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -324,6 +326,7 @@ describe('FileEditor — auto-pin on first edit', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
+    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -364,6 +367,7 @@ describe('FileEditor — auto-pin on first edit', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
+    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -417,6 +421,7 @@ describe('FileEditor — auto-pin on first edit', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
+    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -469,6 +474,7 @@ describe('FileEditor — auto-pin on first edit', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
+    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
