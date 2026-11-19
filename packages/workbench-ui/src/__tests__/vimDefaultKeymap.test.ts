@@ -69,11 +69,13 @@ describe('VIM_DEFAULT_KEYMAP', () => {
     expect(entry?.when).toContain("vimSurfaceId == 'list:settings-toc'")
   })
 
-  it('chat-only i/a/e map to the existing agent commands while acpChatFocused', () => {
+  it('chat-only i/a/e/j/k map to the existing agent commands while acpChatFocused', () => {
     const expectations: ReadonlyArray<readonly [string, string]> = [
       ['i', 'workbench.action.agent.focusInput'],
       ['a', 'workbench.action.agent.scrollTimelineToTop'],
       ['e', 'workbench.action.agent.scrollTimelineToBottom'],
+      ['j', 'workbench.action.agent.scrollTimelineDown'],
+      ['k', 'workbench.action.agent.scrollTimelineUp'],
     ]
     for (const [key, command] of expectations) {
       const entries = entriesFor('list', [key])

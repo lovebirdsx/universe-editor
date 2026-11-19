@@ -3,7 +3,8 @@
  *
  *  Guards the Wave 2 Chat surface:
  *   - the timeline scroll container registers a stable `list:chat:<sessionId>`
- *     surface, and bare j/k/G drive the same focused-slot entry point Alt+J/K do
+ *     surface; bare j/k scroll the timeline (the chat's own shortcuts), while
+ *     gg/G drive the same focused-slot entry point Alt+A/E do
  *   - `m` raises the focused card's context menu from the keyboard
  *   - the prompt input still owns its letters (Vim does not treat it as the
  *     timeline surface), and `workbench.action.agent.focusInput` moves the caret
@@ -112,8 +113,14 @@ test.describe('@p1 vim chat', () => {
 
     const lastKey = await focusTimelineCard(page)
 
-    // k walks to the previous rendered row; G returns to the tail.
+    // Bare j/k are the timeline's scroll shortcuts: they move the viewport and
+    // leave the focused row alone (k from the tail would step up if they still
+    // ran list.focusUp). gg/G keep driving the focused-slot entry points.
     await page.keyboard.press('k')
+    await page.keyboard.press('j')
+    await expect.poll(() => focusedTimelineKey(page), POLL).toBe(lastKey)
+    await page.keyboard.press('g')
+    await page.keyboard.press('g')
     await expect.poll(() => focusedTimelineKey(page), POLL).not.toBe(lastKey)
     await page.keyboard.press('G')
     await expect.poll(() => focusedTimelineKey(page), POLL).toBe(lastKey)

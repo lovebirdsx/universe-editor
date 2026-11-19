@@ -102,7 +102,7 @@ useVimSurface({
 2. **定 surfaceKey**：有稳定视图 id 用 `useVimSurfaceKey(kind, id)`；实例级用 `useVimSurfaceKey(kind)`（自动键）。关闭 / 销毁后需要重新从默认模式开始时才调用 `vimModeService.forgetSurface(key)`。
 3. **实现 actions**：只实现该 surface 真正支持的操作。`left/right` 在树里表示折叠 / 展开进子级，在标签栏表示前后切换，在浮层由宿主定义。
 4. **注册**：`useVimSurface` 的 `focus` 按「容器是否自己持有 tabIndex」选择；可编辑控件要留在里面的列表用 `within`。仲裁对非 editor / terminal surface 默认拒绝 editable 焦点，dispatcher 的 editable guard 是第二道防线。
-5. **补 keymap**：通用键位加进 `vimDefaultKeymap.ts`；只对某视图生效的键用 `when: "vimSurfaceId == 'list:my-view'"`（设置页的 `/`、Chat 的 `i/a/e` 是范例）。
+5. **补 keymap**：通用键位加进 `vimDefaultKeymap.ts`；只对某视图生效的键用 `when: "vimSurfaceId == 'list:my-view'"`（设置页的 `/`、Chat 的 `i/a/e/j/k` 是范例）。
 6. **补命令**：新的 action 需要命令 id 时，在 `vimSurfaceActions.ts` 或对应域 actions 中注册，命令体里从活跃 surface 的 `actions` 转发。
 7. **测试**：workbench-ui 适配器测试 + 对应界面测试；涉及跨进程状态时补 e2e。
 
