@@ -39,8 +39,12 @@ import type { McpServerDefinition } from '../../../services/acp/acpMcpServers.js
 import { McpPickerPanel, McpServerPicker } from '../McpServerPicker.js'
 import type { ConfigBarAnchor } from '../ConfigOptionsBar.js'
 import { ServicesContext } from '../../useService.js'
+import { __resetVimSurfacesForTests, getActiveVimSurface } from '@universe-editor/workbench-ui'
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  __resetVimSurfacesForTests()
+})
 
 interface FakeSession extends IAcpSession {
   readonly mcpServerSelection: ISettableObservable<readonly string[] | null>
@@ -651,6 +655,17 @@ describe('McpServerPicker', () => {
     // The popover wires Escape on the next animation frame; flush it.
     await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
     fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('dismisses from the Vim overlay escape action', () => {
+    const { onClose } = renderPicker({ service: makeService(POOL), open: true })
+    expect(screen.getByTestId('acp-mcp-picker-popover')).toBeTruthy()
+    const active = getActiveVimSurface(document)
+    expect(active?.surface.kind).toBe('overlay')
+    // Vim consumes Escape ahead of AnchoredSurface, so the surface action runs
+    // the host's peel callback and then performs the dismissal itself.
+    act(() => active!.surface.actions.escape?.(1))
     expect(onClose).toHaveBeenCalled()
   })
 })

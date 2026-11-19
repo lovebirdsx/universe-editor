@@ -84,6 +84,9 @@ import {
   isKeyupContextMenuSupplement,
   requestOwnerFrame,
   useCtrlNavigationLayer,
+  useVimSurface,
+  useVimSurfaceKey,
+  writeClipboardText,
   type OwnerFrame,
 } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
@@ -710,6 +713,65 @@ function ChatScroll({
     directions: ['up', 'down'],
     getElement: () => containerRef.current,
     onMove: (direction) => handleRef.current.move(direction === 'down' ? 'next' : 'prev'),
+  })
+
+  // Bare Vim keys: the same widget entry points Alt+J/K, Alt+H/L and Alt+A/E
+  // drive, so the two key layers cannot diverge. The prompt input lives outside
+  // this container (and is editable), so it never activates this surface.
+  const vimSurfaceKey = useVimSurfaceKey('list', `chat:${session.id}`)
+  useVimSurface({
+    id: vimSurfaceKey,
+    kind: 'list',
+    focus: 'within',
+    getElement: () => containerRef.current,
+    getSurfaceKey: () => vimSurfaceKey,
+    defaultMode: 'normal',
+    actions: {
+      move: (direction, count) => {
+        if (direction === 'left') {
+          handleRef.current.moveLevel('out')
+          return
+        }
+        if (direction === 'right') {
+          handleRef.current.moveLevel('in')
+          return
+        }
+        const step = direction === 'down' ? 'next' : 'prev'
+        for (let i = 0; i < Math.max(1, count); i++) handleRef.current.move(step)
+      },
+      first: () => handleRef.current.move('first'),
+      last: () => handleRef.current.move('last'),
+      page: (direction, count) => {
+        const target = direction === 'down' ? 'pageDown' : 'pageUp'
+        for (let i = 0; i < Math.max(1, count); i++) handleRef.current.scrollTimeline(target)
+      },
+      // Deterministic fold state for z o / z c; Enter / o toggle like Alt+F.
+      expand: () => {
+        const key = handleRef.current.getFocusedKey()
+        if (key !== null) handleRef.current.setSlotCollapsed(new Map([[key, false]]))
+      },
+      collapse: () => {
+        const key = handleRef.current.getFocusedKey()
+        if (key !== null) handleRef.current.setSlotCollapsed(new Map([[key, true]]))
+      },
+      toggle: () => handleRef.current.toggleCollapse(),
+      activate: () => handleRef.current.toggleCollapse(),
+      contextMenu: () => {
+        const container = containerRef.current
+        if (!container) return
+        const key = focusedKeyRef.current
+        const row =
+          key !== null
+            ? (findRowElement(container, 'data-timeline-key', key) ??
+              findRowElement(container, 'data-sticky-key', key))
+            : null
+        dispatchKeyboardContextMenu(row ?? container, row !== null)
+      },
+      copy: () => {
+        const text = handleRef.current.getFocusedText()
+        if (text) void writeClipboardText(text)
+      },
+    },
   })
   const saved = AcpChatViewStateCache.load(session.id)
   const stickRef = useRef(saved?.stuck ?? true)

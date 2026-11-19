@@ -120,6 +120,11 @@ export function ConfigBarOverflowMenu({
 
   const expandedIndex = overflowEntries.findIndex((e) => e.key === expandedKey)
 
+  // The Vim overlay surface's escape action is invoked outside React's handler
+  // order, so it reaches the same peel/dismiss logic through this ref (the
+  // handler itself depends on state the row nav declares below).
+  const escapeRef = useRef<() => void>(() => {})
+
   const rowNav = useOverlayListNavigation({
     count: overflowEntries.length,
     // The cursor starts at the top of the rows. It is NOT seeded from
@@ -157,6 +162,7 @@ export function ConfigBarOverflowMenu({
     // straight back out of the body the user asked to land in.
     autoFocus: expandedKey === null,
     ariaLabel: localize('acp.config.more', 'More options…'),
+    onEscape: () => escapeRef.current(),
   })
 
   // Destructured so the callbacks below depend on the (stable) members rather
@@ -212,6 +218,12 @@ export function ConfigBarOverflowMenu({
     button?.current?.focus()
     return false
   }, [expandedKey, leaveBody, buttonRef])
+
+  // Vim consumed the key before AnchoredSurface's window listener could: peel a
+  // body first, otherwise perform the dismissal AnchoredSurface would have run.
+  escapeRef.current = () => {
+    if (!escapePanel()) onClose()
+  }
 
   return (
     <>
@@ -421,6 +433,7 @@ function OptionOverflowRow({
           onExitUp={onExitUp}
           onExitDown={onExitDown}
           onExitLeft={onExitLeft}
+          onEscape={onExitLeft}
         />
       }
       active={active}
@@ -462,6 +475,7 @@ function SubagentOverflowRow({
           onExitUp={onExitUp}
           onExitDown={onExitDown}
           onExitLeft={onExitLeft}
+          onEscape={onExitLeft}
           onConfirmCurrent={onCommitted}
         />
       }
@@ -598,6 +612,7 @@ function McpOverflowRowInner({
           onExitUp={onExitUp}
           onExitDown={onExitDown}
           onExitLeft={onExitLeft}
+          onEscape={onExitLeft}
         />
       }
       active={active}

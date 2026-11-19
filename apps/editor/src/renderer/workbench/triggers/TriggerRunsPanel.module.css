@@ -39,6 +39,15 @@
   vertical-align: top;
 }
 
+.runsTable:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.runsRow[aria-selected='true'] {
+  background: var(--vscode-list-activeSelectionBackground);
+}
+
 .runsRow {
   cursor: pointer;
 }

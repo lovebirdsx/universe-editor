@@ -20,7 +20,7 @@ import {
   StorageScope,
   localize,
 } from '@universe-editor/platform'
-import { Button, Select } from '@universe-editor/workbench-ui'
+import { Button, Select, useFlatListNavigation } from '@universe-editor/workbench-ui'
 import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
 import { parseWorkspaceUri } from '../../../shared/triggers/configParse.js'
 import { formatTriggerDuration } from '../../services/triggers/triggerPresentation.js'
@@ -87,6 +87,8 @@ export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [outcome, setOutcome] = useState<OutcomeFilter>('all')
   const [restoreDone, setRestoreDone] = useState(false)
+  const [focusedRunId, setFocusedRunId] = useState<string | undefined>(undefined)
+  const tableRef = useRef<HTMLTableElement | null>(null)
   const filterTouched = useRef(false)
   const restoreOk = useRef(false)
   const requestRef = useRef(0)
@@ -242,6 +244,32 @@ export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
     [files, loggerService, notifications, triggers],
   )
 
+  const activateEntry = useCallback(
+    (entry: TriggerRunHistoryEntry) => {
+      if (entry.sessionId !== undefined) revealSession(entry)
+      else openReport(entry)
+    },
+    [openReport, revealSession],
+  )
+
+  const focusedIndex =
+    focusedRunId === undefined ? -1 : runs.findIndex((entry) => entry.runId === focusedRunId)
+  const nav = useFlatListNavigation({
+    count: runs.length,
+    focusedIndex,
+    onFocusChange: (index) => setFocusedRunId(runs[index]?.runId),
+    getItemKey: (index) => runs[index]?.runId ?? '',
+    getContainer: () => tableRef.current,
+    rowDataAttr: 'data-run-id',
+    role: 'grid',
+    ariaLabel: localize('trigger.manager.runs.table', 'Trigger runs'),
+    onActivate: (index) => {
+      const entry = runs[index]
+      if (entry !== undefined) activateEntry(entry)
+    },
+    vimSurfaceId: 'trigger-runs',
+  })
+
   return (
     <div className={styles['runs']} data-testid="trigger-manager-runs">
       <div className={styles['runsToolbar']}>
@@ -294,7 +322,12 @@ export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
         </div>
       )}
       {runs.length > 0 && (
-        <table className={styles['runsTable']} data-testid="trigger-manager-runs-table">
+        <table
+          ref={tableRef}
+          className={styles['runsTable']}
+          data-testid="trigger-manager-runs-table"
+          {...nav.containerProps}
+        >
           <thead>
             <tr>
               <th>{localize('trigger.manager.runs.column.time', 'Time')}</th>
@@ -316,16 +349,8 @@ export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
                   className={styles['runsRow']}
                   data-testid="trigger-manager-runs-row"
                   data-run-id={entry.runId}
-                  tabIndex={0}
-                  onClick={() => {
-                    if (entry.sessionId !== undefined) revealSession(entry)
-                    else openReport(entry)
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter') return
-                    if (entry.sessionId !== undefined) revealSession(entry)
-                    else openReport(entry)
-                  }}
+                  aria-selected={focusedRunId === entry.runId}
+                  onClick={() => activateEntry(entry)}
                 >
                   <td className={styles['runsTime']} data-tooltip={absoluteTime(entry.endedAt)}>
                     {relativeTime(entry.endedAt)}

@@ -1643,6 +1643,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     scrollRef,
     rowAttribute: 'data-id',
     rowHeight: ROW_HEIGHT,
+    vimSurfaceId: 'perforce-graph',
   })
   const listFocus = useGraphListFocus(scrollRef)
 

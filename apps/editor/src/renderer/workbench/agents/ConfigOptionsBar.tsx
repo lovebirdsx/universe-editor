@@ -769,6 +769,12 @@ function ConfigOptionPopover({
         optionNotes={optionNotes}
         onCommit={onCommit}
         onAltDigit={onAltDigit}
+        onEscape={() => {
+          // Vim's surface.escape path skips AnchoredSurface's own handler, so
+          // reproduce its two-step behaviour: peel (focus the trigger) then
+          // dismiss when the content declined to keep the surface open.
+          if (!onEscape()) onDismiss()
+        }}
       />
     </AnchoredSurface>
   )
@@ -789,6 +795,7 @@ export function ConfigOptionPanel({
   onExitUp,
   onExitDown,
   onExitLeft,
+  onEscape,
 }: {
   option: SessionConfigOption & { type: 'select' }
   optionNotes?: ConfigOptionNotes | undefined
@@ -798,6 +805,8 @@ export function ConfigOptionPanel({
   onExitDown?: (() => void) | undefined
   /** True = collapsed; false leaves the key to whatever is underneath. */
   onExitLeft?: (() => boolean) | undefined
+  /** Vim `surface.escape`: dismiss the hosting surface (leaving the list). */
+  onEscape?: (() => void) | undefined
 }) {
   const flat = useMemo(() => flattenSelectOptions(option.options), [option.options])
   // When nested, the ends are exits rather than wrap points.
@@ -816,6 +825,7 @@ export function ConfigOptionPanel({
     ...(onExitUp !== undefined ? { onExitUp } : {}),
     ...(onExitDown !== undefined ? { onExitDown } : {}),
     ...(onExitLeft !== undefined ? { onExitLeft } : {}),
+    ...(onEscape !== undefined ? { onEscape } : {}),
   })
   return (
     // The surface root is the scroll container, so the focus holder is a bare

@@ -1,4 +1,4 @@
-import { useState, useCallback, type DragEvent } from 'react'
+import { useEffect, useLayoutEffect, useState, useCallback, type DragEvent } from 'react'
 import {
   ViewContainerLocation,
   IViewsService,
@@ -7,6 +7,7 @@ import {
   localize,
 } from '@universe-editor/platform'
 import type { IPart, IViewContainerDescriptor } from '@universe-editor/platform'
+import { useVimSurface } from '@universe-editor/workbench-ui'
 import { useService, useObservable } from '../useService.js'
 import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { VIEW_DRAG_MIME, dragContainsView, viewDragData } from '../dnd/viewDragData.js'
@@ -20,8 +21,11 @@ import styles from './ActivityBar.module.css'
 
 interface ActivityBarItemProps {
   descriptor: IViewContainerDescriptor
+  index: number
   isActive: boolean
+  tabIndex: number
   onClick: () => void
+  onFocus: () => void
   onDragStart: (e: DragEvent) => void
   onDragEnd: () => void
   onDragOver: (e: DragEvent) => void
@@ -33,8 +37,11 @@ interface ActivityBarItemProps {
 
 function ActivityBarItem({
   descriptor,
+  index,
   isActive,
+  tabIndex,
   onClick,
+  onFocus,
   onDragStart,
   onDragEnd,
   onDragOver,
@@ -63,6 +70,9 @@ function ActivityBarItem({
     <button
       className={className}
       onClick={onClick}
+      onFocus={onFocus}
+      tabIndex={tabIndex}
+      data-activitybar-index={index}
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
@@ -85,21 +95,75 @@ function ActivityBarItem({
   )
 }
 
+interface PartFocusTargetHost {
+  _setFocusTarget?(el: HTMLElement | null): void
+}
+
+function setPartFocusTarget(part: IPart, el: HTMLElement | null): void {
+  const internal = part as unknown as PartFocusTargetHost
+  internal._setFocusTarget?.(el)
+}
+
 export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
   const viewsService = useService(IViewsService)
   const layoutService = useService(ILayoutService)
   const viewDescriptors = useViewDescriptors()
   const activeContainerByLocation = useObservable(viewsService.activeContainerByLocation)
   const activeId = activeContainerByLocation[ViewContainerLocation.SideBar]
-  const containerRef = usePartContainer<HTMLElement>(part)
+  const navRef = usePartContainer<HTMLElement>(part)
 
   const containers = viewDescriptors.getViewContainersByLocation(ViewContainerLocation.SideBar)
+  const activeIndex = Math.max(
+    0,
+    containers.findIndex((container) => container.id === activeId),
+  )
+  // Roving tabindex cursor. It follows j/k without opening the container; the
+  // active-container highlight still follows `activeId`.
+  const [focusedIndex, setFocusedIndex] = useState(activeIndex)
+  const rovingIndex =
+    containers.length === 0 ? -1 : Math.max(0, Math.min(focusedIndex, containers.length - 1))
 
-  const [draggingId, setDraggingId] = useState<string | undefined>(undefined)
-  const [dropTarget, setDropTarget] = useState<
-    { id: string; edge: 'before' | 'after' | 'merge' } | undefined
-  >(undefined)
-  const [locationDropActive, setLocationDropActive] = useState(false)
+  // Activation from another surface (command, palette, click on a tab header)
+  // moves the roving cursor to the shown container while focus is outside.
+  useEffect(() => {
+    const nav = navRef.current
+    if (nav !== null && nav.contains(nav.ownerDocument.activeElement)) return
+    setFocusedIndex(activeIndex)
+  }, [activeIndex, containers.length, navRef])
+
+  // `workbench.action.focusActivityBar` focuses the registered Part; point it
+  // at the current item instead of the non-focusable nav so DOM focus visibly
+  // lands on the ActivityBar item.
+  useLayoutEffect(() => {
+    if (part === undefined) return
+    const nav = navRef.current
+    const index =
+      nav !== null && nav.contains(nav.ownerDocument.activeElement) ? rovingIndex : activeIndex
+    const target =
+      index >= 0
+        ? (nav?.querySelector<HTMLElement>(`[data-activitybar-index="${index}"]`) ?? nav)
+        : nav
+    setPartFocusTarget(part, target ?? null)
+    return () => setPartFocusTarget(part, null)
+  }, [part, navRef, activeIndex, rovingIndex])
+
+  const activateContainer = useCallback(
+    (id: string) => {
+      // Mirror FindInFilesAction / container cycling: activating a container
+      // also focuses its primary view (focusView opens the container, makes
+      // the part visible, and focuses the view's registered focusable).
+      const firstViewId = viewDescriptors.getViewsByContainer(id)[0]?.id
+      if (firstViewId) {
+        void layoutService.focusView(firstViewId, { source: 'user' })
+        return
+      }
+      viewsService.openViewContainer(id)
+      if (!layoutService.getVisible(PartId.SideBar)) {
+        layoutService.setVisible(PartId.SideBar, true)
+      }
+    },
+    [viewsService, layoutService, viewDescriptors],
+  )
 
   const handleClick = useCallback(
     (id: string) => {
@@ -108,22 +172,54 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
         viewsService.closeViewContainer(id)
         layoutService.setVisible(PartId.SideBar, false)
       } else {
-        // Mirror FindInFilesAction / container cycling: activating a container
-        // also focuses its primary view (focusView opens the container, makes
-        // the part visible, and focuses the view's registered focusable).
-        const firstViewId = viewDescriptors.getViewsByContainer(id)[0]?.id
-        if (firstViewId) {
-          void layoutService.focusView(firstViewId, { source: 'user' })
-        } else {
-          viewsService.openViewContainer(id)
-          if (!sidebarVisible) {
-            layoutService.setVisible(PartId.SideBar, true)
-          }
-        }
+        activateContainer(id)
       }
     },
-    [viewsService, layoutService, activeId, viewDescriptors],
+    [viewsService, layoutService, activeId, activateContainer],
   )
+
+  const focusItem = useCallback(
+    (index: number) => {
+      if (containers.length === 0) return
+      const clamped = Math.max(0, Math.min(containers.length - 1, index))
+      const el = navRef.current?.querySelector<HTMLElement>(`[data-activitybar-index="${clamped}"]`)
+      if (el === null || el === undefined) return
+      el.focus()
+      setFocusedIndex(clamped)
+    },
+    [containers.length, navRef],
+  )
+
+  // Vim `activityBar` surface: j/k move the roving cursor between containers,
+  // Enter opens the focused container and hands focus to its first view.
+  useVimSurface({
+    id: 'activityBar',
+    kind: 'activityBar',
+    focus: 'within',
+    getElement: () => navRef.current,
+    getSurfaceKey: () => 'activityBar',
+    defaultMode: 'normal',
+    actions: {
+      move: (direction, count) => {
+        const delta = direction === 'up' || direction === 'left' ? -1 : 1
+        focusItem(rovingIndex + delta * Math.max(1, count))
+      },
+      next: (count) => focusItem(rovingIndex + Math.max(1, count)),
+      previous: (count) => focusItem(rovingIndex - Math.max(1, count)),
+      first: (count) => focusItem(count > 1 ? count - 1 : 0),
+      last: (count) => focusItem(count > 1 ? count - 1 : containers.length - 1),
+      activate: () => {
+        const target = containers[rovingIndex]
+        if (target !== undefined) activateContainer(target.id)
+      },
+    },
+  })
+
+  const [draggingId, setDraggingId] = useState<string | undefined>(undefined)
+  const [dropTarget, setDropTarget] = useState<
+    { id: string; edge: 'before' | 'after' | 'merge' } | undefined
+  >(undefined)
+  const [locationDropActive, setLocationDropActive] = useState(false)
 
   const dropPayload = (e: DragEvent): { kind: 'view' | 'container'; id: string } | undefined => {
     if (!dragContainsView(e.dataTransfer)) return undefined
@@ -181,10 +277,11 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
 
   return (
     <nav
-      ref={containerRef}
+      ref={navRef}
       className={`${styles['activitybar']} ${locationDropActive ? styles['locationDrop'] : ''}`}
       aria-label={localize('menu.activityBar', 'Activity Bar')}
       data-testid="part-activitybar"
+      tabIndex={-1}
       onDragOver={onLocationDragOver}
       onDragLeave={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setLocationDropActive(false)
@@ -192,12 +289,15 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
       onDrop={onLocationDrop}
     >
       <div className={styles['items']}>
-        {containers.map((c) => (
+        {containers.map((c, index) => (
           <ActivityBarItem
             key={c.id}
             descriptor={c}
+            index={index}
             isActive={activeId === c.id}
+            tabIndex={index === rovingIndex ? 0 : -1}
             onClick={() => handleClick(c.id)}
+            onFocus={() => setFocusedIndex(index)}
             dragging={draggingId === c.id}
             dropEdge={dropTarget?.id === c.id ? dropTarget.edge : undefined}
             onDragStart={(e) => {

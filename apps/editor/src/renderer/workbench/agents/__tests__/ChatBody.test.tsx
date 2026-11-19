@@ -68,6 +68,7 @@ import { AcpChatViewStateCache } from '../../../services/acp/session/acpChatView
 import { AcpSessionOutlineRegistry } from '../../../services/acp/session/acpSessionOutlineRegistry.js'
 import { memoryTrimmedNotice } from '../../../services/acp/session/acpSession.js'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
+import { __resetVimSurfacesForTests, getActiveVimSurface } from '@universe-editor/workbench-ui'
 import { ChatBody } from '../ChatBody.js'
 import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import { ServicesContext } from '../../useService.js'
@@ -81,6 +82,7 @@ import { FakeFocusScopeService } from '../../../services/focus/testing/fakeFocus
 
 afterEach(() => {
   cleanup()
+  __resetVimSurfacesForTests()
   AcpChatViewStateCache._resetForTests()
   AcpSessionOutlineRegistry._resetForTests()
 })
@@ -662,6 +664,81 @@ function renderEditorChat(session: IAcpSession, autoFocus = true) {
   )
   return { ...result, widgetRef, groups, inst }
 }
+
+describe('ChatBody — Vim list surface', () => {
+  const items: readonly TimelineItem[] = [
+    { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    { kind: 'message', id: 'b', message: makeMessage('b', 'second') },
+    { kind: 'message', id: 'c', message: makeMessage('c', 'third') },
+  ]
+
+  function scrollOf(container: HTMLElement): HTMLElement {
+    return container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!.parentElement!
+  }
+
+  function activeSurface() {
+    const active = getActiveVimSurface(document)
+    expect(active).toBeDefined()
+    return active!
+  }
+
+  it('registers a stable list surface keyed by the session id and moves with counts', () => {
+    const { container } = renderChat(makeSession('s-vim', items))
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:a'))
+    })
+    expect(container.ownerDocument.activeElement).toBe(scrollOf(container))
+    expect(activeSurface().surfaceKey).toBe('list:chat:s-vim')
+
+    act(() => activeSurface().surface.actions.move?.('down', 2))
+    expect(slotEl(container, 'm:c').className).toContain(focusedClass)
+    act(() => activeSurface().surface.actions.move?.('up', 1))
+    expect(slotEl(container, 'm:b').className).toContain(focusedClass)
+
+    act(() => activeSurface().surface.actions.first?.(1))
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+    act(() => activeSurface().surface.actions.last?.(1))
+    expect(slotEl(container, 'm:c').className).toContain(focusedClass)
+  })
+
+  it('folds the focused card and raises its context menu', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const { container, getByRole, getByText } = renderChat(makeSession('s-vim-menu', items))
+      act(() => {
+        fireEvent.click(slotEl(container, 'm:a'))
+      })
+      const before = collapseToggle(slotEl(container, 'm:a')).getAttribute('aria-expanded')
+      act(() => activeSurface().surface.actions.activate?.(1, false))
+      expect(collapseToggle(slotEl(container, 'm:a')).getAttribute('aria-expanded')).not.toBe(
+        before,
+      )
+
+      act(() => activeSurface().surface.actions.contextMenu?.(1))
+      expect(getByRole('menu')).toBeTruthy()
+      fireEvent.click(getByText('Capture Session Arg'))
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('is not active while focus sits outside the timeline', () => {
+    const { container } = renderChat(makeSession('s-vim-out', items))
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:a'))
+    })
+    expect(activeSurface().surfaceKey).toBe('list:chat:s-vim-out')
+
+    const outside = container.ownerDocument.createElement('input')
+    container.ownerDocument.body.appendChild(outside)
+    try {
+      act(() => outside.focus())
+      expect(getActiveVimSurface(document)).toBeUndefined()
+    } finally {
+      outside.remove()
+    }
+  })
+})
 
 describe('ChatBody — focus surface survives an editor tab round trip', () => {
   const items: readonly TimelineItem[] = [

@@ -60,6 +60,7 @@ import {
   type AutoReviewAvailability,
 } from '../../../services/acp/session/acpCodexAutoReviewGuard.js'
 import { ServicesContext } from '../../useService.js'
+import { __resetVimSurfacesForTests, getActiveVimSurface } from '@universe-editor/workbench-ui'
 import {
   FakeResizeObserver,
   fireResize,
@@ -67,7 +68,10 @@ import {
   stubWidth,
 } from './helpers/resizeObserver.js'
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  __resetVimSurfacesForTests()
+})
 
 const stubFileService = { _serviceBrand: undefined } as unknown as IFileServiceType
 const stubWorkspaceService = {
@@ -462,6 +466,20 @@ describe('ConfigOptionsBar', () => {
     await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByTestId('acp-config-model-popover')).toBeNull()
+  })
+
+  it('Escape dismisses the popover through the Vim overlay surface action', () => {
+    renderWithServices(<ConfigOptionsBar session={makeSession([MODEL_OPTION])} />)
+    fireEvent.click(screen.getByTestId('acp-config-model-trigger'))
+    expect(screen.getByTestId('acp-config-model-popover')).toBeTruthy()
+
+    const active = getActiveVimSurface(document)
+    expect(active?.surface.kind).toBe('overlay')
+    // Vim consumes Escape before AnchoredSurface sees it, so the surface action
+    // itself has to focus the trigger and dismiss the popover.
+    act(() => active!.surface.actions.escape?.(1))
+    expect(screen.queryByTestId('acp-config-model-popover')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByTestId('acp-config-model-trigger'))
   })
 
   it('outside mousedown dismisses the popover', async () => {

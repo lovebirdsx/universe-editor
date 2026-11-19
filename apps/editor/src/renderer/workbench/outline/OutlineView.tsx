@@ -451,6 +451,7 @@ export function OutlineView() {
           model={model}
           rootRef={containerRef}
           scrollStateKey="outline"
+          vimSurfaceId="outline"
           className={styles['view'] ?? ''}
           ariaLabel={localize('outline.label', 'Outline')}
           renderRow={(ctx) => {

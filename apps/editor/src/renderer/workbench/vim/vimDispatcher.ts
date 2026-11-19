@@ -291,7 +291,13 @@ export class VimDispatcher {
     debug: IKeyboardDebugService | undefined,
   ): void {
     const context = this._options.contextKeyService
-    const entry = matches.find((candidate) => {
+    // A `when` entry is the scoped meaning of the key (chat-only `i`, the
+    // settings-only `/`); it must be tried before the default entry so a
+    // matching scope wins instead of being shadowed by registration order.
+    const ordered = [...matches].sort(
+      (a, b) => Number(a.when === undefined) - Number(b.when === undefined),
+    )
+    const entry = ordered.find((candidate) => {
       if (candidate.when === undefined) return true
       return context.contextMatchesRules(ContextKeyExpr.deserialize(candidate.when))
     })

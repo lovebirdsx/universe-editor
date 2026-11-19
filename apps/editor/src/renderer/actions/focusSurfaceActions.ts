@@ -9,6 +9,7 @@
 
 import {
   Action2,
+  IEditorGroupsService,
   ILayoutService,
   IViewsService,
   PartId,
@@ -17,6 +18,9 @@ import {
   type IAction2Options,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
+import { focusActiveEditorTabs, holdEditorTabsFocus } from '../workbench/editor/useEditorTabsVim.js'
+import { focusViewContainerTabsArea } from '../workbench/paneComposite/viewContainerTabsFocus.js'
 
 interface DefaultContainer {
   readonly location: ViewContainerLocation
@@ -101,14 +105,30 @@ export class FocusActivityBarAction extends FocusPartAction {
   }
 }
 
+const FOCUSABLE_CONTAINER_PARTS: ReadonlyArray<readonly [PartId, ViewContainerLocation]> = [
+  [PartId.SideBar, ViewContainerLocation.SideBar],
+  [PartId.SecondarySideBar, ViewContainerLocation.SecondarySideBar],
+  [PartId.Panel, ViewContainerLocation.Panel],
+]
+
 export class FocusEditorTabsAction extends Action2 {
   static readonly ID = 'workbench.action.focusEditorTabs'
   constructor() {
     super(options(FocusEditorTabsAction.ID, 'Focus Editor Tabs'))
   }
 
-  override run(_accessor: ServicesAccessor): void {
-    // TODO(WP4): focus the active group's tab strip once it registers a tabs surface.
+  override run(accessor: ServicesAccessor): void {
+    // A freshly opened editor schedules its Monaco focus one frame out. This
+    // command's whole point is to move focus to the strip, so hold that intent
+    // across the pending pass instead of letting it steal the focus back.
+    const group = accessor.get(IEditorGroupsService).activeGroup
+    if (!focusActiveEditorTabs()) {
+      console.debug('[vim] focusEditorTabs: active group has no tab strip')
+      return
+    }
+    // The strip now owns DOM focus; suppress editor focus until focus actually
+    // leaves it (including the two-frame model swap of the active editor).
+    holdEditorTabsFocus(group)
   }
 }
 
@@ -118,8 +138,22 @@ export class FocusViewContainerTabsAction extends Action2 {
     super(options(FocusViewContainerTabsAction.ID, 'Focus View Container Tabs'))
   }
 
-  override run(_accessor: ServicesAccessor): void {
-    // TODO(WP4): focus the active view container's header tabs.
+  override run(accessor: ServicesAccessor): void {
+    const layoutService = accessor.get(ILayoutService)
+    // Prefer the container part the user is already in, then the first visible
+    // tabs header (the SideBar's label header has no tabs to focus). Unit-test
+    // doubles may not implement `getPart`, so only ask when it exists.
+    if (typeof layoutService.getPart === 'function') {
+      for (const [partId, location] of FOCUSABLE_CONTAINER_PARTS) {
+        if (!isPartFocusedInActiveDocument(layoutService, partId)) continue
+        if (focusViewContainerTabsArea(location)) return
+      }
+    }
+    for (const [partId, location] of FOCUSABLE_CONTAINER_PARTS) {
+      if (!layoutService.getVisible(partId)) continue
+      if (focusViewContainerTabsArea(location)) return
+    }
+    console.debug('[vim] focusViewContainerTabs: no visible container tab strip')
   }
 }
 

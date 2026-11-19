@@ -123,6 +123,7 @@ export function KeybindingsTable({
     // the reveal lookup is pointed at it rather than the default data-row-key.
     rowDataAttr: 'data-row-id',
     ariaLabel: localize('keybindings.table.ariaLabel', 'Keyboard shortcuts'),
+    vimSurfaceId: 'keybindings',
     // +1 for the column-header row, which is part of the grid but not of `rows`.
     ariaRowCount: rows.length + 1,
     // Read at keydown time, not memoized: the editor is resizable, and a stale

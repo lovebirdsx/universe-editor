@@ -16,10 +16,9 @@ import {
 } from '@universe-editor/platform'
 import {
   ContextMenu,
-  dispatchKeyboardContextMenu,
-  isContextMenuKey,
   isKeyboardContextMenu,
   isKeyupContextMenuSupplement,
+  useFlatListNavigation,
 } from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
@@ -46,9 +45,11 @@ export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
   const contextKeyService = useService(IContextKeyService)
   const memory = useContextMenuMemory()
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const tableRef = useRef<HTMLTableElement | null>(null)
   const [snapshot, setSnapshot] = useState<IProcessSnapshot | null>(null)
   const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(new Set())
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
+  const [focusedPid, setFocusedPid] = useState<number | undefined>(undefined)
 
   useEffect(() => {
     let disposed = false
@@ -80,6 +81,26 @@ export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
     })
   }
 
+  const rows = snapshot === null ? [] : flattenProcessTree(snapshot.root, collapsed)
+  const focusedIndex =
+    focusedPid === undefined ? -1 : rows.findIndex((row) => row.item.pid === focusedPid)
+  const nav = useFlatListNavigation({
+    count: rows.length,
+    focusedIndex,
+    onFocusChange: (index) => setFocusedPid(rows[index]?.item.pid),
+    getItemKey: (index) => String(rows[index]?.item.pid ?? ''),
+    getContainer: () => tableRef.current,
+    rowDataAttr: 'data-pid',
+    role: 'grid',
+    ariaLabel: localize('processExplorer.table', 'Processes'),
+    // Enter toggles the focused branch; leaves have no primary action.
+    onActivate: (index) => {
+      const row = rows[index]
+      if (row !== undefined && row.hasChildren) toggleCollapsed(row.item.pid)
+    },
+    vimSurfaceId: 'process-explorer',
+  })
+
   if (!snapshot) {
     return (
       <div className={styles['root']} data-testid="process-explorer">
@@ -90,14 +111,12 @@ export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
     )
   }
 
-  const rows = flattenProcessTree(snapshot.root, collapsed)
-
   return (
     <div ref={rootRef} className={styles['root']} data-testid="process-explorer">
       {snapshot.errorMessage !== undefined && (
         <div className={styles['error']}>{snapshot.errorMessage}</div>
       )}
-      <table className={styles['table']}>
+      <table ref={tableRef} className={styles['table']} {...nav.containerProps}>
         <thead>
           <tr>
             <th>{localize('processExplorer.columnName', 'Process Name')}</th>
@@ -118,15 +137,13 @@ export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
                 data-testid="process-explorer-row"
                 data-pid={item.pid}
                 data-role={item.role ?? ''}
+                aria-selected={focusedPid === item.pid}
                 className={item.load > 90 ? styles['highLoad'] : undefined}
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (!isContextMenuKey(e) || e.repeat) return
-                  e.preventDefault()
-                  e.stopPropagation()
-                  // The synthetic event bubbles into onContextMenu below.
-                  dispatchKeyboardContextMenu(e.currentTarget as HTMLElement, true)
-                }}
+                style={
+                  focusedPid === item.pid
+                    ? { background: 'var(--vscode-list-activeSelectionBackground, #094771)' }
+                    : undefined
+                }
                 onContextMenu={(e) => {
                   // No list host swallows Chromium's keyup-supplement event for
                   // us — drop it or the same keystroke re-anchors the menu.

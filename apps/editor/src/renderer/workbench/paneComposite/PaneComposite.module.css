@@ -114,6 +114,11 @@
   z-index: 6;
 }
 
+.tab:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
 .tab.active::after {
   content: '';
   position: absolute;

@@ -63,6 +63,7 @@ import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol
 import { MCP_ENTRY_KEY, SUBAGENT_ENTRY_KEY } from '../../../services/acp/configBarLayout.js'
 import { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
 import { ServicesContext } from '../../useService.js'
+import { __resetVimSurfacesForTests, getActiveVimSurface } from '@universe-editor/workbench-ui'
 import { ConfigOptionsBar } from '../ConfigOptionsBar.js'
 import {
   FakeResizeObserver,
@@ -73,6 +74,7 @@ import {
 
 afterEach(() => {
   cleanup()
+  __resetVimSurfacesForTests()
   globalThis.ResizeObserver = RealResizeObserver
   FakeResizeObserver.instances = []
 })
@@ -476,6 +478,38 @@ describe('ConfigBarOverflowMenu — packing and panel', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
     expect(document.activeElement).toBe(screen.getByTestId('acp-config-overflow-trigger'))
+  })
+
+  it('dismisses the panel through the Vim overlay escape action', async () => {
+    setupNarrowBar()
+    await fireResize()
+    openOverflowMenu()
+    expect(screen.getByTestId('acp-config-overflow-panel')).toBeTruthy()
+
+    const active = getActiveVimSurface(document)
+    expect(active?.surface.kind).toBe('overlay')
+    // Vim consumes Escape before AnchoredSurface's window listener runs, so the
+    // surface action has to perform the dismissal itself.
+    act(() => active!.surface.actions.escape?.(1))
+    expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByTestId('acp-config-overflow-trigger'))
+  })
+
+  it('peels an expanded body through the inner Vim overlay escape action', async () => {
+    setupNarrowBar()
+    await fireResize()
+    openOverflowMenu()
+    const panel = screen.getByTestId('acp-config-overflow-panel')
+    const modeRow = panel.querySelector<HTMLElement>('[data-entry-key="mode"]')!
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+    expect(modeRow.getAttribute('aria-expanded')).toBe('true')
+
+    // The expanded body is the innermost overlay and therefore owns the stroke.
+    const active = getActiveVimSurface(document)
+    expect(active?.surface.kind).toBe('overlay')
+    act(() => active!.surface.actions.escape?.(1))
+    expect(modeRow.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByTestId('acp-config-overflow-panel')).toBeTruthy()
   })
 
   it('a committed pick ends the panel and hands the caret back to the opener', async () => {

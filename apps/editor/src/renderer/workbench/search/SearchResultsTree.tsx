@@ -658,6 +658,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           model={model}
           rootRef={containerRef}
           scrollStateKey="search"
+          vimSurfaceId="search"
           className={styles['resultsTree'] ?? ''}
           ariaLabel={localize('search.results', 'Search results')}
           rowHeight={22}

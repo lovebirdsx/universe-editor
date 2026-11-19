@@ -402,6 +402,7 @@ export function ExtensionsView() {
     getItemKey: useCallback((index: number) => navigable[index]?.key ?? '', [navigable]),
     getContainer,
     ariaLabel: localize('extensions.list', 'Extensions'),
+    vimSurfaceId: 'extensions',
     onActivate: useCallback(
       (index: number) => {
         const row = navigable[index]

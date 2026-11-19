@@ -2437,6 +2437,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     scrollRef,
     rowAttribute: 'data-hash',
     rowHeight: ROW_HEIGHT,
+    vimSurfaceId: 'git-graph',
     ...(virtualize
       ? { scrollToRow: (index: number) => rowVirtualizer.scrollToIndex(index, { align: 'auto' }) }
       : {}),

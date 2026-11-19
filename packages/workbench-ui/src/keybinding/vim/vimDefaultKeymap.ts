@@ -13,7 +13,6 @@
 import type { IVimKeymapEntry, VimSurfaceKind } from './vimTypes.js'
 
 const LIST_LIKE: readonly VimSurfaceKind[] = ['list', 'menu', 'overlay']
-const CHROME_LIKE: readonly VimSurfaceKind[] = ['tabs', 'activityBar', 'viewContainerTabs']
 
 export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
   // -- lists, menus, overlays -------------------------------------------------
@@ -51,34 +50,157 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
   { id: 'list.delete', keys: ['d', 'd'], command: 'list.delete', surfaces: LIST_LIKE },
   { id: 'surface.escape', keys: ['escape'], command: 'surface.escape', surfaces: LIST_LIKE },
 
-  // -- tabs / activity bar / view container tabs -----------------------------
+  // -- running before the generic list entries so the first `when` match wins -
+  // Settings rows and TOC: `/` hands focus to the settings search box.
   {
-    id: 'surface.previous.h',
-    keys: ['h'],
-    command: 'surface.previous',
-    surfaces: CHROME_LIKE,
+    id: 'list.focusSettingsSearch',
+    keys: ['/'],
+    command: 'workbench.action.focusSettingsSearch',
+    surfaces: ['list'],
+    when: "vimSurfaceId == 'list:settings' || vimSurfaceId == 'list:settings-toc'",
+  },
+  // Other list views that already expose a focus-search command.
+  {
+    id: 'list.focusKeybindingsSearch',
+    keys: ['/'],
+    command: 'keybindings.editor.searchKeybindings',
+    surfaces: ['list'],
+    when: "vimSurfaceId == 'list:keybindings'",
   },
   {
-    id: 'surface.previous.k',
+    id: 'list.focusPerforceGraphSearch',
+    keys: ['/'],
+    command: 'perforce-graph.focusSearch',
+    surfaces: ['list'],
+    when: "vimSurfaceId == 'list:perforce-graph'",
+  },
+  {
+    id: 'list.focusGitGraphSearch',
+    keys: ['/'],
+    command: 'git-graph.focusSearch',
+    surfaces: ['list'],
+    when: "vimSurfaceId == 'list:git-graph'",
+  },
+  // Chat timeline: only while the chat owns DOM focus, so the same letters stay
+  // inert on other lists (and the prompt input still types them).
+  {
+    id: 'chat.focusInput',
+    keys: ['i'],
+    command: 'workbench.action.agent.focusInput',
+    surfaces: ['list'],
+    when: 'acpChatFocused',
+  },
+  {
+    id: 'chat.scrollTimelineToTop',
+    keys: ['a'],
+    command: 'workbench.action.agent.scrollTimelineToTop',
+    surfaces: ['list'],
+    when: 'acpChatFocused',
+  },
+  {
+    id: 'chat.scrollTimelineToBottom',
+    keys: ['e'],
+    command: 'workbench.action.agent.scrollTimelineToBottom',
+    surfaces: ['list'],
+    when: 'acpChatFocused',
+  },
+
+  // -- overlay: x dismisses the focused notification --------------------------
+  { id: 'overlay.delete', keys: ['x'], command: 'list.delete', surfaces: ['overlay'] },
+
+  // -- editor tabs ------------------------------------------------------------
+  { id: 'tabs.previous', keys: ['h'], command: 'surface.previous', surfaces: ['tabs'] },
+  { id: 'tabs.next', keys: ['l'], command: 'surface.next', surfaces: ['tabs'] },
+  { id: 'tabs.first.0', keys: ['0'], command: 'list.focusFirst', surfaces: ['tabs'] },
+  { id: 'tabs.first.gg', keys: ['g', 'g'], command: 'list.focusFirst', surfaces: ['tabs'] },
+  { id: 'tabs.last.$', keys: ['$'], command: 'list.focusLast', surfaces: ['tabs'] },
+  { id: 'tabs.last.G', keys: ['G'], command: 'list.focusLast', surfaces: ['tabs'] },
+  { id: 'tabs.activate', keys: ['enter'], command: 'list.activate', surfaces: ['tabs'] },
+  { id: 'tabs.remove', keys: ['x'], command: 'list.delete', surfaces: ['tabs'] },
+  { id: 'tabs.toggle', keys: ['p'], command: 'list.toggle', surfaces: ['tabs'] },
+  { id: 'tabs.contextMenu', keys: ['m'], command: 'list.contextMenu', surfaces: ['tabs'] },
+  { id: 'tabs.escape', keys: ['escape'], command: 'surface.escape', surfaces: ['tabs'] },
+
+  // -- activity bar -----------------------------------------------------------
+  {
+    id: 'activityBar.next',
+    keys: ['j'],
+    command: 'surface.next',
+    surfaces: ['activityBar'],
+  },
+  {
+    id: 'activityBar.previous',
     keys: ['k'],
     command: 'surface.previous',
-    surfaces: CHROME_LIKE,
+    surfaces: ['activityBar'],
   },
-  { id: 'surface.next.l', keys: ['l'], command: 'surface.next', surfaces: CHROME_LIKE },
-  { id: 'surface.next.j', keys: ['j'], command: 'surface.next', surfaces: CHROME_LIKE },
   {
-    id: 'surface.activate',
+    id: 'activityBar.activate.enter',
     keys: ['enter'],
     command: 'list.activate',
-    surfaces: CHROME_LIKE,
+    surfaces: ['activityBar'],
   },
-  { id: 'surface.remove', keys: ['x'], command: 'list.delete', surfaces: CHROME_LIKE },
-  { id: 'surface.toggle', keys: ['p'], command: 'list.toggle', surfaces: CHROME_LIKE },
   {
-    id: 'surface.escape.chrome',
+    id: 'activityBar.activate.l',
+    keys: ['l'],
+    command: 'list.activate',
+    surfaces: ['activityBar'],
+  },
+  {
+    id: 'activityBar.first',
+    keys: ['g', 'g'],
+    command: 'list.focusFirst',
+    surfaces: ['activityBar'],
+  },
+  {
+    id: 'activityBar.last',
+    keys: ['G'],
+    command: 'list.focusLast',
+    surfaces: ['activityBar'],
+  },
+
+  // -- view container tabs ----------------------------------------------------
+  {
+    id: 'viewContainerTabs.previous',
+    keys: ['h'],
+    command: 'surface.previous',
+    surfaces: ['viewContainerTabs'],
+  },
+  {
+    id: 'viewContainerTabs.next',
+    keys: ['l'],
+    command: 'surface.next',
+    surfaces: ['viewContainerTabs'],
+  },
+  {
+    id: 'viewContainerTabs.activate.enter',
+    keys: ['enter'],
+    command: 'list.activate',
+    surfaces: ['viewContainerTabs'],
+  },
+  {
+    id: 'viewContainerTabs.activate.j',
+    keys: ['j'],
+    command: 'list.activate',
+    surfaces: ['viewContainerTabs'],
+  },
+  {
+    id: 'viewContainerTabs.first',
+    keys: ['g', 'g'],
+    command: 'list.focusFirst',
+    surfaces: ['viewContainerTabs'],
+  },
+  {
+    id: 'viewContainerTabs.last',
+    keys: ['G'],
+    command: 'list.focusLast',
+    surfaces: ['viewContainerTabs'],
+  },
+  {
+    id: 'viewContainerTabs.escape',
     keys: ['escape'],
     command: 'surface.escape',
-    surfaces: CHROME_LIKE,
+    surfaces: ['viewContainerTabs'],
   },
 
   // -- terminal normal mode ---------------------------------------------------

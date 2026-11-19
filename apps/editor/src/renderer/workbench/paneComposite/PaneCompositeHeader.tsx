@@ -11,7 +11,7 @@
  *  actions resolved through a per-view scoped ContextKeyService carrying `view`.
  *--------------------------------------------------------------------------------------------*/
 
-import { useState, type DragEvent } from 'react'
+import { useRef, useState, type DragEvent } from 'react'
 import { Maximize2, Minimize2, X } from 'lucide-react'
 import {
   ILayoutService,
@@ -32,6 +32,7 @@ import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useViewScopedContextKey } from '../viewContainerHeader/useViewScopedContextKey.js'
 import { ViewToolbarRegistry } from '../../services/views/ViewComponentRegistry.js'
 import { viewContainerToggleCommand } from '../../services/views/viewContainerToggleCommand.js'
+import { useViewContainerTabsVim } from './useViewContainerTabsVim.js'
 import styles from './PaneComposite.module.css'
 
 interface Props {
@@ -53,6 +54,18 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
     { id: string; edge: 'before' | 'after' | 'merge' } | undefined
   >(undefined)
   const [locationDropActive, setLocationDropActive] = useState(false)
+  const tabsHeaderRef = useRef<HTMLDivElement>(null)
+
+  // Vim `viewContainerTabs` surface. Only the tabs form owns a strip, so the
+  // label form registers a disabled surface (it never claims strokes) and does
+  // not publish a focus target for `focusViewContainerTabs`.
+  useViewContainerTabsVim({
+    enabled: mode === 'tabs',
+    location,
+    partId,
+    getHeader: () => tabsHeaderRef.current,
+    getContainers: () => viewDescriptors.getViewContainersByLocation(location),
+  })
 
   const actions = onlyView ? (
     <>
@@ -126,6 +139,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
 
   return (
     <div
+      ref={tabsHeaderRef}
       className={`${styles['tabsHeader']} ${locationDropActive ? styles['tabsLocationDrop'] : ''}`}
       role="tablist"
       onDragOver={onLocationDragOver}
@@ -154,6 +168,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
               className={tabClass}
               role="tab"
               aria-selected={active}
+              tabIndex={active ? 0 : -1}
               data-tooltip={c.label}
               data-tooltip-command={viewContainerToggleCommand(c.id)}
               aria-label={c.label}

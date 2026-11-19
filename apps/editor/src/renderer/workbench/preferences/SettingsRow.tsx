@@ -38,6 +38,10 @@ export interface SettingsRowProps {
   /** Layer (≠ activeTarget) that also owns this key, for the override hint. */
   readonly otherOrigin: ConfigurationTarget | undefined
   readonly onUpdate: (key: string, value: unknown) => void
+  /** Vim cursor on this row (the row list owns keyboard focus, not the row). */
+  readonly vimFocused?: boolean | undefined
+  /** A pointer landed on the row: move the list cursor here. */
+  readonly onFocusRow?: ((key: string) => void) | undefined
 }
 
 function otherScopeLabel(origin: ConfigurationTarget): string {
@@ -56,6 +60,8 @@ export const SettingsRow = memo(function SettingsRow({
   activeTarget,
   otherOrigin,
   onUpdate,
+  vimFocused,
+  onFocusRow,
 }: SettingsRowProps) {
   const [menu, setMenu] = useState<SettingsGearMenuState | null>(null)
 
@@ -68,6 +74,8 @@ export const SettingsRow = memo(function SettingsRow({
       className={styles['row']}
       data-key={configKey}
       {...(modified ? { 'data-modified': 'true' } : {})}
+      {...(vimFocused === true ? { 'data-vim-focused': 'true' } : {})}
+      onMouseDown={() => onFocusRow?.(configKey)}
     >
       <div className={styles['modifiedBar']} aria-hidden="true" />
       <div className={styles['rowMeta']}>

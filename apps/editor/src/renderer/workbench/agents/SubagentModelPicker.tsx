@@ -106,6 +106,12 @@ export function SubagentModelPicker({
             session={session}
             onAltDigit={onAltDigit}
             onConfirmCurrent={() => onClose(true)}
+            onEscape={() => {
+              // Vim's surface.escape path skips AnchoredSurface's own handler,
+              // so reproduce its two-step behaviour: peel (focus the trigger)
+              // then dismiss when the content declined to keep the surface.
+              if (!onEscape()) onClose()
+            }}
           />
         </AnchoredSurface>
       ) : null}
@@ -120,6 +126,7 @@ export function SubagentModelPanel({
   onExitUp,
   onExitDown,
   onExitLeft,
+  onEscape,
   onConfirmCurrent,
 }: {
   session: IAcpSession
@@ -128,6 +135,8 @@ export function SubagentModelPanel({
   onExitDown?: () => void
   /** True = collapsed the hosting body; false leaves ← to whatever is underneath. */
   onExitLeft?: () => boolean
+  /** Vim `surface.escape`: dismiss the hosting surface (leaving the list). */
+  onEscape?: () => void
   /** Activated the value already in effect (nothing to write): let the host dismiss. */
   onConfirmCurrent?: () => void
 }) {
@@ -245,6 +254,7 @@ export function SubagentModelPanel({
     ...(onExitUp !== undefined ? { onExitUp } : {}),
     ...(onExitDown !== undefined ? { onExitDown } : {}),
     ...(onExitLeft !== undefined ? { onExitLeft } : {}),
+    ...(onEscape !== undefined ? { onEscape } : {}),
   })
 
   return (

@@ -97,6 +97,7 @@ import { resolveAgentIcon } from '../agents/agentIcon.js'
 import { SideTaskCountBadge } from '../agents/SideTaskCountBadge.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { ChevronLeft, ChevronRight, Folder, GitBranch, Lock, Pin } from 'lucide-react'
+import { useEditorTabsVim } from './useEditorTabsVim.js'
 import styles from './EditorArea.module.css'
 
 const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
@@ -453,6 +454,7 @@ const EditorTab = memo(function EditorTab({
       }}
       role="tab"
       aria-selected={isActive}
+      data-editor-id={input.id}
       // Roving tabindex: only the active tab is a Tab stop (a stop per tab
       // would bury the editor behind the whole strip); the ContextMenu key
       // wiring below therefore only ever fires from the focused active tab.
@@ -607,6 +609,14 @@ export const EditorGroupView = memo(function EditorGroupView({
   const [canScrollRight, setCanScrollRight] = useState(false)
   /** Whether DOM focus is currently inside the editor body (Monaco). Drives tab highlight. */
   const [hasInputFocus, setHasInputFocus] = useState(false)
+
+  // Vim `tabs` surface: h/l move between tabs (activating them) while focus
+  // stays on the strip, Enter hands focus to the editor, x closes, p pins.
+  useEditorTabsVim({
+    group,
+    groupsService,
+    getTabBar: () => tabBarRef.current,
+  })
 
   const isCopyDrop = (e: ReactDragEvent | DragEvent): boolean =>
     isCopyDragOperation({ ctrlKey: e.ctrlKey, altKey: e.altKey }, host?.platform === 'darwin')

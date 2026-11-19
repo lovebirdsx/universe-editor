@@ -372,6 +372,7 @@ export function ExplorerView() {
           model={tree.model}
           rootRef={containerRef}
           scrollStateKey="explorer"
+          vimSurfaceId="explorer"
           className={styles['view'] ?? ''}
           virtualizationThreshold={threshold}
           renderRow={renderRow}

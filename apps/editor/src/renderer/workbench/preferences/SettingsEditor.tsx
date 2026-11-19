@@ -7,11 +7,20 @@
  *  own serialization.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import {
   ConfigurationRegistry,
   ConfigurationTarget,
   IConfigurationService,
+  IContextKeyService,
   INotificationService,
   IStorageService,
   IWorkspaceService,
@@ -21,12 +30,14 @@ import {
 } from '@universe-editor/platform'
 import {
   VirtualList,
+  useFlatListNavigation,
   useOwnerDocument,
   useScrollRestore,
   type VirtualListHandle,
 } from '@universe-editor/workbench-ui'
-import { useService } from '../useService.js'
+import { useOptionalService, useService } from '../useService.js'
 import {
+  SETTINGS_EDITOR_FOCUS_LIST_EVENT,
   SETTINGS_EDITOR_FOCUS_SEARCH_EVENT,
   SETTINGS_EDITOR_SWITCH_TARGET_EVENT,
 } from './preferencesFocus.js'
@@ -51,6 +62,9 @@ import styles from './SettingsEditor.module.css'
 
 type EditableTarget = ConfigurationTarget.User | ConfigurationTarget.Project
 
+/** Rough row size for Ctrl+d/u and PageDown when the scroller has no layout. */
+const SETTINGS_ROW_ESTIMATE = 60
+
 function scrollStorageKey(target: EditableTarget): string {
   return target === ConfigurationTarget.Project
     ? 'settingsEditor.scroll.project'
@@ -61,11 +75,32 @@ function flatItemKey(item: SettingsFlatItem): string {
   return item.kind === 'header' ? `h:${item.id}` : `r:${item.key}`
 }
 
+/** Row elements are identified by `data-key` (already on SettingsRow). */
+function findSettingsRow(container: HTMLElement, key: string): HTMLElement | null {
+  for (const element of Array.from(container.querySelectorAll<HTMLElement>('[data-key]'))) {
+    if (element.dataset['key'] === key) return element
+  }
+  return null
+}
+
+/**
+ * Enter lands on the row's first control, in document order. The gear action
+ * comes last in the row, so it is only reached for settings with no form
+ * control (the read-only fallback).
+ */
+function focusFirstRowControl(row: HTMLElement): void {
+  const target = row.querySelector<HTMLElement>(
+    'input:not([type="hidden"]), select, textarea, [role="combobox"], button, [tabindex]:not([tabindex="-1"])',
+  )
+  target?.focus()
+}
+
 export function SettingsEditor({ input }: { input: IEditorInput }) {
   const config = useService(IConfigurationService)
   const workspace = useService(IWorkspaceService)
   const notifications = useService(INotificationService)
   const storage = useService(IStorageService)
+  const contextKeyService = useOptionalService(IContextKeyService)
 
   const [activeTarget, setActiveTarget] = useState<EditableTarget>(
     () => (input as SettingsEditorInput).target ?? ConfigurationTarget.User,
@@ -76,6 +111,13 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
   const [activeTocId, setActiveTocId] = useState<string | undefined>(undefined)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<VirtualListHandle>(null)
+  // The Vim list surface owns this pane: it holds the tab stop and the key
+  // handlers so rows can stay plain data. The VirtualList inside keeps its own
+  // scroller (external scrollers only resolve their ref after this component's
+  // child layout effects, which would leave the list window empty on mount).
+  const listPaneRef = useRef<HTMLDivElement | null>(null)
+  const [focusedKey, setFocusedKey] = useState<string | undefined>(undefined)
+  const pendingControlKey = useRef<string | null>(null)
   const doc = useOwnerDocument()
 
   const scrollPersister = useMemo(() => new SettingsScrollPersister(storage), [storage])
@@ -101,6 +143,35 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
     doc?.addEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
     return () => doc?.removeEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
   }, [doc])
+
+  // Escape inside a row control must return to the list before the global
+  // "focus editor group" Escape binding claims it. The binding is gated on this
+  // key so it only replaces the stroke while the list's inner control holds it.
+  useEffect(() => {
+    if (contextKeyService === undefined) return undefined
+    const key = contextKeyService.createKey<boolean>('settingsListControlFocus', false)
+    const pane = listPaneRef.current
+    if (pane === null) return () => key.reset()
+
+    const sync = (): void => {
+      const active = pane.ownerDocument.activeElement
+      key.set(active !== null && active !== pane && pane.contains(active))
+    }
+    const focusList = () => pane.focus({ preventScroll: true })
+
+    pane.addEventListener('focusin', sync)
+    // focusout fires before activeElement settles; re-check after the move.
+    const onFocusOut = () => queueMicrotask(sync)
+    pane.addEventListener('focusout', onFocusOut)
+    pane.ownerDocument.addEventListener(SETTINGS_EDITOR_FOCUS_LIST_EVENT, focusList)
+    sync()
+    return () => {
+      pane.removeEventListener('focusin', sync)
+      pane.removeEventListener('focusout', onFocusOut)
+      pane.ownerDocument.removeEventListener(SETTINGS_EDITOR_FOCUS_LIST_EVENT, focusList)
+      key.reset()
+    }
+  }, [contextKeyService])
 
   // Track workspace open/close to enable/disable the Workspace tab.
   useEffect(() => {
@@ -181,6 +252,86 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
   }, [nodes])
   const totalRows = model.items.reduce((acc, item) => acc + (item.kind === 'row' ? 1 : 0), 0)
 
+  // Vim cursor over the flat model: group headers are not stops, only settings
+  // rows are. `itemIndex` is the scroll model index (headers included).
+  const navigable = useMemo(() => {
+    const rows: Array<{ key: string; itemIndex: number }> = []
+    model.items.forEach((item, itemIndex) => {
+      if (item.kind === 'row') rows.push({ key: item.key, itemIndex })
+    })
+    return rows
+  }, [model])
+  const focusedRowIndex =
+    focusedKey === undefined ? -1 : navigable.findIndex((row) => row.key === focusedKey)
+
+  const focusRowControl = useCallback(
+    (index: number) => {
+      const target = navigable[index]
+      if (target === undefined) return
+      const container = listPaneRef.current
+      const row = container === null ? null : findSettingsRow(container, target.key)
+      if (row !== null) {
+        focusFirstRowControl(row)
+        return
+      }
+      // Outside the virtualizer's rendered window: scroll it in, then pick the
+      // control up on the next commit.
+      pendingControlKey.current = target.key
+      listRef.current?.scrollToIndex(target.itemIndex, { align: 'center' })
+    },
+    [navigable],
+  )
+
+  const listNav = useFlatListNavigation({
+    count: navigable.length,
+    focusedIndex: focusedRowIndex,
+    onFocusChange: useCallback(
+      (index: number) => {
+        const key = navigable[index]?.key
+        if (key !== undefined) setFocusedKey(key)
+      },
+      [navigable],
+    ),
+    getItemKey: useCallback((index: number) => navigable[index]?.key ?? '', [navigable]),
+    getContainer: useCallback(() => listPaneRef.current, []),
+    rowDataAttr: 'data-key',
+    ariaLabel: localize('settings.listAriaLabel', 'Settings'),
+    getPageSize: useCallback(() => {
+      const height = listRef.current?.getScrollElement()?.clientHeight ?? 0
+      return Math.max(1, Math.floor((height || 600) / SETTINGS_ROW_ESTIMATE))
+    }, []),
+    scrollToIndex: useCallback((index: number) => listRef.current?.scrollToIndex(index), []),
+    onActivate: focusRowControl,
+    vimSurfaceId: 'settings',
+  })
+  const { containerProps: listContainerProps } = listNav
+  const listNavKeyDown = listContainerProps.onKeyDown
+
+  useEffect(() => {
+    const key = pendingControlKey.current
+    if (key === null) return
+    const container = listPaneRef.current
+    const row = container === null ? null : findSettingsRow(container, key)
+    if (row === null) return
+    pendingControlKey.current = null
+    focusFirstRowControl(row)
+  })
+
+  // Escape inside a row control hands focus back to the list without letting
+  // the stroke reach the input's own dismissal (Esc on a search box etc.).
+  const handleListKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (e.key === 'Escape' && e.target !== e.currentTarget) {
+        e.preventDefault()
+        e.stopPropagation()
+        e.currentTarget.focus({ preventScroll: true })
+        return
+      }
+      listNavKeyDown(e)
+    },
+    [listNavKeyDown],
+  )
+
   // Keep the TOC highlight on the group whose header scrolled past the top.
   useEffect(() => {
     const el = listRef.current?.getScrollElement()
@@ -208,12 +359,34 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
     listRef.current?.scrollToIndex(entry.itemIndex, { align: 'start' })
   }, [])
 
+  // Enter/l in the TOC: jump to the group, put the row cursor on its first
+  // setting and hand the keyboard to the list (so j/k continue there).
+  const handleTocActivate = useCallback(
+    (entry: SettingsTocEntry) => {
+      handleTocNavigate(entry)
+      const firstRow = navigable.find((row) => row.itemIndex >= entry.itemIndex)
+      if (firstRow !== undefined) {
+        // Focus first, then set the cursor: a focus event on an empty cursor
+        // seeds the first row, and this write must win over that seed.
+        listPaneRef.current?.focus({ preventScroll: true })
+        setFocusedKey(firstRow.key)
+      }
+    },
+    [handleTocNavigate, navigable],
+  )
+
   const handleUpdate = useCallback(
     (key: string, value: unknown) => {
       config.update(key, value, activeTarget)
     },
     [config, activeTarget],
   )
+
+  const handleRowMouseDown = useCallback((key: string) => {
+    // The pane's focus seeds the first row when the cursor is empty; let that
+    // land first, then move the cursor onto the row the pointer actually hit.
+    queueMicrotask(() => setFocusedKey(key))
+  }, [])
 
   const renderItem = useCallback(
     (item: SettingsFlatItem) => {
@@ -251,10 +424,12 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
           activeTarget={activeTarget}
           otherOrigin={otherOrigin}
           onUpdate={handleUpdate}
+          vimFocused={item.key === focusedKey}
+          onFocusRow={handleRowMouseDown}
         />
       )
     },
-    [config, activeTarget, hasWorkspace, groupTitles, handleUpdate],
+    [config, activeTarget, hasWorkspace, groupTitles, handleUpdate, focusedKey, handleRowMouseDown],
   )
 
   return (
@@ -312,17 +487,26 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
               entries={tocEntries}
               activeId={activeTocId}
               onNavigate={handleTocNavigate}
+              onActivate={handleTocActivate}
             />
-            <VirtualList
-              ref={listRef}
-              className={styles['list']}
-              items={model.items}
-              estimateSize={(index) => estimateFlatItemSize(model.items[index]!)}
-              getItemKey={(index) => flatItemKey(model.items[index]!)}
-              measureDynamically
-              overscan={8}
-              renderItem={renderItem}
-            />
+            <div
+              ref={listPaneRef}
+              className={styles['listPane']}
+              data-testid="settings-list"
+              {...listContainerProps}
+              onKeyDown={handleListKeyDown}
+            >
+              <VirtualList
+                ref={listRef}
+                className={styles['list']}
+                items={model.items}
+                estimateSize={(index) => estimateFlatItemSize(model.items[index]!)}
+                getItemKey={(index) => flatItemKey(model.items[index]!)}
+                measureDynamically
+                overscan={8}
+                renderItem={renderItem}
+              />
+            </div>
           </>
         )}
       </div>

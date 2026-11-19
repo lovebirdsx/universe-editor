@@ -327,6 +327,50 @@ describe('VimDispatcher', () => {
     expect(dispatcher.handleKeyDown(doc, press('q'))).toBe(false)
   })
 
+  it('prefers a scoped `when` entry over an earlier unscoped one', () => {
+    const el = element()
+    registerVimSurface(surface('list', el), doc)
+    el.focus()
+    const context = createContext()
+    context.createKey<boolean>('acpChatFocused', true).set(true)
+    const scopedKeymap: readonly IVimKeymapEntry[] = [
+      { id: 'generic', keys: ['a'], command: 'list.someGenericCommand' },
+      {
+        id: 'chatTop',
+        keys: ['a'],
+        command: 'workbench.action.agent.scrollTimelineToTop',
+        when: 'acpChatFocused',
+      },
+    ]
+    const vim = createVim({ getEffectiveKeymap: () => scopedKeymap })
+    const { dispatcher, commands } = createDispatcher({ vim, context })
+    expect(dispatcher.handleKeyDown(doc, press('a'))).toBe(true)
+    expect(commands).toHaveBeenCalledWith('workbench.action.agent.scrollTimelineToTop', {
+      count: 1,
+    })
+  })
+
+  it('falls back to the unscoped entry when the `when` scope is inactive', () => {
+    const el = element()
+    registerVimSurface(surface('list', el), doc)
+    el.focus()
+    const context = createContext()
+    context.createKey<boolean>('acpChatFocused', false).set(false)
+    const scopedKeymap: readonly IVimKeymapEntry[] = [
+      { id: 'generic', keys: ['a'], command: 'list.someGenericCommand' },
+      {
+        id: 'chatTop',
+        keys: ['a'],
+        command: 'workbench.action.agent.scrollTimelineToTop',
+        when: 'acpChatFocused',
+      },
+    ]
+    const vim = createVim({ getEffectiveKeymap: () => scopedKeymap })
+    const { dispatcher, commands } = createDispatcher({ vim, context })
+    expect(dispatcher.handleKeyDown(doc, press('a'))).toBe(true)
+    expect(commands).toHaveBeenCalledWith('list.someGenericCommand', { count: 1 })
+  })
+
   it('routes editor surfaces through handleStroke in Normal mode', () => {
     const container = element()
     const textarea = doc.createElement('textarea')

@@ -1374,6 +1374,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
         className={styles['tree'] ?? ''}
         rootRef={treeRef}
         scrollStateKey={`scm:${model.id}`}
+        vimSurfaceId="scm"
         scrollStatePersister={scrollPersister}
         indentBase={0}
         modifierActivation

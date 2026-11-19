@@ -17,6 +17,7 @@ import {
   IThemeService,
   IUriIdentityService,
   IUserDataFilesService,
+  KeybindingWeight,
   MenuId,
   Severity,
   UserDataFile,
@@ -51,6 +52,7 @@ import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import {
   dispatchKeybindingsEditorFocusSearch,
+  dispatchSettingsEditorFocusList,
   dispatchSettingsEditorFocusSearch,
   dispatchSettingsEditorSwitchTarget,
 } from '../workbench/preferences/preferencesFocus.js'
@@ -201,6 +203,48 @@ export class OpenSettingsAction extends Action2 {
     ).then((targeted) => {
       if (targeted) dispatchSettingsEditorFocusSearch()
     })
+  }
+}
+
+export class FocusSettingsSearchAction extends Action2 {
+  static readonly ID = 'workbench.action.focusSettingsSearch'
+  constructor() {
+    super({
+      id: FocusSettingsSearchAction.ID,
+      title: localize2('action.focusSettingsSearch.title', 'Focus Settings Search'),
+      category: localize2('command.category.preferences', 'Preferences'),
+      f1: false,
+    })
+  }
+
+  override run(): void {
+    // Broadcasts to every workbench document; the mounted settings editor
+    // listens on its own document and focuses the search box.
+    dispatchSettingsEditorFocusSearch()
+  }
+}
+
+export class FocusSettingsListAction extends Action2 {
+  static readonly ID = 'workbench.action.settings.focusList'
+  constructor() {
+    super({
+      id: FocusSettingsListAction.ID,
+      title: localize2('action.focusSettingsList.title', 'Focus Settings List'),
+      category: localize2('command.category.preferences', 'Preferences'),
+      keybinding: {
+        primary: 'escape',
+        // The generic Escape binding also covers non-Monaco editors and would
+        // otherwise pull focus to the editor-group body. This scoped, weighted
+        // binding returns to the settings row list first.
+        when: "activeEditorTypeId == 'settings' && settingsListControlFocus",
+        weight: KeybindingWeight.WorkbenchContrib + 50,
+      },
+      f1: false,
+    })
+  }
+
+  override run(): void {
+    dispatchSettingsEditorFocusList()
   }
 }
 

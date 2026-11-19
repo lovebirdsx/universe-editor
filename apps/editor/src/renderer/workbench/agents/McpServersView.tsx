@@ -8,7 +8,9 @@
  *  or no MCP servers are involved; offers a shortcut to the settings.
  *--------------------------------------------------------------------------------------------*/
 
+import { useRef, useState } from 'react'
 import { ICommandService, localize, runWithInvocationModifiers } from '@universe-editor/platform'
+import { useFlatListNavigation } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import {
   IAcpSessionService,
@@ -28,6 +30,26 @@ export function McpServersView() {
 function McpServerList({ session }: { session: IAcpSession }) {
   const servers = useObservable(session.mcpServers)
   const toolCalls = useObservable(session.toolCalls)
+  const commands = useService(ICommandService)
+  const listRef = useRef<HTMLUListElement | null>(null)
+  const [focusedIndex, setFocusedIndex] = useState(0)
+  const activeIndex = Math.min(focusedIndex, Math.max(0, servers.length - 1))
+
+  // Rows carry no per-server action; Enter mirrors the empty-state shortcut and
+  // opens the MCP settings form. j/k still works on a configured-but-inert list.
+  const nav = useFlatListNavigation({
+    count: servers.length,
+    focusedIndex: activeIndex,
+    onFocusChange: setFocusedIndex,
+    getItemKey: (index) => servers[index]?.name ?? '',
+    getContainer: () => listRef.current,
+    ariaLabel: localize('acp.mcp.list', 'MCP servers'),
+    onActivate: () => {
+      void commands.executeCommand('workbench.action.agent.openMcpSettings')
+    },
+    vimSurfaceId: 'mcp-servers',
+  })
+
   if (servers.length === 0) {
     return (
       <McpEmpty hint={localize('acp.mcp.none', 'No MCP servers configured for this session.')} />
@@ -43,22 +65,21 @@ function McpServerList({ session }: { session: IAcpSession }) {
   }
   return (
     <div className={styles['mcpView']} data-testid="acp-mcp-view">
-      {/* `list`, not `listbox`: these rows carry no action, and `listbox`
-          promises a keyboard-operable selection this view does not have. */}
-      <ul
-        className={styles['mcpList']}
-        role="list"
-        aria-label={localize('acp.mcp.list', 'MCP servers')}
-      >
-        {servers.map((s) => {
+      <ul ref={listRef} className={styles['mcpList']} {...nav.containerProps}>
+        {servers.map((s, index) => {
           const c = counts.get(s.name)
           return (
             <li
               key={s.name}
+              {...nav.getRowProps(index)}
               className={styles['mcpRow']}
-              role="listitem"
               data-status={s.status}
               data-testid="acp-mcp-row"
+              style={
+                index === activeIndex
+                  ? { background: 'var(--vscode-list-activeSelectionBackground, #094771)' }
+                  : undefined
+              }
             >
               <span className={styles['mcpStatusDot']} aria-hidden="true" />
               <span className={styles['mcpRowMain']}>

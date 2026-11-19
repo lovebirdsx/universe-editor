@@ -139,6 +139,11 @@
   background: var(--vscode-tab-activeBorderTop, #0070e0);
 }
 
+.tab:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
 /* Active tab in a non-focused group — muted appearance */
 .tab.activeUnfocused {
   background: var(--vscode-tab-activeBackground, #1a1a1c);

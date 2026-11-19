@@ -9,7 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render } from '@testing-library/react'
+import { act, fireEvent, render } from '@testing-library/react'
 import {
   Event,
   ICommandService,
@@ -36,6 +36,7 @@ import {
   ShowCommitChangesAction,
 } from '../../../actions/commitChangesActions.js'
 import { SendContextToAgentChatAction } from '../../../actions/agentContextActions.js'
+import { __resetVimSurfacesForTests, getActiveVimSurface } from '@universe-editor/workbench-ui'
 import { PerforceGraphEditor } from '../PerforceGraphEditor.js'
 
 const REPO: P4GraphRepoDto = { root: 'C:/ws/main', name: 'alice-ws' }
@@ -176,6 +177,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetViewState()
+  __resetVimSurfacesForTests()
   scmViewState.setSelectedRepo(undefined)
   _clearGraphPayloadCacheForTests()
   vi.clearAllMocks()
@@ -217,6 +219,14 @@ describe('PerforceGraphEditor keyboard navigation', () => {
     expect(body.getAttribute('data-focused')).toBe('true')
     fireEvent.blur(body)
     expect(body.getAttribute('data-focused')).toBe('false')
+  })
+
+  it('registers a stable Vim list surface for the row list', async () => {
+    const { container } = renderEditor()
+    await flush()
+
+    act(() => scrollBody(container).focus())
+    expect(getActiveVimSurface(document)?.surfaceKey).toBe('list:perforce-graph')
   })
 
   it('ArrowDown/ArrowUp move the selection and drive the Commit Changes bridge', async () => {

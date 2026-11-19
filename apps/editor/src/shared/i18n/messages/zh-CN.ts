@@ -667,6 +667,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.focusPreviousGroup.title': '聚焦上一个组',
   'action.focusPreviousPart.title': '聚焦上一部分',
   'action.focusRightGroup.title': '聚焦右侧编辑器组',
+  'action.focusSettingsList.title': '聚焦设置列表',
+  'action.focusSettingsSearch.title': '聚焦设置搜索',
   'action.goBack.title': '后退',
   'action.goForward.title': '前进',
   'action.goToFile.title': '转到文件…',
@@ -4892,4 +4894,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'triggers.notification.autoPaused.title': '触发器已暂停：{name}',
   'triggers.notification.autoPaused.body':
     '“{name}”连续失败 {count} 次，已自动暂停。运行「触发器: 打开管理器」可查看并恢复。',
+  'settings.listAriaLabel': '设置',
+  'processExplorer.table': '进程',
+  'trigger.manager.runs.table': '触发器运行记录',
 } as const

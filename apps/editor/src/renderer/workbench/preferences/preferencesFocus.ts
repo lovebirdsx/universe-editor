@@ -2,6 +2,7 @@ import { ConfigurationTarget } from '@universe-editor/platform'
 import { getWorkbenchDocuments } from '../../services/windows/workbenchDocuments.js'
 
 export const SETTINGS_EDITOR_FOCUS_SEARCH_EVENT = 'workbench.preferences.focusSettingsSearch'
+export const SETTINGS_EDITOR_FOCUS_LIST_EVENT = 'workbench.preferences.focusSettingsList'
 export const KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT = 'workbench.preferences.focusKeybindingsSearch'
 export const SETTINGS_EDITOR_SWITCH_TARGET_EVENT = 'workbench.preferences.switchSettingsTarget'
 
@@ -29,6 +30,10 @@ function dispatchPreferencesEvent(name: string, detail?: ConfigurationTarget): v
 
 export function dispatchSettingsEditorFocusSearch(): void {
   dispatchPreferencesEvent(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT)
+}
+
+export function dispatchSettingsEditorFocusList(): void {
+  dispatchPreferencesEvent(SETTINGS_EDITOR_FOCUS_LIST_EVENT)
 }
 
 // The microtask event only reaches an already-mounted keybindings editor (the

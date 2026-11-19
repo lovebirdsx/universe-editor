@@ -43,8 +43,12 @@ import type { IAcpSession } from '../../../services/acp/session/acpSessionServic
 import { SubagentModelPanel, SubagentModelPicker } from '../SubagentModelPicker.js'
 import type { ConfigBarAnchor } from '../ConfigOptionsBar.js'
 import { ServicesContext } from '../../useService.js'
+import { __resetVimSurfacesForTests, getActiveVimSurface } from '@universe-editor/workbench-ui'
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  __resetVimSurfacesForTests()
+})
 
 const SUBAGENT_MODEL = 'CLAUDE_CODE_SUBAGENT_MODEL'
 const SUBAGENT_MODEL_FORCE = 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE'
@@ -486,6 +490,19 @@ describe('SubagentModelPicker', () => {
     } finally {
       process.off('unhandledRejection', unhandled)
     }
+  })
+
+  it('dismisses from the Vim overlay escape action', async () => {
+    setup({ activeAuth: { kind: 'provider', providerId: 'gw' } })
+    openPicker()
+    await waitFor(() => expect(screen.getByTestId('acp-subagent-panel')).toBeTruthy())
+
+    const active = getActiveVimSurface(document)
+    expect(active?.surface.kind).toBe('overlay')
+    // Vim consumed Escape before AnchoredSurface: the surface action runs the
+    // host's peel callback and then dismisses when it declined to stay open.
+    act(() => active!.surface.actions.escape?.(1))
+    expect(screen.queryByTestId('acp-subagent-panel')).toBeNull()
   })
 })
 

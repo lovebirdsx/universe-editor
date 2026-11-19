@@ -187,7 +187,13 @@ export function TerminalInstance({
     const holder = holderRef.current
     if (!holder) return
     holder.fit()
-    if (isFocused) holder.focus()
+    // A container-tab keyboard switch (Vim viewContainerTabs h/l) keeps focus on
+    // the strip; the terminal must not steal it. Mouse clicks focus the view
+    // through focusView, so they still land here.
+    const stripFocused =
+      holder.wrapper.ownerDocument.activeElement?.closest('[data-testid^="view-container-tab-"]') !=
+      null
+    if (isFocused && !stripFocused) holder.focus()
   }, [active, isFocused])
 
   // Respond to programmatic focus requests (e.g. FocusTerminalPanelAction).

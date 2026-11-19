@@ -104,6 +104,12 @@
   background: var(--vscode-workbench-hoverBackground, rgba(255, 255, 255, 0.04));
 }
 
+.itemFocused {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+  outline: 1px solid var(--vscode-list-focusOutline, #0070e0);
+  outline-offset: -1px;
+}
+
 .icon {
   flex-shrink: 0;
   display: inline-flex;

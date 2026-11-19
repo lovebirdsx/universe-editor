@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ILayoutService,
+  IEditorGroupsService,
   InstantiationService,
   IViewsService,
   PartId,
@@ -62,6 +63,10 @@ function harness(
   const services = new ServiceCollection()
   services.set(ILayoutService, { _serviceBrand: undefined, ...layout } as never)
   services.set(IViewsService, { _serviceBrand: undefined, ...views } as never)
+  services.set(IEditorGroupsService, {
+    _serviceBrand: undefined,
+    activeGroup: { id: 0, preserveFocusOnActivation: vi.fn() },
+  } as never)
   const instantiation = new InstantiationService(services)
   return {
     layout,

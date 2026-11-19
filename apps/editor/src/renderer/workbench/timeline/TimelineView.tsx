@@ -359,6 +359,7 @@ export function TimelineView() {
           model={model}
           rootRef={containerRef}
           scrollStateKey="timeline"
+          vimSurfaceId="timeline"
           className={styles['view'] ?? ''}
           ariaLabel={localize('timeline.label', 'Timeline')}
           modifierActivation

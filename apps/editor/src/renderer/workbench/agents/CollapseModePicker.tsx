@@ -106,6 +106,14 @@ export function CollapseModePicker({
 
   const close = (): void => setAnchor(null)
 
+  // Escape is claimed by the Vim dispatcher while Vim is on, so the surface
+  // list's escape action needs the same hand-back AnchoredSurface performs.
+  const escape = (): boolean => {
+    setAnchor(null)
+    triggerRef.current?.focus({ preventScroll: true })
+    return false
+  }
+
   return (
     <>
       <button
@@ -147,11 +155,7 @@ export function CollapseModePicker({
           offset={4}
           targetDocument={anchor.document}
           onClose={close}
-          onEscape={() => {
-            setAnchor(null)
-            triggerRef.current?.focus({ preventScroll: true })
-            return false
-          }}
+          onEscape={escape}
           surfaceProps={
             {
               className: styles['configPopover'],
@@ -159,7 +163,7 @@ export function CollapseModePicker({
             } as HTMLAttributes<HTMLDivElement>
           }
         >
-          <CollapseModeList mode={mode} onCommit={commit} />
+          <CollapseModeList mode={mode} onCommit={commit} onEscape={escape} />
         </AnchoredSurface>
       )}
     </>
@@ -171,9 +175,11 @@ export function CollapseModePicker({
 function CollapseModeList({
   mode,
   onCommit,
+  onEscape,
 }: {
   mode: CollapseMode
   onCommit: (mode: CollapseMode) => void
+  onEscape: () => void
 }) {
   const nav = useOverlayListNavigation({
     count: COLLAPSE_MODE_ORDER.length,
@@ -187,6 +193,7 @@ function CollapseModeList({
       return item === undefined ? '' : MODE_META[item].label
     },
     ariaLabel: localize('acp.collapse.menu.label', 'Timeline display mode'),
+    onEscape,
   })
   return (
     <div ref={nav.containerRef} {...nav.containerProps}>

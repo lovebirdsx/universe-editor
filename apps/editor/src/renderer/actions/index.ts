@@ -111,6 +111,8 @@ import {
 } from './auxiliaryEditorActions.js'
 import {
   ConfigureDisplayLanguageAction,
+  FocusSettingsListAction,
+  FocusSettingsSearchAction,
   OpenKeybindingsEditorAction,
   OpenKeybindingsJsonAction,
   OpenSettingsAction,
@@ -629,6 +631,8 @@ registerAction2(MoveEditorToPreviousGroupAction)
 
 // Preferences
 registerAction2(OpenSettingsAction)
+registerAction2(FocusSettingsSearchAction)
+registerAction2(FocusSettingsListAction)
 registerAction2(OpenKeybindingsEditorAction)
 registerAction2(OpenSettingsJsonAction)
 registerAction2(OpenKeybindingsJsonAction)

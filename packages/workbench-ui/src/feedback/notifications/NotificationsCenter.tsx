@@ -2,8 +2,15 @@
  *  NotificationsCenter — presentational notification center panel. Pure: receives
  *  notifications plus dismiss/cancel/clear/close callbacks. Visibility, the
  *  observable subscription and the Portal live in the host wrapper.
+ *
+ *  The host owns the Vim cursor and passes it in as `focusedIndex` (newest-first,
+ *  matching the rendered order); clicking a row reports the new index. The
+ *  component only paints the highlight and, when it has DOM focus, forwards
+ *  Delete to the focused row so hosts without a Vim mapping still get x-like
+ *  dismissal.
  *--------------------------------------------------------------------------------------------*/
 
+import { useEffect, useRef, type KeyboardEvent } from 'react'
 import type { INotification } from '@universe-editor/platform'
 import { localize, runWithInvocationModifiers } from '@universe-editor/platform'
 import { notificationSeverityClass, notificationSeverityIcon } from './severityIcon.js'
@@ -15,6 +22,11 @@ export interface NotificationsCenterProps {
   readonly onCancelProgress: (id: string) => void
   readonly onClearAll: () => void
   readonly onClose: () => void
+  /** Highlighted row in rendered (newest-first) order; -1 for none. */
+  readonly focusedIndex?: number | undefined
+  readonly onFocusChange?: ((index: number) => void) | undefined
+  /** Take DOM focus on mount so the overlay Vim surface owns the keyboard. */
+  readonly autoFocus?: boolean | undefined
 }
 
 function relativeTime(timestamp: number): string {
@@ -41,12 +53,39 @@ export function NotificationsCenter({
   onCancelProgress,
   onClearAll,
   onClose,
+  focusedIndex = -1,
+  onFocusChange,
+  autoFocus = false,
 }: NotificationsCenterProps) {
   // Newest first.
   const items = [...notifications].reverse()
+  const activeIndex = items.length === 0 ? -1 : Math.min(focusedIndex, items.length - 1)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (autoFocus) rootRef.current?.focus()
+  }, [autoFocus])
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
+    // Functional keys pass the Vim dispatcher's unmapped-printable guard; the
+    // row cursor decides which notification this targets. (Vim's `x` needs a
+    // keymap entry — see the notification-center WP report.)
+    if (e.key !== 'Delete' && e.key !== 'Backspace') return
+    const item = activeIndex < 0 ? undefined : items[activeIndex]
+    if (item === undefined) return
+    e.preventDefault()
+    e.stopPropagation()
+    onDismiss(item.id)
+  }
 
   return (
-    <div className={styles['overlay']} data-testid="notifications-center">
+    <div
+      ref={rootRef}
+      className={styles['overlay']}
+      data-testid="notifications-center"
+      tabIndex={-1}
+      onKeyDown={handleKeyDown}
+    >
       <div className={styles['header']}>
         <span className={styles['title']}>
           {localize('notification.center.title', 'Notifications')}
@@ -71,11 +110,25 @@ export function NotificationsCenter({
             {localize('notification.center.empty', 'No notifications')}
           </div>
         ) : (
-          items.map((n) => (
+          items.map((n, index) => (
             <div
               key={n.id}
-              className={n.read ? styles['item'] : `${styles['item']} ${styles['unread']}`}
+              className={[
+                styles['item'],
+                n.read ? undefined : styles['unread'],
+                index === activeIndex ? styles['itemFocused'] : undefined,
+              ]
+                .filter(Boolean)
+                .join(' ')}
               data-testid="notification-center-item"
+              aria-selected={index === activeIndex}
+              onMouseDown={(e) => {
+                // Keep DOM focus on the panel: the overlay Vim surface resolves
+                // `within`, so losing focus to <body> would drop the keyboard.
+                e.preventDefault()
+                rootRef.current?.focus()
+              }}
+              onClick={() => onFocusChange?.(index)}
             >
               <span
                 className={`${styles['icon']} ${styles[notificationSeverityClass(n.severity)] ?? ''}`}

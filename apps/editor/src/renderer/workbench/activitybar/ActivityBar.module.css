@@ -7,6 +7,7 @@
   background: var(--vscode-activityBar-background, #333333);
   padding: 4px 0;
   gap: 2px;
+  outline: none;
 }
 
 .items {
@@ -49,6 +50,11 @@
 
 .item.active {
   color: var(--vscode-activityBar-foreground, #ffffff);
+}
+
+.item:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
 }
 
 .item.active::before {

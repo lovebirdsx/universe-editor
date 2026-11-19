@@ -163,7 +163,17 @@ function McpServerPickerInner({
             } as HTMLAttributes<HTMLDivElement>
           }
         >
-          <McpPickerPanel session={session} onRequestClose={onClose} onAltDigit={onAltDigit} />
+          <McpPickerPanel
+            session={session}
+            onRequestClose={onClose}
+            onAltDigit={onAltDigit}
+            onEscape={() => {
+              // Vim's surface.escape path skips AnchoredSurface's own handler,
+              // so reproduce its two-step behaviour: peel (focus the trigger)
+              // then dismiss when the content declined to keep the surface.
+              if (!onEscape()) onClose()
+            }}
+          />
         </AnchoredSurface>
       ) : null}
     </div>
@@ -178,6 +188,7 @@ export function McpPickerPanel({
   onExitUp,
   onExitDown,
   onExitLeft,
+  onEscape,
 }: {
   session: IAcpSession
   /** Invoked before navigating away (e.g. opening settings) so a host surface can dismiss. */
@@ -187,6 +198,8 @@ export function McpPickerPanel({
   onExitDown?: () => void
   /** True = collapsed the hosting body; false leaves ← to whatever is underneath. */
   onExitLeft?: () => boolean
+  /** Vim `surface.escape`: dismiss the hosting surface (leaving the list). */
+  onEscape?: () => void
 }) {
   // Soft dependency, same as the picker: stays absent without the ACP layer.
   const service = useOptionalService(IAcpSessionService)
@@ -200,6 +213,7 @@ export function McpPickerPanel({
       {...(onExitUp !== undefined ? { onExitUp } : {})}
       {...(onExitDown !== undefined ? { onExitDown } : {})}
       {...(onExitLeft !== undefined ? { onExitLeft } : {})}
+      {...(onEscape !== undefined ? { onEscape } : {})}
     />
   )
 }
@@ -212,6 +226,7 @@ function McpPickerPanelInner({
   onExitUp,
   onExitDown,
   onExitLeft,
+  onEscape,
 }: {
   session: IAcpSession
   service: IAcpSessionServiceType
@@ -220,6 +235,7 @@ function McpPickerPanelInner({
   onExitUp?: () => void
   onExitDown?: () => void
   onExitLeft?: () => boolean
+  onEscape?: () => void
 }) {
   const unionPool = useObservable(service.mcpServerDefinitions)
   const pool = filterPoolForSession(unionPool, session.agentId)
@@ -261,6 +277,7 @@ function McpPickerPanelInner({
     ...(onExitUp !== undefined ? { onExitUp } : {}),
     ...(onExitDown !== undefined ? { onExitDown } : {}),
     ...(onExitLeft !== undefined ? { onExitLeft } : {}),
+    ...(onEscape !== undefined ? { onEscape } : {}),
   })
 
   return (
