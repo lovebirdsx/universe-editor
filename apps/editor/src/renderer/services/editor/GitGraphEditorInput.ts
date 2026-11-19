@@ -30,9 +30,12 @@ export class GitGraphEditorInput extends EditorInput {
   /** Route focus into the graph's row list (not the editor-group body) so
    *  arrow-key navigation works as soon as the tab opens — the graph is a
    *  plain React tree with no Monaco registration. */
-  override focus(): boolean {
-    if (!gitGraphViewState.focusRows) return false
-    gitGraphViewState.focusRows()
+  override focus(groupId?: number): boolean {
+    const focusRows =
+      (groupId !== undefined ? gitGraphViewState.focusRowsByGroup.get(groupId) : undefined) ??
+      gitGraphViewState.focusRows
+    if (!focusRows) return false
+    focusRows()
     return true
   }
 }

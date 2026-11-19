@@ -71,6 +71,7 @@ import {
   useCommandRegistered,
   useOptionalService,
 } from '../useService.js'
+import { useEditorGroup } from '../editor/EditorGroupContext.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
 import {
@@ -483,6 +484,7 @@ const CommitRow = memo(function CommitRow({
 })
 
 export function GitGraphEditor({ input }: { input: IEditorInput }) {
+  const group = useEditorGroup()
   const commands = useService(ICommandService)
   const dialog = useService(IDialogService)
   const notification = useService(INotificationService)
@@ -609,16 +611,21 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   // GitGraphEditorInput.focus() call on open.
   const focusRequestedRef = useRef(false)
   useLayoutEffect(() => {
-    gitGraphViewState.focusRows = () => {
+    const focusRows = () => {
       // The first open arrives while the loading state is still up and the
       // listbox isn't in the DOM yet — defer to the effect below.
       focusRequestedRef.current = true
       scrollRef.current?.focus()
     }
+    gitGraphViewState.focusRows = focusRows
+    if (group) gitGraphViewState.focusRowsByGroup.set(group.id, focusRows)
     return () => {
-      gitGraphViewState.focusRows = null
+      if (group && gitGraphViewState.focusRowsByGroup.get(group.id) === focusRows) {
+        gitGraphViewState.focusRowsByGroup.delete(group.id)
+      }
+      if (gitGraphViewState.focusRows === focusRows) gitGraphViewState.focusRows = null
     }
-  }, [])
+  }, [group])
 
   useLayoutEffect(() => {
     if (!focusRequestedRef.current || !scrollRef.current) return

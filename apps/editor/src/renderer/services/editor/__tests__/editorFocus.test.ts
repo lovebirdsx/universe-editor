@@ -52,6 +52,23 @@ class SelfFocusingInput extends EditorInput {
   }
 }
 
+class GroupAwareInput extends EditorInput {
+  receivedGroupId: number | undefined
+  get typeId() {
+    return 'markdown.preview'
+  }
+  get resource() {
+    return URI.from({ scheme: 'markdown-preview', path: '/workspace/doc.md' })
+  }
+  getName() {
+    return 'Preview doc.md'
+  }
+  override focus(groupId?: number): boolean {
+    this.receivedGroupId = groupId
+    return true
+  }
+}
+
 function mountGroupBody(groupId: number): HTMLElement {
   const group = document.createElement('div')
   group.setAttribute('data-group-id', String(groupId))
@@ -102,6 +119,17 @@ describe('focusEditorInput — non-Monaco editors', () => {
 
     expect(handled).toBe(true)
     expect(input.focused).toBe(true)
+  })
+
+  it('passes the requesting group to input.focus()', () => {
+    const cks = new ContextKeyService()
+    mountGroupBody(42)
+    const input = new GroupAwareInput()
+
+    const handled = focusEditorInput(input, cks, 42)
+
+    expect(handled).toBe(true)
+    expect(input.receivedGroupId).toBe(42)
   })
 
   it('returns false when no group body is present and the editor cannot self-focus', () => {

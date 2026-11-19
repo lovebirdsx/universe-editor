@@ -59,8 +59,8 @@ export class DocEditorInput extends EditorInput {
    * disabling f / Ctrl+F / link hints. Mirrors MarkdownPreviewInput.focus(); the
    * shared useMarkdownReaderNav registers the controller keyed on `resource`.
    */
-  override focus(): boolean {
-    const controller = MarkdownPreviewRegistry.get(this.resource)
+  override focus(groupId?: number): boolean {
+    const controller = MarkdownPreviewRegistry.get(this.resource, groupId)
     if (!controller) return false
     controller.focus()
     return true

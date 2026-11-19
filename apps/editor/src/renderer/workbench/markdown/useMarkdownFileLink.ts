@@ -380,7 +380,9 @@ export function useMarkdownFileLink(
               { pinned: true },
             )
             if (result.handled) {
-              if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment)
+              if (opts?.fragment) {
+                MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment, result.group?.id)
+              }
               return
             }
           }
@@ -392,7 +394,7 @@ export function useMarkdownFileLink(
             preview,
             windowFocus ? { windowFocus } : undefined,
           )
-          if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment)
+          if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment, group.id)
           return
         }
         // A new-window open routes through the shared helper so an already-open

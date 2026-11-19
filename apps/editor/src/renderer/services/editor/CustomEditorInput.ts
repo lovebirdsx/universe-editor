@@ -59,8 +59,8 @@ export class CustomEditorInput extends EditorInput {
    * and the provider registers async so the controller may not exist yet (the
    * registry queues the request until it does).
    */
-  override focus(): boolean {
-    return WebviewFocusRegistry.requestFocus(this._viewType, this._resource)
+  override focus(groupId?: number): boolean {
+    return WebviewFocusRegistry.requestFocus(this._viewType, this._resource, groupId)
   }
 
   override serialize(): ISerializedCustomEditor {

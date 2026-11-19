@@ -35,6 +35,9 @@ export interface PerforceGraphViewState {
    *  PerforceGraphEditorInput.focus() so opening/activating the tab lands
    *  keyboard focus on the changes (arrow keys work without a prior click). */
   focusRows: (() => void) | null
+  /** Same callback per owning group: the same graph can be restored into more
+   *  than one window, and focus must land in the group that asked for it. */
+  focusRowsByGroup: Map<number, () => void>
   /** Callback registered by the mounted editor to reload the graph (toolbar refresh). */
   refresh: (() => void) | null
   /** Callback registered by the mounted editor to select + scroll to a change,
@@ -94,6 +97,7 @@ function createPerforceGraphViewState(): PerforceGraphViewState {
   return {
     focusSearch: null,
     focusRows: null,
+    focusRowsByGroup: new Map(),
     refresh: null,
     revealCommit: null,
     querySyncPoint: null,

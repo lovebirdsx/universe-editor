@@ -831,7 +831,7 @@ describe('FocusActiveEditorGroupAction', () => {
     svc.activeGroup.openEditor(input)
 
     const focus = vi.fn()
-    FileEditorRegistry.register(input, { focus } as never)
+    FileEditorRegistry.register(input, { focus } as never, svc.activeGroup.id)
 
     exec(FocusActiveEditorGroupAction, svc)
 
@@ -843,7 +843,7 @@ describe('FocusActiveEditorGroupAction', () => {
     const aux = svc.createAuxiliaryPart({ activate: true })
     const input = Object.create(FileEditorInput.prototype) as FileEditorInput
     aux.activeGroup.openEditor(input)
-    FileEditorRegistry.register(input, { focus: vi.fn() } as never)
+    FileEditorRegistry.register(input, { focus: vi.fn() } as never, aux.activeGroup.id)
     const focusGroup = vi.spyOn(FakeWindowFocusService.prototype, 'focusGroup')
     try {
       exec(FocusActiveEditorGroupAction, svc)
@@ -858,12 +858,12 @@ describe('FocusActiveEditorGroupAction', () => {
     const aux = svc.createAuxiliaryPart()
     const auxInput = Object.create(FileEditorInput.prototype) as FileEditorInput
     aux.activeGroup.openEditor(auxInput)
-    FileEditorRegistry.register(auxInput, { focus: vi.fn() } as never)
+    FileEditorRegistry.register(auxInput, { focus: vi.fn() } as never, aux.activeGroup.id)
 
     const mainInput = Object.create(FileEditorInput.prototype) as FileEditorInput
     svc.mainPart.activeGroup.openEditor(mainInput)
     const mainFocus = vi.fn()
-    FileEditorRegistry.register(mainInput, { focus: mainFocus } as never)
+    FileEditorRegistry.register(mainInput, { focus: mainFocus } as never, svc.mainPart.activeGroup.id)
 
     // Alt+Tab back to main: the open target stays on the auxiliary window.
     svc.activatePart(svc.mainPart)
@@ -893,8 +893,8 @@ describe('FocusActiveEditorGroupAction', () => {
     const secondFocus = vi.fn()
     const firstEditor = { focus: firstFocus } as never
     const secondEditor = { focus: secondFocus } as never
-    FileEditorRegistry.register(input, firstEditor)
-    FileEditorRegistry.register(input, secondEditor)
+    FileEditorRegistry.register(input, firstEditor, first.id)
+    FileEditorRegistry.register(input, secondEditor, second.id)
 
     svc.removeGroup(second)
     FileEditorRegistry.unregister(input, secondEditor)
@@ -917,7 +917,7 @@ describe('FocusActiveEditorGroupAction', () => {
       svc.activeGroup.openEditor(input)
 
       const focus = vi.fn()
-      FileEditorRegistry.register(input, { focus } as never)
+      FileEditorRegistry.register(input, { focus } as never, svc.activeGroup.id)
       exec(SplitEditorRightAction, svc)
       exec(CloseActiveEditorAction, svc)
       await Promise.resolve()

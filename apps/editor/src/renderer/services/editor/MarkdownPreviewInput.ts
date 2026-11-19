@@ -80,8 +80,8 @@ export class MarkdownPreviewInput extends EditorInput {
    * link hints. Routing focus through the controller keeps that key true, just
    * like the ACP session and terminal editors do via their own focus() hooks.
    */
-  override focus(): boolean {
-    const controller = MarkdownPreviewRegistry.get(this._sourceUri)
+  override focus(groupId?: number): boolean {
+    const controller = MarkdownPreviewRegistry.get(this._sourceUri, groupId)
     if (!controller) return false
     controller.focus()
     return true

@@ -44,6 +44,9 @@ export interface GitGraphViewState {
    *  GitGraphEditorInput.focus() so opening/activating the tab lands keyboard
    *  focus on the commits (arrow keys work without a prior mouse click). */
   focusRows: (() => void) | null
+  /** Same callback per owning group: the same graph can be restored into more
+   *  than one window, and focus must land in the group that asked for it. */
+  focusRowsByGroup: Map<number, () => void>
   /** Callback registered by the mounted editor to toggle remote-branch visibility. */
   toggleRemoteBranches: (() => void) | null
   /** Callback registered by the mounted editor to reload the graph (toolbar ↺). */
@@ -95,6 +98,7 @@ export const GIT_GRAPH_PAGE_SIZE = 500
 export const gitGraphViewState: GitGraphViewState = {
   focusSearch: null,
   focusRows: null,
+  focusRowsByGroup: new Map(),
   toggleRemoteBranches: null,
   refresh: null,
   loadAll: null,
@@ -122,6 +126,7 @@ export const gitGraphViewState: GitGraphViewState = {
   _resetForTests(): void {
     this.focusSearch = null
     this.focusRows = null
+    this.focusRowsByGroup.clear()
     this.toggleRemoteBranches = null
     this.refresh = null
     this.loadAll = null

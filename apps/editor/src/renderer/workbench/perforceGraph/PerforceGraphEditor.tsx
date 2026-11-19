@@ -68,6 +68,7 @@ import {
   Spinner,
 } from '@universe-editor/workbench-ui'
 import { useService, useObservable, useOptionalService } from '../useService.js'
+import { useEditorGroup } from '../editor/EditorGroupContext.js'
 import { IScmService, scmProviderPathKey } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
 import {
@@ -344,6 +345,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   const inputId = input instanceof PerforceGraphEditorInput ? input.id : GLOBAL_PERFORCE_GRAPH_KEY
   const scope = input instanceof PerforceGraphEditorInput ? input.scope : undefined
   const view = useMemo(() => getPerforceGraphViewState(inputId), [inputId])
+  const group = useEditorGroup()
   const commands = useService(ICommandService)
   const scm = useService(IScmService)
   const storage = useService(IStorageService)
@@ -482,16 +484,21 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   // PerforceGraphEditorInput.focus() call on open.
   const focusRequestedRef = useRef(false)
   useLayoutEffect(() => {
-    view.focusRows = () => {
+    const focusRows = () => {
       // The first open arrives while the loading state is still up and the
       // listbox isn't in the DOM yet — defer to the effect below.
       focusRequestedRef.current = true
       scrollRef.current?.focus()
     }
+    view.focusRows = focusRows
+    if (group) view.focusRowsByGroup.set(group.id, focusRows)
     return () => {
-      view.focusRows = null
+      if (group && view.focusRowsByGroup.get(group.id) === focusRows) {
+        view.focusRowsByGroup.delete(group.id)
+      }
+      if (view.focusRows === focusRows) view.focusRows = null
     }
-  }, [view])
+  }, [view, group])
 
   useLayoutEffect(() => {
     if (!focusRequestedRef.current || !scrollRef.current) return

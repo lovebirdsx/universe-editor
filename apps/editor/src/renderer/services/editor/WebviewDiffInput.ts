@@ -75,7 +75,7 @@ export class WebviewDiffInput extends EditorInput {
   }
 
   /** Move keyboard focus into the webview iframe (see CustomEditorInput.focus). */
-  override focus(): boolean {
-    return WebviewFocusRegistry.requestFocus(this._viewType, this._rightUri)
+  override focus(groupId?: number): boolean {
+    return WebviewFocusRegistry.requestFocus(this._viewType, this._rightUri, groupId)
   }
 }

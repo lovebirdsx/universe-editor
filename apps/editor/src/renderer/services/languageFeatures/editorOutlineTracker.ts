@@ -552,7 +552,7 @@ export class EditorOutlineTracker extends Disposable implements IOutlineScope {
     this._currentModel = model
 
     this._attachListeners.add(model.onDidChangeContent(() => this._scheduleRecompute()))
-    const controller = MarkdownPreviewRegistry.get(preview.sourceUri)
+    const controller = MarkdownPreviewRegistry.get(preview.sourceUri, this._groupId)
     if (controller) {
       this._attachListeners.add(controller.onDidScroll(() => this._recomputeActiveSymbol()))
     }
@@ -583,7 +583,7 @@ export class EditorOutlineTracker extends Disposable implements IOutlineScope {
       undefined,
     )
 
-    const controller = MarkdownPreviewRegistry.get(doc.resource)
+    const controller = MarkdownPreviewRegistry.get(doc.resource, this._groupId)
     if (controller) {
       this._attachListeners.add(controller.onDidScroll(() => this._recomputeActiveSymbol()))
     }
@@ -892,7 +892,7 @@ export class EditorOutlineTracker extends Disposable implements IOutlineScope {
     let line: number | undefined
     const readerUri = this._currentPreview?.sourceUri ?? this._currentDoc?.resource
     if (readerUri !== undefined) {
-      line = MarkdownPreviewRegistry.get(readerUri)?.getTopVisibleLine()
+      line = MarkdownPreviewRegistry.get(readerUri, this._groupId)?.getTopVisibleLine()
     } else {
       if (!model) {
         this._activeSymbol.set(undefined, undefined)
@@ -944,7 +944,7 @@ export class EditorOutlineTracker extends Disposable implements IOutlineScope {
     }
     const readerUri = this._currentPreview?.sourceUri ?? this._currentDoc?.resource
     if (readerUri !== undefined) {
-      const controller = MarkdownPreviewRegistry.get(readerUri)
+      const controller = MarkdownPreviewRegistry.get(readerUri, this._groupId)
       controller?.scrollToLine(symbol.selectionRange.startLineNumber)
       controller?.focus()
       return

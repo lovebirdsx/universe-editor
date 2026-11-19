@@ -899,7 +899,7 @@ export class FocusActiveEditorGroupAction extends Action2 {
     accessor.get(IWindowFocusService).focusGroup(group)
     const activeEditor = group.activeEditor
     if (activeEditor) {
-      focusEditorInput(activeEditor, contextKeyService)
+      focusEditorInput(activeEditor, contextKeyService, group.id)
       return
     }
     // The editor-area Part root has no tabIndex, so focusPart() cannot move DOM

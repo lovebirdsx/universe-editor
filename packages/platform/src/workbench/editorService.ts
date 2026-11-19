@@ -98,10 +98,13 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
   /**
    * Request focus for this input's mounted view. Non-Monaco editors (e.g.
    * React-based) implement this instead of registering with a Monaco registry.
+   * `groupId` identifies the group whose instance should receive focus when the
+   * same input is mounted in several groups/windows — implementations must not
+   * resolve a process-wide "last registered" handle when a group is given.
    * Return true if focus was handled; undefined/false falls through to the
    * EditorArea container focus fallback.
    */
-  focus?(): boolean
+  focus?(groupId?: number): boolean
 
   /**
    * Returns a JSON-serialisable snapshot of this input for persistence.

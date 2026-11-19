@@ -26,6 +26,7 @@ import { collectEntries, lineForPreviewTop, previewTopForLine } from './previewS
 import { useFindInContainer, type FindInContainerState } from './useFindInContainer.js'
 import { useMarkdownKeyboardNav } from './useMarkdownKeyboardNav.js'
 import { useMarkdownLinkHints, type MarkdownLinkHintsState } from './useMarkdownLinkHints.js'
+import { useEditorGroup } from './EditorGroupContext.js'
 import { useService } from '../useService.js'
 
 // How long to keep retrying an anchor reveal while late content (mermaid, code
@@ -57,6 +58,10 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
 }: MarkdownReaderNavOptions<T>): MarkdownReaderNavState {
   const contextKeyService = useService(IContextKeyService)
   const commandService = useService(ICommandService)
+  // The owning group identifies this surface across windows: the registry must
+  // resolve focus/outline handles to the same window the component lives in.
+  const group = useEditorGroup()
+  const groupId = group?.id
 
   // Create the handles without a default value: passing one makes createKey set
   // the key during render, whose onDidChangeContext fire would trigger a setState
@@ -174,7 +179,10 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
       MarkdownPreviewRegistry.setActive(controller)
     }
 
-    MarkdownPreviewRegistry.register(registryUri, controller)
+    MarkdownPreviewRegistry.register(registryUri, controller, {
+      groupId,
+      ownerDocument: el.ownerDocument,
+    })
     return () => {
       el.removeEventListener('scroll', fire)
       el.removeEventListener('focusin', onFocusIn)
@@ -186,7 +194,7 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
     }
     // registryUri is addressed by its string form; keyStr keeps the effect stable
     // across URI instances that stringify equal.
-  }, [keyStr, focusedKey, rootRef])
+  }, [keyStr, focusedKey, rootRef, groupId])
 
   return { find, linkHints, helpVisible, closeHelp: () => setHelpVisible(false) }
 }

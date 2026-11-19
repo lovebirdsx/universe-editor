@@ -68,8 +68,8 @@ export class WebviewPanelInput extends EditorInput {
    * to the editor-group body, which sits *outside* the iframe, and the webview
    * would need a click. Same contract as CustomEditorInput.focus().
    */
-  override focus(): boolean {
-    return WebviewFocusRegistry.requestFocus(this._viewType, this._focusResource)
+  override focus(groupId?: number): boolean {
+    return WebviewFocusRegistry.requestFocus(this._viewType, this._focusResource, groupId)
   }
 
   /** `WebviewPanel.title = …` retitles the tab (host → $setWebviewTitle → here). */

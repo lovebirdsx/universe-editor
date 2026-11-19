@@ -34,6 +34,9 @@ export interface PerforceSyncHistoryViewState {
    *  `PerforceSyncHistoryEditorInput.focus()` so opening or activating the tab
    *  lands keyboard focus on the runs (arrow keys work without a prior click). */
   focusRows: (() => void) | null
+  /** Same callback per owning group: the same tab can be restored into more
+   *  than one window, and focus must land in the group that asked for it. */
+  focusRowsByGroup: Map<number, () => void>
   /** Callback registered by the mounted editor to reload the page (toolbar Refresh). */
   refresh: (() => void) | null
   /** The loaded page, newest first. Empty until the first load settles. */
@@ -68,6 +71,7 @@ export interface PerforceSyncHistoryViewState {
 function createState(): PerforceSyncHistoryViewState {
   return {
     focusRows: null,
+    focusRowsByGroup: new Map(),
     refresh: null,
     runs: [],
     total: 0,

@@ -7,12 +7,23 @@
  *  the Outline view scroll the preview to a source line and read the line
  *  currently at the top of the viewport (for active-symbol tracking).
  *
- *  Split views can mount two previews for the same source, so registrations are
- *  kept in order and `get` returns the most recent live one.
+ *  Split views and auxiliary windows can mount two previews for the same source,
+ *  so each registration records the group and document that mounted it. `get`
+ *  prefers the requested group, then the controller in the active workbench
+ *  document, and only then the most recent live one — never letting a preview
+ *  remounted in another window redirect a focus request.
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, type URI } from '@universe-editor/platform'
+import { currentWorkbenchDocumentOrUndefined } from '../windows/workbenchDocuments.js'
 import { MarkdownPreviewViewStateCache } from './MarkdownPreviewViewStateCache.js'
+
+export interface IMarkdownPreviewRegistrationOptions {
+  /** Editor group that mounted this preview (unique across editor windows). */
+  readonly groupId?: number | undefined
+  /** Document the preview DOM lives in (main window or an auxiliary window). */
+  readonly ownerDocument?: Document | undefined
+}
 
 export interface IMarkdownPreviewController {
   /** Scroll the preview so the block at `line` (1-based source line) is at the top. */
@@ -51,8 +62,14 @@ export interface IMarkdownPreviewController {
   toggleHelp(): void
 }
 
+interface MarkdownPreviewRegistration {
+  readonly controller: IMarkdownPreviewController
+  readonly groupId: number | undefined
+  readonly ownerDocument: Document | undefined
+}
+
 class MarkdownPreviewRegistryImpl {
-  private readonly _map = new Map<string, IMarkdownPreviewController[]>()
+  private readonly _map = new Map<string, MarkdownPreviewRegistration[]>()
   private readonly _onDidChange = new Emitter<URI>()
   readonly onDidChange = this._onDidChange.event
 
@@ -60,10 +77,18 @@ class MarkdownPreviewRegistryImpl {
   // F3 / Escape) target the one the user is looking at rather than broadcasting.
   private _activeController: IMarkdownPreviewController | undefined
 
-  register(sourceUri: URI, controller: IMarkdownPreviewController): void {
+  register(
+    sourceUri: URI,
+    controller: IMarkdownPreviewController,
+    options?: IMarkdownPreviewRegistrationOptions,
+  ): void {
     const key = sourceUri.toString()
     const list = this._map.get(key) ?? []
-    list.push(controller)
+    list.push({
+      controller,
+      groupId: options?.groupId,
+      ownerDocument: options?.ownerDocument,
+    })
     this._map.set(key, list)
     this._onDidChange.fire(sourceUri)
   }
@@ -72,17 +97,34 @@ class MarkdownPreviewRegistryImpl {
     const key = sourceUri.toString()
     const list = this._map.get(key)
     if (!list) return
-    const index = list.indexOf(controller)
+    const index = list.findIndex((r) => r.controller === controller)
     if (index === -1) return
     list.splice(index, 1)
     if (list.length === 0) this._map.delete(key)
     this._onDidChange.fire(sourceUri)
   }
 
-  get(sourceUri: URI): IMarkdownPreviewController | undefined {
+  /**
+   * Resolve the controller for `sourceUri`. An explicit group wins; otherwise
+   * (and when that group has not registered yet) prefer the controller in the
+   * active workbench document, then fall back to the most recent mount. The
+   * active-document step matters on open: the group may focus the input before
+   * its preview component has registered, and the focused window is the one the
+   * user is looking at.
+   */
+  get(sourceUri: URI, groupId?: number): IMarkdownPreviewController | undefined {
     const list = this._map.get(sourceUri.toString())
     if (!list || list.length === 0) return undefined
-    return list[list.length - 1]
+    if (groupId !== undefined) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i]?.groupId === groupId) return list[i]?.controller
+      }
+    }
+    const activeDocument = currentWorkbenchDocumentOrUndefined()
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i]?.ownerDocument === activeDocument) return list[i]?.controller
+    }
+    return list[list.length - 1]?.controller
   }
 
   /**
@@ -93,9 +135,9 @@ class MarkdownPreviewRegistryImpl {
    * through the same owner as the reveal-line request keeps the two from
    * fighting over the landing position.
    */
-  revealAnchor(sourceUri: URI, anchor: string): void {
+  revealAnchor(sourceUri: URI, anchor: string, groupId?: number): void {
     if (!anchor) return
-    const controller = this.get(sourceUri)
+    const controller = this.get(sourceUri, groupId)
     if (controller) {
       controller.scrollToAnchor(anchor)
       return

@@ -188,7 +188,7 @@ export class OpenMarkdownSourceAction extends Action2 {
     // was detached, so its own scroll sync never ran and its saved scroll is
     // stale — stash a one-shot reveal request the FileEditor consumes on mount.
     // Only meaningful for the branches that remount the source.
-    const controller = MarkdownPreviewRegistry.get(sourceUri)
+    const controller = MarkdownPreviewRegistry.get(sourceUri, group.id)
     // The preview renders denser than the source, so at the very bottom the
     // top-visible line still maps above the source's end — reveal the LAST line so
     // the FileEditor clamps it flush at the viewport bottom (matches VSCode).
@@ -269,9 +269,16 @@ export class OpenMarkdownSourceAction extends Action2 {
 // Fall back to the active editor group's preview so the buttons work too.
 // ---------------------------------------------------------------------------
 
-function previewControllerFor(editor: unknown): IMarkdownPreviewController | undefined {
-  if (editor instanceof MarkdownPreviewInput) return MarkdownPreviewRegistry.get(editor.sourceUri)
-  if (editor instanceof DocEditorInput) return MarkdownPreviewRegistry.get(editor.resource)
+function previewControllerFor(
+  editor: unknown,
+  groupId?: number,
+): IMarkdownPreviewController | undefined {
+  if (editor instanceof MarkdownPreviewInput) {
+    return MarkdownPreviewRegistry.get(editor.sourceUri, groupId)
+  }
+  if (editor instanceof DocEditorInput) {
+    return MarkdownPreviewRegistry.get(editor.resource, groupId)
+  }
   return undefined
 }
 
@@ -285,11 +292,12 @@ function activePreviewController(
   // another group holds keyboard focus.
   if (hasTabActionTarget(arg)) {
     const target = resolveTargetEditor(accessor, arg)
-    return target ? previewControllerFor(target.editor) : undefined
+    return target ? previewControllerFor(target.editor, target.group.id) : undefined
   }
   const active = MarkdownPreviewRegistry.getActive()
   if (active) return active
-  return previewControllerFor(accessor.get(IEditorGroupsService).activeGroup.activeEditor)
+  const activeGroup = accessor.get(IEditorGroupsService).activeGroup
+  return previewControllerFor(activeGroup.activeEditor, activeGroup.id)
 }
 
 const FIND_CATEGORY = localize2('command.category.markdown', 'Markdown')

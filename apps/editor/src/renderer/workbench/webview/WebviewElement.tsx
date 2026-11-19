@@ -49,6 +49,7 @@ import { IResourceAccessService } from '../../../shared/ipc/resourceAccessServic
 import { WebviewFocusRegistry } from '../../services/editor/WebviewFocusRegistry.js'
 import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { useObservable, useOptionalService, useService } from '../useService.js'
+import { useEditorGroup } from '../editor/EditorGroupContext.js'
 import type { IWebviewPanelModel } from '../../services/extensions/WebviewService.js'
 import styles from './WebviewElement.module.css'
 
@@ -61,6 +62,7 @@ export function WebviewElement({ panel }: { panel: IWebviewPanelModel }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const resourceAccess = useOptionalService(IResourceAccessService)
   const contextKeyService = useService(IContextKeyService)
+  const group = useEditorGroup()
   const html = useObservable(panel.html)
   // Re-render trigger for an identical html re-set (see WebviewService.htmlVersion).
   const htmlVersion = useObservable(panel.htmlVersion)
@@ -162,9 +164,12 @@ export function WebviewElement({ panel }: { panel: IWebviewPanelModel }) {
         applyFocus(false)
       },
     }
-    WebviewFocusRegistry.register(panel.viewType, panel.resource, controller)
+    WebviewFocusRegistry.register(panel.viewType, panel.resource, controller, {
+      groupId: group?.id,
+      ownerDocument: iframeRef.current?.ownerDocument,
+    })
     return () => WebviewFocusRegistry.unregister(panel.viewType, panel.resource, controller)
-  }, [panel, applyFocus])
+  }, [panel, applyFocus, group?.id])
 
   // Re-apply a pending focus once the extension HTML has been written into the
   // iframe and had a moment to settle. The `send` effect above posts the HTML to

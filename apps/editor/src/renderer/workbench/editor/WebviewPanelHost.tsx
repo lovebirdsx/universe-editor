@@ -24,17 +24,19 @@ import { IWebviewService } from '../../services/extensions/WebviewService.js'
 import { WebviewPanelInput } from '../../services/editor/WebviewPanelInput.js'
 import { WebviewFocusRegistry } from '../../services/editor/WebviewFocusRegistry.js'
 import { WebviewElement } from '../webview/WebviewElement.js'
+import { useEditorGroup } from './EditorGroupContext.js'
 
 export function WebviewPanelHost({ input }: { input: IEditorInput }) {
   const webviewService = useService(IWebviewService)
   const panelInput = input as WebviewPanelInput
   const panel = webviewService.getPanel(panelInput.panelHandle)
+  const group = useEditorGroup()
 
   useEffect(() => {
     // Move keyboard focus into the iframe once its controller registers (it does
     // so on the WebviewElement mount below; the registry queues this if late).
-    WebviewFocusRegistry.requestFocus(panelInput.viewType, panelInput.focusResource)
-  }, [panelInput])
+    WebviewFocusRegistry.requestFocus(panelInput.viewType, panelInput.focusResource, group?.id)
+  }, [panelInput, group?.id])
 
   return panel ? <WebviewElement key={panel.panelHandle} panel={panel} /> : null
 }

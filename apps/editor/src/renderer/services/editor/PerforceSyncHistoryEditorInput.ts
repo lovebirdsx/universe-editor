@@ -39,8 +39,11 @@ export class PerforceSyncHistoryEditorInput extends EditorInput {
   /** Route focus into the run list (not the editor-group body) so arrow-key
    *  navigation works as soon as the tab opens — the page is a plain React tree
    *  with no Monaco registration. */
-  override focus(): boolean {
-    const focusRows = perforceSyncHistoryViewState.focusRows
+  override focus(groupId?: number): boolean {
+    const focusRows =
+      (groupId !== undefined
+        ? perforceSyncHistoryViewState.focusRowsByGroup.get(groupId)
+        : undefined) ?? perforceSyncHistoryViewState.focusRows
     if (!focusRows) return false
     focusRows()
     return true

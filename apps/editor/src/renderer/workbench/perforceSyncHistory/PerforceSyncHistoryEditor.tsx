@@ -44,6 +44,7 @@ import {
   type IFlatListRowProps,
 } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
+import { useEditorGroup } from '../editor/EditorGroupContext.js'
 import { relativeTime } from '../../relativeTime.js'
 import {
   perforceSyncHistoryViewState,
@@ -85,6 +86,7 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const storage = useService(IStorageService)
   const state = perforceSyncHistoryViewState
+  const group = useEditorGroup()
 
   const [runs, setRuns] = useState<readonly P4SyncRunDto[]>(state.runs)
   const [total, setTotal] = useState(state.total)
@@ -183,11 +185,16 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
     // there is no container to focus, and a `focusRows` that returns true while
     // focusing nothing would swallow the editor input's own fallback.
     if (unavailable) return
-    state.focusRows = () => listRef.current?.focus()
+    const focusRows = () => listRef.current?.focus()
+    state.focusRows = focusRows
+    if (group) state.focusRowsByGroup.set(group.id, focusRows)
     return () => {
-      state.focusRows = null
+      if (group && state.focusRowsByGroup.get(group.id) === focusRows) {
+        state.focusRowsByGroup.delete(group.id)
+      }
+      if (state.focusRows === focusRows) state.focusRows = null
     }
-  }, [state, unavailable])
+  }, [state, unavailable, group])
 
   useEffect(() => {
     state.selectedId = selectedId

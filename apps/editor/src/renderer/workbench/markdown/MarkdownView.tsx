@@ -723,7 +723,11 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
   // declines; everything else belongs to the handler (or to no one).
   const isExternalUrl = /^https?:/i.test(href)
   const handlerOwnsHref = linkHandler !== undefined && !isAnchor && !isExternalUrl
-  const activate = (target: OpenTarget, openFolderInCurrentWindow: boolean): void => {
+  const activate = (
+    target: OpenTarget,
+    openFolderInCurrentWindow: boolean,
+    ownerWindow?: Window | null,
+  ): void => {
     if (isAnchor) {
       scrollToAnchor(href)
       return
@@ -762,17 +766,28 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
       return
     }
     // External URL: let Electron's window-open handler take it. If unhandled,
-    // the call is a no-op (better than navigating the renderer view).
-    window.open(href, '_blank', 'noopener,noreferrer')
+    // the call is a no-op (better than navigating the renderer view). Use the
+    // link's own window: in an auxiliary editor window the global `window` would
+    // route the open through the main window instead.
+    const win = ownerWindow ?? (typeof window === 'undefined' ? null : window)
+    win?.open(href, '_blank', 'noopener,noreferrer')
   }
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
-    activate(resolveOpenTarget(e), (e.ctrlKey || e.metaKey) && e.altKey)
+    activate(
+      resolveOpenTarget(e),
+      (e.ctrlKey || e.metaKey) && e.altKey,
+      e.currentTarget.ownerDocument.defaultView,
+    )
   }
   const onKeyDown = (e: React.KeyboardEvent<HTMLAnchorElement>): void => {
     if (!isOpenTargetEnter(e)) return
     e.preventDefault()
-    activate(resolveOpenTarget(e), (e.ctrlKey || e.metaKey) && e.altKey)
+    activate(
+      resolveOpenTarget(e),
+      (e.ctrlKey || e.metaKey) && e.altKey,
+      e.currentTarget.ownerDocument.defaultView,
+    )
   }
   return (
     <a

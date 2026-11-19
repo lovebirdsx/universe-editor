@@ -101,8 +101,11 @@ export class PerforceGraphEditorInput extends EditorInput {
   /** Route focus into the graph's row list (not the editor-group body) so
    *  arrow-key navigation works as soon as the tab opens — the graph is a
    *  plain React tree with no Monaco registration. */
-  override focus(): boolean {
-    const focusRows = getPerforceGraphViewState(this.id).focusRows
+  override focus(groupId?: number): boolean {
+    const state = getPerforceGraphViewState(this.id)
+    const focusRows =
+      (groupId !== undefined ? state.focusRowsByGroup.get(groupId) : undefined) ??
+      state.focusRows
     if (!focusRows) return false
     focusRows()
     return true

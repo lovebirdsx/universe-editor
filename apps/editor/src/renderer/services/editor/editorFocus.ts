@@ -330,7 +330,7 @@ export function focusEditorInput(
   // text input and swallows printable single-key bindings like `f` (see the
   // markdown preview / doc center link hints). queueMicrotask mirrors the Monaco
   // path so the DOM focus move settles first.
-  if (input.focus?.()) {
+  if (input.focus?.(groupId)) {
     syncEditorFocusContext(contextKeyService)
     queueMicrotask(() => syncEditorFocusContext(contextKeyService))
     return true
