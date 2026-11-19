@@ -47,7 +47,7 @@ f1: false,
 
 React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts`：每个 `Document` 一个 window-capture 监听；注册层按 `menu > dialog > overlay > list` 优先级激活，同 kind 取嵌套更深者。一次按键只交给一层，命中即 `preventDefault + stopPropagation + stopImmediatePropagation`（边界落空也吞，否则底下的全局命令会照常执行）。
 
-**例外：Monaco 自有的引用 peek 树**不走这个注册表（它的 DOM 由 Monaco 渲染，且 contribution 类用不了 React Hook），而是由 `apps/editor/src/renderer/contributions/PeekNavigationContribution.ts` 在每个 workbench document 的 window capture 上裁决：复用 `ctrlNavigationDirection()` 的键位判定（同样只认纯 Ctrl 的 h/j/k/l），命中 `.ref-tree` 焦点且 `lastFocusedList` 的宿主包含该元素后，自己完成同一套三连吞键，再调树的 `focusNext/focusPrevious` / `onLeftArrow/onRightArrow` 并同步镜像 selection。新增 Monaco 自有列表表面时照此办理，不要为它再造一个全局 dispatcher。
+**例外：Monaco 自有的引用 peek 树**不走这个注册表（它的 DOM 由 Monaco 渲染，且 contribution 类用不了 React Hook），而是由 `apps/editor/src/renderer/contributions/PeekNavigationContribution.ts` 在每个 workbench document 的 window capture 上裁决：自行判定**裸** `h/j/k/l`（不带修饰键；Ctrl 形式不认领，回落全局含义），命中 `.ref-tree` 焦点、非可编辑元素且 `lastFocusedList` 的宿主包含该元素后，自己完成同一套三连吞键，再调树的 `focusNext/focusPrevious` / `onLeftArrow/onRightArrow` 并同步镜像 selection；和弦待定时整段放行。新增 Monaco 自有列表表面时照此办理，不要为它再造一个全局 dispatcher。
 
 - **菜单是虚拟焦点**（`aria-activedescendant`），DOM 焦点仍在唤出它的树上，所以不能每个组件各挂一个 window 监听——`stopPropagation` 不会阻止同一 target 上的其它监听器，两层会同时移动。
 - `list` 层默认 `focus: 'self'`（容器自身是 `activeElement`）且拒绝 editable 焦点，行内输入框因此保留自己的键；`overlay` 默认 `focus: 'within'`；`dialog` 可用 `allowEditableFocus`（复选框对话框）。层的 `directions` 每次按键从 `optionsRef` 读取，可随渲染增减（FlatList 的 `onMoveHorizontal` 后加也即时生效），不需要重新注册。

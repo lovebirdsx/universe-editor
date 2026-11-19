@@ -127,7 +127,7 @@ test.describe('@p1 references peek preview', () => {
       .toMatchObject({ filled: true })
   })
 
-  test('Ctrl+J/K move the focused reference and the live preview', async ({
+  test('bare j/k move the focused reference and the live preview', async ({
     page,
     workbench,
     launchWorkspace,
@@ -189,8 +189,8 @@ test.describe('@p1 references peek preview', () => {
     expect(initial?.previewUri).toBe(initial?.focusedUri)
 
     // `helper` has references in lib.ts (below the declaration) and main.ts.
-    // The peek starts on the nearest one, so Ctrl+J must move to a different line.
-    await page.keyboard.press('Control+j')
+    // The peek starts on the nearest one, so j must move to a different line.
+    await page.keyboard.press('j')
     await expect
       .poll(
         () =>
@@ -203,7 +203,7 @@ test.describe('@p1 references peek preview', () => {
     expect(moved?.previewLine).toBe(moved?.focusedLine)
     expect(moved?.previewUri).toBe(moved?.focusedUri)
 
-    await page.keyboard.press('Control+k')
+    await page.keyboard.press('k')
     await expect
       .poll(
         () =>
@@ -214,5 +214,29 @@ test.describe('@p1 references peek preview', () => {
 
     const back = await page.evaluate(() => window.__E2E__!.getReferencePeekState())
     expect(back?.previewLine).toBe(back?.focusedLine)
+
+    // Vim's window-capture dispatcher is registered before this contribution.
+    // With focus in the peek tree the host editor has no text focus, so Vim must
+    // yield and the bare j must still move the tree. Unit tests cannot exercise
+    // that ordering between the two window listeners.
+    await page.evaluate(() => window.__E2E__!.updateConfigValue('vim.enabled', true))
+    await expect.poll(() => workbench.getContextKey<boolean>('vimEnabled')).toBe(true)
+    const beforeVim = await page.evaluate(
+      async () => (await window.__E2E__!.getReferencePeekState())?.focusedLine,
+    )
+    expect(typeof beforeVim).toBe('number')
+
+    await page.keyboard.press('j')
+    await expect
+      .poll(
+        () =>
+          page.evaluate(async () => (await window.__E2E__!.getReferencePeekState())?.focusedLine),
+        { timeout: 10000 },
+      )
+      .not.toBe(beforeVim)
+
+    const withVim = await page.evaluate(() => window.__E2E__!.getReferencePeekState())
+    expect(withVim?.previewLine).toBe(withVim?.focusedLine)
+    expect(withVim?.previewUri).toBe(withVim?.focusedUri)
   })
 })

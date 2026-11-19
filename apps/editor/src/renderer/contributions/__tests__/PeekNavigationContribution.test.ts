@@ -5,6 +5,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  __resetKeybindingChordStateForTests,
+  setKeybindingChordPending,
+} from '@universe-editor/workbench-ui'
 import { PeekNavigationContribution } from '../PeekNavigationContribution.js'
 
 const h = vi.hoisted(() => ({
@@ -98,6 +102,7 @@ afterEach(() => {
   contribution?.dispose()
   contribution = undefined
   document.body.innerHTML = ''
+  __resetKeybindingChordStateForTests()
   vi.clearAllMocks()
 })
 
@@ -126,13 +131,13 @@ function focusedTreeHost(): HTMLElement {
   return host
 }
 
-describe('PeekNavigationContribution Ctrl navigation', () => {
-  it('Ctrl+J moves to the next reference and mirrors it into the selection', async () => {
+describe('PeekNavigationContribution bare navigation', () => {
+  it('j moves to the next reference and mirrors it into the selection', async () => {
     const items = [{ id: 'a' }, { id: 'b' }]
     const { list } = makeFakeList(focusedTreeHost(), items)
     await createContribution(list)
 
-    const event = press('j', { ctrlKey: true })
+    const event = press('j')
 
     expect(list.tree.focusNext).toHaveBeenCalledWith(1, false, event)
     expect(list.setSelection).toHaveBeenCalledWith([items[1]], event)
@@ -140,13 +145,13 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
     expect(event.defaultPrevented).toBe(true)
   })
 
-  it('Ctrl+K moves to the previous reference and mirrors it into the selection', async () => {
+  it('k moves to the previous reference and mirrors it into the selection', async () => {
     const items = [{ id: 'a' }, { id: 'b' }]
     const { list, setFocus } = makeFakeList(focusedTreeHost(), items)
     setFocus([items[1]])
     await createContribution(list)
 
-    const event = press('k', { ctrlKey: true })
+    const event = press('k')
 
     expect(list.tree.focusPrevious).toHaveBeenCalledWith(1, false, event)
     expect(list.setSelection).toHaveBeenCalledWith([items[0]], event)
@@ -154,13 +159,13 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
     expect(event.defaultPrevented).toBe(true)
   })
 
-  it('Ctrl+L expands via monaco onRightArrow and mirrors a focus move', async () => {
+  it('l expands via monaco onRightArrow and mirrors a focus move', async () => {
     const items = [{ id: 'a' }, { id: 'b' }]
     const { list, setFocus } = makeFakeList(focusedTreeHost(), items)
     list.tree.onRightArrow.mockImplementation(() => setFocus([items[1]]))
     await createContribution(list)
 
-    const event = press('l', { ctrlKey: true })
+    const event = press('l')
 
     expect(list.tree.onRightArrow).toHaveBeenCalledWith(event)
     expect(list.setSelection).toHaveBeenCalledWith([items[1]], event)
@@ -168,14 +173,14 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
     expect(event.defaultPrevented).toBe(true)
   })
 
-  it('Ctrl+H collapses via monaco onLeftArrow and mirrors a focus move', async () => {
+  it('h collapses via monaco onLeftArrow and mirrors a focus move', async () => {
     const items = [{ id: 'a' }, { id: 'b' }]
     const { list, setFocus } = makeFakeList(focusedTreeHost(), items)
     setFocus([items[1]])
     list.tree.onLeftArrow.mockImplementation(() => setFocus([items[0]]))
     await createContribution(list)
 
-    const event = press('h', { ctrlKey: true })
+    const event = press('h')
 
     expect(list.tree.onLeftArrow).toHaveBeenCalledWith(event)
     expect(list.setSelection).toHaveBeenCalledWith([items[0]], event)
@@ -183,11 +188,11 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
     expect(event.defaultPrevented).toBe(true)
   })
 
-  it('swallows Ctrl+L without mirroring when expanding leaves focus in place', async () => {
+  it('swallows l without mirroring when expanding leaves focus in place', async () => {
     const { list } = makeFakeList(focusedTreeHost(), [{ id: 'a' }])
     await createContribution(list)
 
-    const event = press('l', { ctrlKey: true })
+    const event = press('l')
 
     expect(list.tree.onRightArrow).toHaveBeenCalledWith(event)
     expect(list.setSelection).not.toHaveBeenCalled()
@@ -195,10 +200,11 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
   })
 
   it.each([
-    { label: 'Shift', init: { ctrlKey: true, shiftKey: true } },
-    { label: 'Alt', init: { ctrlKey: true, altKey: true } },
-    { label: 'Meta', init: { ctrlKey: true, metaKey: true } },
-    { label: 'Alt alone', init: { altKey: true } },
+    { label: 'Ctrl', init: { ctrlKey: true } },
+    { label: 'Shift', init: { shiftKey: true } },
+    { label: 'Alt', init: { altKey: true } },
+    { label: 'Meta', init: { metaKey: true } },
+    { label: 'Ctrl+Alt (AltGr)', init: { ctrlKey: true, altKey: true } },
   ])('ignores strokes carrying $label', async ({ init }) => {
     const { list } = makeFakeList(focusedTreeHost(), [{ id: 'a' }])
     await createContribution(list)
@@ -209,13 +215,64 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
     expect(event.defaultPrevented).toBe(false)
   })
 
+  it.each(['j', 'k', 'h', 'l'])('leaves Ctrl+%s to the global dispatcher', async (key) => {
+    const { list } = makeFakeList(focusedTreeHost(), [{ id: 'a' }, { id: 'b' }])
+    await createContribution(list)
+
+    const event = press(key, { ctrlKey: true })
+
+    expect(list.tree.focusNext).not.toHaveBeenCalled()
+    expect(list.tree.focusPrevious).not.toHaveBeenCalled()
+    expect(list.tree.onLeftArrow).not.toHaveBeenCalled()
+    expect(list.tree.onRightArrow).not.toHaveBeenCalled()
+    expect(list.setSelection).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('leaves the second stroke alone while a chord is pending', async () => {
+    const { list } = makeFakeList(focusedTreeHost(), [{ id: 'a' }, { id: 'b' }])
+    await createContribution(list)
+    setKeybindingChordPending(document, true)
+
+    const event = press('j')
+
+    expect(list.tree.focusNext).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+
+    press('Enter')
+    expect(h.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('leaves bare letters to editable controls inside the tree', async () => {
+    const input = document.createElement('input')
+    focusedTreeHost().append(input)
+    input.focus()
+    const { list } = makeFakeList(focusedTreeHost(), [{ id: 'a' }])
+    await createContribution(list)
+
+    const event = press('j')
+
+    expect(list.tree.focusNext).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('navigates on a CapsLock J that carries no Shift modifier', async () => {
+    const items = [{ id: 'a' }, { id: 'b' }]
+    const { list } = makeFakeList(focusedTreeHost(), items)
+    await createContribution(list)
+
+    const event = press('J')
+
+    expect(list.tree.focusNext).toHaveBeenCalledWith(1, false, event)
+    expect(event.defaultPrevented).toBe(true)
+  })
+
   it('ignores IME composition', async () => {
     const { list } = makeFakeList(focusedTreeHost(), [{ id: 'a' }])
     await createContribution(list)
 
     const composing = new KeyboardEvent('keydown', {
       key: 'j',
-      ctrlKey: true,
       isComposing: true,
       bubbles: true,
       cancelable: true,
@@ -225,7 +282,6 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
 
     const legacy = new KeyboardEvent('keydown', {
       key: 'j',
-      ctrlKey: true,
       bubbles: true,
       cancelable: true,
     })
@@ -240,7 +296,6 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
 
     const event = new KeyboardEvent('keydown', {
       key: 'j',
-      ctrlKey: true,
       bubbles: true,
       cancelable: true,
     })
@@ -257,7 +312,7 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
     const { list } = makeFakeList(focusedTreeHost(), [{ id: 'a' }])
     await createContribution(list)
 
-    const event = press('j', { ctrlKey: true })
+    const event = press('j')
 
     expect(list.tree.focusNext).not.toHaveBeenCalled()
     expect(event.defaultPrevented).toBe(false)
@@ -269,7 +324,7 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
     const { list } = makeFakeList(otherHost, [{ id: 'a' }])
     await createContribution(list)
 
-    const event = press('j', { ctrlKey: true })
+    const event = press('j')
 
     expect(list.tree.focusNext).not.toHaveBeenCalled()
     expect(event.defaultPrevented).toBe(false)
@@ -278,7 +333,7 @@ describe('PeekNavigationContribution Ctrl navigation', () => {
   it('does nothing when the list service has no focused list', async () => {
     await createContribution(undefined)
 
-    expect(() => press('j', { ctrlKey: true })).not.toThrow()
+    expect(() => press('j')).not.toThrow()
   })
 
   it('still mirrors bare arrow navigation through the focus listener', async () => {

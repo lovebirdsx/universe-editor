@@ -61,13 +61,14 @@ host 编辑器加 `automaticLayout` 会经 `getRawOptions` 渗到所有嵌入编
 - 守护：`apps/editor/e2e/specs/smoke.agentsPromptEnterLeak.spec.ts`（@p1/@regression——开 .ts 按 Enter → 开 session editor → 切回 .ts 断言 Enter 仍插换行；已验证旧代码下该 spec 正确失败）。
 - 姊妹线：skill `register-monaco-command` 是反向流程（把 Monaco 命令**接进**命令面板）；「只该在本编辑器生效」的键位不要用它。
 
-## peek 引用树的 Ctrl 方向别名（`Ctrl+H/J/K/L`）
+## peek 引用树的裸键方向导航（`h/j/k/l`）
 
-- 实现点在 `apps/editor/src/renderer/contributions/PeekNavigationContribution.ts` 的 window capture 分支：键位判定复用 `ctrlNavigationDirection()`（纯 Ctrl 的 h/j/k/l），作用域是 `.ref-tree` 焦点 + `lastFocusedList.getHTMLElement().contains(activeElement)`（`IListService.lastFocusedList` 是 renderer 全局的，分屏 / 辅助窗口下可能指向别的树）。
-- 上下调树自己的 `focusNext/focusPrevious`；左右直接调 `AbstractTree.onLeftArrow/onRightArrow`（0.55 语义：左折叠或退到父项、右展开或进首个子项），不手写折叠/父子逻辑。调用返回后同步 `setSelection(getFocus(), event)` + `reveal` 驱动预览。
-- 必须在 window capture 用 `preventDefault + stopPropagation + stopImmediatePropagation`：全局派发器在 document capture 且**不检查 `defaultPrevented`**，不停止传播的话 `Ctrl+J` 会切底栏、`Ctrl+K` 会进入和弦。
+- 实现点在 `apps/editor/src/renderer/contributions/PeekNavigationContribution.ts` 的 window capture 分支：本地 `bareNavigationDirection()` 只认**不带任何修饰键**的 `h/j/k/l`（`e.key` 小写化，CapsLock 的 `J` 仍算；`Shift/Alt/Meta/Ctrl` 一律放行）。作用域是 `.ref-tree` 焦点 + `lastFocusedList.getHTMLElement().contains(activeElement)`（`IListService.lastFocusedList` 是 renderer 全局的，分屏 / 辅助窗口下可能指向别的树），并跳过可编辑焦点（`isEditableElement`），避免裸字母劫持树内输入控件。
+- `Ctrl+H/J/K/L` **不认领**：它们保持全局含义（`Ctrl+J` 切底栏、`Ctrl+K` 开始和弦、`Ctrl+H/L` 替换 / 行选择），因此 peek 树聚焦期间 `Ctrl+K` 和弦可用。和弦待定（`isKeybindingChordPending`）时 peek 不处理任何键，第二击无条件归全局 dispatcher。
+- 上下调树自己的 `focusNext/focusPrevious`；左右直接调 `AbstractTree.onLeftArrow/onRightArrow`（0.55 语义：左折叠或退到父项、右展开或进首个子项），不手写折叠/父子逻辑。调用返回后同步 `setSelection(getFocus(), event)` + `reveal` 驱动预览；边界落空也吞键，与全仓列表一致。
+- 必须在 window capture 用 `preventDefault + stopPropagation + stopImmediatePropagation`：全局派发器在 document capture 且**不检查 `defaultPrevented`**，不停止传播的话裸 `j/k` 会触发全局命令（例如 ACP 时间线的 j/k），Monaco 的 list typeahead 也可能再吃一次。
 - 与裸方向键的差异：裸方向键由 Monaco 的 KeyboardController 在 **bubble 阶段**移动焦点，只能挂一次性 `onDidChangeFocus` 等移动落地；`focusNext` / `onLeftArrow` 是我们主动同步调用，返回时 focus 已落定，直接镜像即可，不要复用 pending 监听。
-- 代价与全仓列表一致：peek 树聚焦期间 `Ctrl+K` 和弦不可用；且这里 `Esc` 关闭整个 peek，而不是把焦点移回编辑区。
+- 与 Vim 模式开关无关：`ctrlNavigationRegistry` 的 window 监听可能先执行，但树聚焦时宿主编辑器 `textFocused=false`，`vimEditorController` 让行，裸键仍落到这里。代价是树内 `h/j/k/l` 不再触发 Monaco 的 list typeahead；`Esc` 仍是关闭整个 peek，而不是把焦点移回编辑区。
 
 ## 0.55 升级踩坑（命名空间顶层化 / NLS 索引制）
 
