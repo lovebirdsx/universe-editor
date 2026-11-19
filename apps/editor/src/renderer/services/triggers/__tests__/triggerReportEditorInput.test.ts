@@ -1,5 +1,9 @@
 import { localize } from '@universe-editor/platform'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  MarkdownPreviewRegistry,
+  type IMarkdownPreviewController,
+} from '../../editor/MarkdownPreviewRegistry.js'
 import { TriggerReportEditorInput } from '../triggerReportEditorInput.js'
 
 describe('TriggerReportEditorInput', () => {
@@ -60,5 +64,26 @@ describe('TriggerReportEditorInput', () => {
     expect(
       TriggerReportEditorInput.deserialize({ schema: 1, runId: '', triggerName: 't' }),
     ).toBeNull()
+  })
+
+  describe('focus', () => {
+    afterEach(() => MarkdownPreviewRegistry._resetForTests())
+
+    it('routes focus to the registered reader controller', () => {
+      const input = new TriggerReportEditorInput({ runId: 'run-1', triggerName: 'Triage' })
+      const focus = vi.fn()
+      MarkdownPreviewRegistry.register(input.resource, {
+        focus,
+      } as unknown as IMarkdownPreviewController)
+
+      expect(input.focus()).toBe(true)
+      expect(focus).toHaveBeenCalledTimes(1)
+    })
+
+    it('returns false when no controller is mounted', () => {
+      const input = new TriggerReportEditorInput({ runId: 'run-1', triggerName: 'Triage' })
+
+      expect(input.focus()).toBe(false)
+    })
   })
 })

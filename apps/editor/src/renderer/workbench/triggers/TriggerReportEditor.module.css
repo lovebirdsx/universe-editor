@@ -86,6 +86,11 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* The shared markdown reader root: flex column lets its sticky find widget
+     align to the right edge; outline:none mirrors the markdown preview. */
+  display: flex;
+  flex-direction: column;
+  outline: none;
 }
 
 .markdown {

@@ -5,7 +5,14 @@
  *  is untrusted Markdown rendered by the shared MarkdownView.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useState } from 'react'
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import {
   IEditorGroupsService,
   IEditorInput,
@@ -38,6 +45,15 @@ import { relativeTime } from '../../relativeTime.js'
 import { useObservable, useService } from '../useService.js'
 import { automationVerdictLabel, triggerRunOutcomeLabel } from '../agents/automationLabels.js'
 import { MarkdownView } from '../markdown/MarkdownView.js'
+import { EditorGroupContext } from '../editor/EditorGroupContext.js'
+import { useMarkdownReaderNav } from '../editor/useMarkdownReaderNav.js'
+import { MarkdownReaderOverlays } from '../editor/MarkdownReaderOverlays.js'
+import {
+  MarkdownPreviewHelp,
+  type MarkdownPreviewHelpShortcut,
+} from '../editor/MarkdownPreviewHelp.js'
+import { isEditableTarget } from '../domUtils.js'
+import '../editor/markdownFindHighlight.css'
 import styles from './TriggerReportEditor.module.css'
 
 type ReportState =
@@ -56,10 +72,13 @@ type ReportState =
   | { readonly status: 'error' }
 
 export function TriggerReportEditor({ input }: { input: IEditorInput }) {
-  const reportInput = input instanceof TriggerReportEditorInput ? input : undefined
-  const target = reportInput?.target
-  const runId = target?.runId
-  const sessionId = target?.sessionId
+  return input instanceof TriggerReportEditorInput ? <TriggerReportView input={input} /> : null
+}
+
+function TriggerReportView({ input }: { input: TriggerReportEditorInput }) {
+  const target = input.target
+  const runId = target.runId
+  const sessionId = target.sessionId
 
   const triggers = useService(ITriggerMainService)
   const sessions = useService(IAcpSessionService)
@@ -80,23 +99,19 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
   const durableId = live?.sessionIdOnAgent.get() ?? sessionId
   const historyEntry = durableId !== undefined ? history.get(durableId) : undefined
   const automation = live?.automation ?? historyEntry?.automation
-  const authority = live?.authority ?? historyEntry?.authority ?? target?.authority
-  const triggerName = automation?.triggerName ?? target?.triggerName ?? fallbackTriggerName()
-  const eventKey = automation?.eventKey ?? target?.eventKey
+  const authority = live?.authority ?? historyEntry?.authority ?? target.authority
+  const triggerName = automation?.triggerName ?? target.triggerName ?? fallbackTriggerName()
+  const eventKey = automation?.eventKey ?? target.eventKey
   const outcome: TriggerRunOutcome | undefined =
-    historyEntry?.automation?.outcome ?? target?.snapshot?.outcome
+    historyEntry?.automation?.outcome ?? target.snapshot?.outcome
   const verdict: TriggerVerdictKind | undefined =
-    historyEntry?.automation?.verdict ?? target?.snapshot?.verdict
-  const summary = historyEntry?.automation?.summary ?? target?.snapshot?.summary
+    historyEntry?.automation?.verdict ?? target.snapshot?.verdict
+  const summary = historyEntry?.automation?.summary ?? target.snapshot?.summary
 
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<ReportState>({ status: 'loading' })
 
   useEffect(() => {
-    if (runId === undefined) {
-      setState({ status: 'error' })
-      return
-    }
     let cancelled = false
     setState({ status: 'loading' })
     void triggers.readRunReport(runId, authority).then(
@@ -113,7 +128,6 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
   }, [attempt, authority, outcome, runId, triggers])
 
   useEffect(() => {
-    if (runId === undefined) return
     const disposable = automated.onDidEndRun((end) => {
       if (end.runId === runId) setAttempt((value) => value + 1)
     })
@@ -134,7 +148,6 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
   }, [groups, inst, widgets, windowFocus, sessionId, live, historyEntry])
 
   const rerun = useCallback(() => {
-    if (runId === undefined) return
     void rerunTriggerRun(
       {
         triggers,
@@ -146,14 +159,54 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
     )
   }, [files, loggerService, notifications, runId, triggers])
 
-  if (reportInput === undefined) return null
+  const refresh = useCallback(() => setAttempt((value) => value + 1), [])
+
+  const group = useContext(EditorGroupContext)
+  const readerRef = useRef<HTMLDivElement>(null)
+  const activeGroup = groups.activeGroup
+  const isActiveEditor = activeGroup === group && activeGroup.activeEditor === input
+  const { find, linkHints, helpVisible, closeHelp } = useMarkdownReaderNav({
+    rootRef: readerRef,
+    registryUri: input.resource,
+    contentSignature: state.status === 'ready' ? state.text : state.status,
+    isActiveEditor,
+  })
+
+  // o / r / R stay on the outer root so they fire with focus either in the
+  // report body or on a header button; reading keys live on the body itself.
+  const onKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.defaultPrevented) return
+      if (event.ctrlKey || event.altKey || event.metaKey) return
+      const native = event.nativeEvent
+      if (native.isComposing || native.keyCode === 229) return
+      if (event.repeat) return
+      if (isEditableTarget(event.target)) return
+      if (find.visible || linkHints.active || helpVisible) return
+
+      // Lower-casing plus `shiftKey` keeps CapsLock on `r` meaning refresh.
+      const key = event.key.toLowerCase()
+      if (key === 'o') {
+        if (event.shiftKey || sessionId === undefined) return
+        event.preventDefault()
+        openSession()
+        return
+      }
+      if (key === 'r') {
+        event.preventDefault()
+        if (event.shiftKey) rerun()
+        else refresh()
+      }
+    },
+    [find.visible, helpVisible, linkHints.active, openSession, refresh, rerun, sessionId],
+  )
 
   const outcomeLabel = triggerRunOutcomeLabel(outcome)
   const verdictLabel = automationVerdictLabel(verdict)
   const modifiedAt = state.status === 'ready' ? state.modifiedAt : undefined
 
   return (
-    <div className={styles['root']} data-testid="trigger-report">
+    <div className={styles['root']} data-testid="trigger-report" onKeyDown={onKeyDown}>
       <header className={styles['header']}>
         <div className={styles['heading']}>
           <div className={styles['titleRow']}>
@@ -185,6 +238,8 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
               type="button"
               className={styles['action']}
               data-testid="trigger-report-open-session"
+              aria-keyshortcuts="o"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={openSession}
             >
               {localize('trigger.report.openSession', 'Open Session')}
@@ -194,6 +249,8 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
             type="button"
             className={styles['action']}
             data-testid="trigger-report-rerun"
+            aria-keyshortcuts="Shift+R"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={rerun}
           >
             {localize('trigger.report.rerun', 'Rerun')}
@@ -202,17 +259,36 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
             type="button"
             className={styles['action']}
             data-testid="trigger-report-refresh"
-            onClick={() => setAttempt((value) => value + 1)}
+            aria-keyshortcuts="r"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={refresh}
           >
             {localize('trigger.report.refresh', 'Refresh')}
           </button>
         </div>
       </header>
-      <div className={styles['body']} data-testid="trigger-report-body">
+      <div
+        ref={readerRef}
+        className={styles['body']}
+        data-testid="trigger-report-body"
+        tabIndex={0}
+      >
+        <MarkdownReaderOverlays find={find} linkHints={linkHints} rootRef={readerRef} />
         {renderState(state)}
+        {helpVisible && (
+          <MarkdownPreviewHelp onClose={closeHelp} extraShortcuts={reportHelpShortcuts()} />
+        )}
       </div>
     </div>
   )
+}
+
+function reportHelpShortcuts(): readonly MarkdownPreviewHelpShortcut[] {
+  return [
+    { keys: 'o', desc: localize('trigger.report.openSession', 'Open Session') },
+    { keys: 'r', desc: localize('trigger.report.refresh', 'Refresh') },
+    { keys: 'R', desc: localize('trigger.report.rerun', 'Rerun') },
+  ]
 }
 
 function reportStateFrom(

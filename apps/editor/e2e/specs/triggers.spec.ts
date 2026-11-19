@@ -266,6 +266,21 @@ test.describe('agent triggers', () => {
     expect(await page.evaluate(() => window.__E2E__!.getActiveEditorTypeId())).toBe(
       'trigger.report',
     )
+
+    // The report body is the shared markdown reader root: it takes focus on open
+    // and answers the same keys as the markdown preview. `?` toggles the help
+    // cheat sheet, and `r` re-reads report.md from disk.
+    const body = page.getByTestId('trigger-report-body')
+    await expect(body).toBeFocused()
+    await page.keyboard.press('?')
+    await expect(page.getByTestId('md-preview-help')).toBeVisible()
+    await page.keyboard.press('?')
+    await expect(page.getByTestId('md-preview-help')).toHaveCount(0)
+
+    writeFileSync(join(runDir, 'report.md'), '# E2E refreshed report\n\nBody after refresh.\n')
+    await body.focus()
+    await page.keyboard.press('r')
+    await expect(page.getByTestId('trigger-report-markdown')).toContainText('E2E refreshed report')
   })
 
   test('a poll trigger previews fetched items and runs the selected one with event data @p0', async ({

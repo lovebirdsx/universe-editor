@@ -15,6 +15,12 @@ interface Shortcut {
   readonly desc: string
 }
 
+/** Extra rows appended after the shared reader keys (e.g. a surface's own actions). */
+export interface MarkdownPreviewHelpShortcut {
+  readonly keys: string
+  readonly desc: string
+}
+
 function shortcuts(): readonly Shortcut[] {
   return [
     {
@@ -55,7 +61,13 @@ function shortcuts(): readonly Shortcut[] {
   ]
 }
 
-export function MarkdownPreviewHelp({ onClose }: { onClose: () => void }) {
+export function MarkdownPreviewHelp({
+  onClose,
+  extraShortcuts = [],
+}: {
+  onClose: () => void
+  readonly extraShortcuts?: readonly MarkdownPreviewHelpShortcut[]
+}) {
   const doc = useOwnerDocument()
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -82,7 +94,7 @@ export function MarkdownPreviewHelp({ onClose }: { onClose: () => void }) {
         </div>
         <table className={styles['helpTable']}>
           <tbody>
-            {shortcuts().map((s) => (
+            {[...shortcuts(), ...extraShortcuts].map((s) => (
               <tr key={s.keys}>
                 <td className={styles['helpKeys']}>
                   <kbd>{s.keys}</kbd>

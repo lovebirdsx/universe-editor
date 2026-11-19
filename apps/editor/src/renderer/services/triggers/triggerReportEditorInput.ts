@@ -6,6 +6,7 @@
 
 import { EditorInput, localize, URI } from '@universe-editor/platform'
 import type { TriggerRunOutcome, TriggerVerdictKind } from '../../../shared/triggers/types.js'
+import { MarkdownPreviewRegistry } from '../editor/MarkdownPreviewRegistry.js'
 
 const SCHEMA = 1
 
@@ -69,6 +70,19 @@ export class TriggerReportEditorInput extends EditorInput {
 
   override getName(): string {
     return localize('trigger.report.tabTitle', 'Run Report · {0}', { 0: this.target.triggerName })
+  }
+
+  /**
+   * Route focus into the report body (a plain scrollable div) instead of the
+   * editor-group fallback, which sits outside it and would clear
+   * `markdownPreviewFocused` — silencing f / Ctrl+F. Mirrors DocEditorInput;
+   * the shared useMarkdownReaderNav registers the controller keyed on `resource`.
+   */
+  override focus(): boolean {
+    const controller = MarkdownPreviewRegistry.get(this.resource)
+    if (!controller) return false
+    controller.focus()
+    return true
   }
 
   override serialize(): SerializedTriggerReport {

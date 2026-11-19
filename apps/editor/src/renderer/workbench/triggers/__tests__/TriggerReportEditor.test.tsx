@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
+  ContextKeyService,
   Emitter,
+  ICommandService,
+  IContextKeyService,
   IEditorGroupsService,
+  ILoggerService,
   InstantiationService,
   ServiceCollection,
   observableValue,
+  type ICommandService as ICommandServiceType,
+  type IEditorGroup,
 } from '@universe-editor/platform'
 import type {
   TriggerRunEnd,
@@ -20,8 +26,10 @@ import {
 import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
 import { IAutomatedSessionService } from '../../../services/triggers/automatedSessionService.js'
 import { IWindowFocusService } from '../../../services/windows/windowFocusService.js'
+import { MarkdownPreviewRegistry } from '../../../services/editor/MarkdownPreviewRegistry.js'
 import { TriggerReportEditorInput } from '../../../services/triggers/triggerReportEditorInput.js'
 import { ServicesContext } from '../../useService.js'
+import { EditorGroupContext } from '../../editor/EditorGroupContext.js'
 import { TriggerReportEditor } from '../TriggerReportEditor.js'
 
 vi.mock('../../markdown/MarkdownView.js', () => ({
@@ -44,11 +52,24 @@ vi.mock('../../../services/acp/session/revealSessionChat.js', () => ({
   revealSessionChat: vi.fn(),
 }))
 
+vi.mock('../../../services/triggers/rerunTriggerRun.js', () => ({
+  rerunTriggerRun: vi.fn(),
+}))
+
 import { revealSessionChat } from '../../../services/acp/session/revealSessionChat.js'
+import { rerunTriggerRun } from '../../../services/triggers/rerunTriggerRun.js'
+
+const stubCommandService: ICommandServiceType = {
+  _serviceBrand: undefined,
+  async executeCommand() {
+    return undefined
+  },
+}
 
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  MarkdownPreviewRegistry._resetForTests()
 })
 
 interface EditorOptions {
@@ -95,6 +116,16 @@ function renderEditor(options: EditorOptions) {
     onDidEndRun: endEmitter.event,
   } as unknown as IAutomatedSessionService
 
+  const input = new TriggerReportEditorInput({
+    runId: 'run-1',
+    triggerName: 'Triage',
+    sessionId: 'session-1',
+    eventKey: 'swarm:1',
+    ...(options.authority !== undefined ? { authority: options.authority } : {}),
+  })
+  // The report is the active editor of its group, so the reader focuses itself.
+  const group = { id: 1, activeEditor: input } as unknown as IEditorGroup
+
   const services = new ServiceCollection()
   services.set(ITriggerMainService, {
     _serviceBrand: undefined,
@@ -103,28 +134,26 @@ function renderEditor(options: EditorOptions) {
   services.set(IAcpSessionService, sessions)
   services.set(IAcpSessionHistoryService, history)
   services.set(IAutomatedSessionService, automated)
-  services.set(IEditorGroupsService, {} as never)
+  services.set(IEditorGroupsService, { activeGroup: group } as unknown as IEditorGroupsService)
   services.set(IAcpChatWidgetService, {} as never)
   services.set(IWindowFocusService, {} as never)
+  services.set(IContextKeyService, new ContextKeyService())
+  services.set(ICommandService, stubCommandService)
+  services.set(ILoggerService, {
+    _serviceBrand: undefined,
+    createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  } as unknown as ILoggerService)
   const inst = new InstantiationService(services)
 
   render(
     <ServicesContext.Provider value={inst}>
-      <TriggerReportEditor
-        input={
-          new TriggerReportEditorInput({
-            runId: 'run-1',
-            triggerName: 'Triage',
-            sessionId: 'session-1',
-            eventKey: 'swarm:1',
-            ...(options.authority !== undefined ? { authority: options.authority } : {}),
-          })
-        }
-      />
+      <EditorGroupContext.Provider value={group}>
+        <TriggerReportEditor input={input} />
+      </EditorGroupContext.Provider>
     </ServicesContext.Provider>,
   )
 
-  return { readRunReport, endEmitter }
+  return { readRunReport, endEmitter, input }
 }
 
 describe('TriggerReportEditor', () => {
@@ -248,5 +277,93 @@ describe('TriggerReportEditor', () => {
     expect(revealSessionChat).toHaveBeenCalledWith(expect.anything(), 'session-1', {
       agentId: 'claude-code',
     })
+  })
+
+  it('focuses the report body and scrolls it with j/k', async () => {
+    renderEditor({ report: { kind: 'ok', text: '# Body', runDir: 'X:/r', modifiedAt: 1 } })
+    const body = await screen.findByTestId('trigger-report-body')
+    expect(document.activeElement).toBe(body)
+
+    const scrollBy = vi.fn()
+    body.scrollBy = scrollBy as unknown as typeof body.scrollBy
+
+    fireEvent.keyDown(body, { key: 'j' })
+    expect(scrollBy).toHaveBeenCalledWith({ top: 60, behavior: 'smooth' })
+    fireEvent.keyDown(body, { key: 'k' })
+    expect(scrollBy).toHaveBeenLastCalledWith({ top: -60, behavior: 'smooth' })
+  })
+
+  it('opens the session with o', async () => {
+    renderEditor({ report: { kind: 'ok', text: '# Body', runDir: 'X:/r', modifiedAt: 1 } })
+    const body = await screen.findByTestId('trigger-report-body')
+
+    fireEvent.keyDown(body, { key: 'o' })
+    expect(revealSessionChat).toHaveBeenCalledWith(expect.anything(), 'session-1', {
+      agentId: 'claude-code',
+    })
+  })
+
+  it('refreshes with r and re-runs with R', async () => {
+    const harness = renderEditor({
+      report: { kind: 'ok', text: '# Body', runDir: 'X:/r', modifiedAt: 1 },
+    })
+    const body = await screen.findByTestId('trigger-report-body')
+    const before = harness.readRunReport.mock.calls.length
+
+    fireEvent.keyDown(body, { key: 'r' })
+    await screen.findByTestId('trigger-report-markdown')
+    expect(harness.readRunReport).toHaveBeenCalledTimes(before + 1)
+
+    fireEvent.keyDown(body, { key: 'R', shiftKey: true })
+    expect(rerunTriggerRun).toHaveBeenCalledWith(expect.anything(), 'run-1')
+  })
+
+  it('ignores action keys with modifiers', async () => {
+    const harness = renderEditor({
+      report: { kind: 'ok', text: '# Body', runDir: 'X:/r', modifiedAt: 1 },
+    })
+    const body = await screen.findByTestId('trigger-report-body')
+    const before = harness.readRunReport.mock.calls.length
+
+    fireEvent.keyDown(body, { key: 'r', ctrlKey: true })
+    fireEvent.keyDown(body, { key: 'r', altKey: true })
+    fireEvent.keyDown(body, { key: 'r', metaKey: true })
+
+    expect(harness.readRunReport).toHaveBeenCalledTimes(before)
+    expect(rerunTriggerRun).not.toHaveBeenCalled()
+  })
+
+  it('registers the reader controller so find and help work', async () => {
+    const harness = renderEditor({
+      report: { kind: 'ok', text: '# Body', runDir: 'X:/r', modifiedAt: 1 },
+    })
+    await screen.findByTestId('trigger-report-body')
+
+    const controller = MarkdownPreviewRegistry.get(harness.input.resource)
+    expect(controller).toBeDefined()
+
+    act(() => controller!.toggleHelp())
+    expect(screen.getByTestId('md-preview-help')).not.toBeNull()
+  })
+
+  it('ignores action keys and navigation while typing in the find box', async () => {
+    const harness = renderEditor({
+      report: { kind: 'ok', text: '# Body', runDir: 'X:/r', modifiedAt: 1 },
+    })
+    const body = await screen.findByTestId('trigger-report-body')
+    const scrollBy = vi.fn()
+    body.scrollBy = scrollBy as unknown as typeof body.scrollBy
+
+    const controller = MarkdownPreviewRegistry.get(harness.input.resource)
+    expect(controller).toBeDefined()
+    act(() => controller!.openFind())
+    const findInput = await screen.findByTestId('acp-find-input')
+    const before = harness.readRunReport.mock.calls.length
+
+    fireEvent.keyDown(findInput, { key: 'r' })
+    fireEvent.keyDown(findInput, { key: 'j' })
+
+    expect(harness.readRunReport).toHaveBeenCalledTimes(before)
+    expect(scrollBy).not.toHaveBeenCalled()
   })
 })
