@@ -57,6 +57,8 @@ function idle(state: VimState): VimState {
     count: 0,
     pendingOperator: null,
     pendingG: false,
+    pendingBracket: null,
+    pendingIndent: null,
     countAfterOperator: false,
   }
 }
@@ -187,7 +189,80 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
   if (functional !== null) return functional
 
   if (state.pendingG) {
-    if (key === 'g') return motion(state, 'gg')
+    switch (key) {
+      case 'g':
+        return motion(state, 'gg')
+      case 'd':
+        return emit(state, {
+          type: 'editor-command',
+          commandId: 'editor.action.revealDefinition',
+        })
+      case 'D':
+        return emit(state, {
+          type: 'editor-command',
+          commandId: 'editor.action.revealDeclaration',
+        })
+      case 'y':
+        return emit(state, {
+          type: 'editor-command',
+          commandId: 'editor.action.goToTypeDefinition',
+        })
+      case 'i':
+        return emit(state, {
+          type: 'editor-command',
+          commandId: 'editor.action.goToImplementation',
+        })
+      case 'r':
+        return emit(state, {
+          type: 'editor-command',
+          commandId: 'editor.action.goToReferences',
+        })
+      case 'R':
+        return emit(state, {
+          type: 'editor-command',
+          commandId: 'editor.action.referenceSearch.trigger',
+        })
+      case 'h':
+        return emit(state, {
+          type: 'editor-command',
+          commandId: 'editor.action.showHover',
+        })
+    }
+    if (isFunctionKeyName(key)) return { state: idle(state), command: null, handled: false }
+    return { state: idle(state), command: null, handled: true }
+  }
+
+  if (state.pendingBracket !== null) {
+    const prefix = state.pendingBracket
+    if (key === 'd') {
+      return emit(state, {
+        type: 'editor-command',
+        commandId:
+          prefix === ']' ? 'editor.action.marker.nextInFiles' : 'editor.action.marker.prevInFiles',
+      })
+    }
+    if (key === 'c') {
+      return emit(state, {
+        type: 'platform-command',
+        commandId:
+          prefix === ']'
+            ? 'workbench.action.editor.nextChange'
+            : 'workbench.action.editor.previousChange',
+        count: Math.max(1, state.count),
+      })
+    }
+    if (isFunctionKeyName(key)) return { state: idle(state), command: null, handled: false }
+    return { state: idle(state), command: null, handled: true }
+  }
+
+  if (state.pendingIndent !== null) {
+    if (key === state.pendingIndent) {
+      return emit(state, {
+        type: 'indent',
+        direction: state.pendingIndent === '>' ? 'in' : 'out',
+        count: Math.max(1, state.count),
+      })
+    }
     if (isFunctionKeyName(key)) return { state: idle(state), command: null, handled: false }
     return { state: idle(state), command: null, handled: true }
   }
@@ -219,7 +294,7 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
     return motion(state, '0')
   }
 
-  if (key === 'd' || key === 'y') {
+  if (key === 'd' || key === 'y' || key === 'c') {
     const operator = key as VimOperator
     if (state.pendingOperator === operator) {
       return emit(state, {
@@ -274,6 +349,49 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
       return emit(state, { type: 'enter-insert', placement: 'line-start' })
     case 'A':
       return emit(state, { type: 'enter-insert', placement: 'line-end' })
+    case 'o':
+      return emit(state, { type: 'enter-insert', placement: 'new-line-below' })
+    case 'O':
+      return emit(state, { type: 'enter-insert', placement: 'new-line-above' })
+    case '%':
+      return emit(state, {
+        type: 'editor-command',
+        commandId: 'editor.action.jumpToBracket',
+      })
+    case '*':
+      return emit(state, {
+        type: 'search-word',
+        direction: 'forward',
+        count: Math.max(1, state.count),
+      })
+    case '#':
+      return emit(state, {
+        type: 'search-word',
+        direction: 'backward',
+        count: Math.max(1, state.count),
+      })
+    case 'K':
+      return emit(state, {
+        type: 'editor-command',
+        commandId: 'editor.action.showHover',
+      })
+    case 'C':
+      return emit(state, {
+        type: 'operator',
+        operator: 'c',
+        motion: '$',
+        count: Math.max(1, state.count),
+      })
+    case 's':
+      return emit(state, { type: 'substitute-char', count: Math.max(1, state.count) })
+    case 'S':
+      return emit(state, { type: 'linewise', operator: 'c', count: Math.max(1, state.count) })
+    case '[':
+    case ']':
+      return { state: { ...state, pendingBracket: key }, command: null, handled: true }
+    case '>':
+    case '<':
+      return { state: { ...state, pendingIndent: key }, command: null, handled: true }
     case 'x':
       return emit(state, { type: 'delete-char', count: Math.max(1, state.count), backward: false })
     case 'X':

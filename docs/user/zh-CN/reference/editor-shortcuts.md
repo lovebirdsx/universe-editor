@@ -170,6 +170,27 @@ Normal 模式：
 | 合并行 | `J` |
 | 下移一行到行首非空白 | `Enter`（同 Vim 的 `<CR>`） |
 
+#### 代码导航与编辑（Normal）
+
+以下键与 VSCode Vim / Neovim 社区约定一致，全部在 Normal 模式、不离开主键盘：
+
+| 操作 | 键位 |
+| --- | --- |
+| 跳转定义 / 声明 | `gd` / `gD` |
+| 跳转类型定义 / 实现 | `gy` / `gi` |
+| 查看引用 / 速览引用 | `gr` / `gR` |
+| Hover 文档 | `K` 或 `gh` |
+| 括号匹配 | `%` |
+| 搜索光标下单词 | `*` 向前 / `#` 向后（当前为字面量搜索，不做整词边界） |
+| 下一个 / 上一个问题（跨文件） | `]d` / `[d` |
+| 下一处 / 上一处更改 | `]c` / `[c` |
+| 上方 / 下方新行并进入 Insert | `O` / `o` |
+| 修改（删除后进入 Insert） | `cc`（整行）、`cw` / `c$` / `c0` / `cb` / `ce` 等；`C` 同 `c$` |
+| 替换字符（删除后进入 Insert） | `s`；`S` 同 `cc` |
+| 缩进 / 反缩进 | `>>` / `<<`（支持计数，如 `3>>`） |
+
+`g`、`[`、`]`、`>`、`<` 是待定前缀，在 `vim.sequenceTimeoutMs`（默认 800ms）内等待下一键；待定期间按功能键（`F1`–`F12`）会取消前缀并照常交给工作台。这些原生前缀键由编辑器内核处理，不能用 `vim.keymap` 覆盖；需要自定义时使用下文的 leader 别名。
+
 Normal 模式下**未实现的字符键会被吞掉**，不会输入到缓冲区；`F1`–`F12`、媒体键、输入法组合键等非文本功能键不拦截，仍交给工作台和编辑器处理。`Ctrl+H` / `Ctrl+J` / `Ctrl+K` / `Ctrl+L` 仍归工作台（替换 / 切换底栏 / 和弦 / 扩选），Vim 只接管 `Ctrl+F` / `Ctrl+B` / `Ctrl+D` / `Ctrl+U`；`Ctrl+K` 和弦照常可用。
 
 搜索为**字面量**（不支持正则或多行查询），默认 smartcase：查询全小写时忽略大小写，含大写字母时区分。可在查询后加 `\c` 忽略大小写、`\C` 强制区分（对本次搜索生效），也可点击搜索框右侧的 `Aa` 切换本次策略；默认策略由 `vim.searchCaseSensitivity` 控制（`smart` / `sensitive` / `insensitive`，默认 `smart`）。区分大小写且无匹配时会提示可加 `\c`。连续两个反斜杠 `\\` 表示字面反斜杠（如 `C:\\config` 搜索 `C:\config`）。没有更多匹配时会环绕整个文件（wrapscan）。
@@ -226,7 +247,7 @@ Panel / 辅助侧边栏的**标签式**容器标题聚焦时：`h` / `l` 切换�
 
 ### Leader
 
-默认 leader 为 `Space`（`vim.leader` 可改，值用 Vim token，如 `space`、`,`）。Leader 序列可在任意 Normal surface（含编辑器）使用：
+默认 leader 为 `Space`（`vim.leader` 可改，值用 Vim token，如 `space`、`,`）。Leader 序列可在任意 Normal surface 使用；标注「编辑器内」的条目只在编辑器文本 surface 生效：
 
 | 序列 | 动作 |
 | --- | --- |
@@ -246,6 +267,18 @@ Panel / 辅助侧边栏的**标签式**容器标题聚焦时：`h` / `l` 切换�
 | `<leader> w w` | 聚焦下一个编辑器组 |
 | `<leader> w s` | 向下拆分编辑器 |
 | `<leader> w c` | 关闭当前编辑器 |
+| `<leader> d` / `<leader> D` | 编辑器内：跳转定义 / 速览定义 |
+| `<leader> r` / `<leader> R` | 编辑器内：查看引用 / 速览引用 |
+| `<leader> y` / `<leader> i` | 编辑器内：跳转类型定义 / 实现 |
+| `<leader> k` | 编辑器内：Hover 文档 |
+| `<leader> a` | 编辑器内：快速修复 |
+| `<leader> c` | 编辑器内：切换行注释 |
+| `<leader> m` | 编辑器内：重命名符号 |
+| `<leader> F` | 编辑器内：格式化文档 |
+| `<leader> I` | 编辑器内：组织导入 |
+| `<leader> G` | 编辑器内：转到行 |
+| `<leader> O` / `<leader> S` | 编辑器内：文件内符号 / 工作区符号 |
+| `<leader> h` / `<leader> l` | 编辑器内：后退 / 前进 |
 
 列表 / 树 / 菜单 / 浮层里的裸 `Space` 让给 leader；预览用 `p`，激活用 `Enter` 或 `o`。
 

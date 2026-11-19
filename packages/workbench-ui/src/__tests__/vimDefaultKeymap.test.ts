@@ -84,4 +84,30 @@ describe('VIM_DEFAULT_KEYMAP', () => {
       expect(entry?.when).toBe('acpChatFocused')
     }
   })
+
+  it('editor leader aliases stay on the editor surface', () => {
+    const expectations = [
+      [['<leader>', 'd'], 'editor.action.revealDefinition'],
+      [['<leader>', 'D'], 'editor.action.peekDefinition'],
+      [['<leader>', 'r'], 'editor.action.goToReferences'],
+      [['<leader>', 'R'], 'editor.action.referenceSearch.trigger'],
+      [['<leader>', 'y'], 'editor.action.goToTypeDefinition'],
+      [['<leader>', 'i'], 'editor.action.goToImplementation'],
+      [['<leader>', 'k'], 'editor.action.showHover'],
+      [['<leader>', 'a'], 'editor.action.quickFix'],
+      [['<leader>', 'c'], 'editor.action.commentLine'],
+      [['<leader>', 'm'], 'editor.action.rename'],
+      [['<leader>', 'F'], 'editor.action.formatDocument'],
+      [['<leader>', 'I'], 'editor.action.organizeImports'],
+      [['<leader>', 'G'], 'editor.action.gotoLine'],
+      [['<leader>', 'O'], 'editor.action.quickOutline'],
+      [['<leader>', 'S'], 'workbench.action.showAllSymbols'],
+      [['<leader>', 'h'], 'workbench.action.goBack'],
+      [['<leader>', 'l'], 'workbench.action.goForward'],
+    ] as const
+    for (const [keys, command] of expectations) {
+      expect(commandFor('editor', keys), keys.join(' ')).toBe(command)
+      expect(commandFor('list', keys), keys.join(' ')).toBeUndefined()
+    }
+  })
 })

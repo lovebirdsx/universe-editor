@@ -82,6 +82,12 @@ export interface IVimEditorControllerOptions {
   readonly contextKeyService: IContextKeyService
   readonly vimModeService: IVimModeService
   readonly inputMethodService: IVimInputMethodService
+  /**
+   * Executes workbench command ids that are not Monaco actions (`]c` / `[c`).
+   * Monaco actions go through `editor.trigger` instead so the controller keeps
+   * working when the commands registry is not ready yet.
+   */
+  readonly executeCommand?: (id: string, args?: unknown) => unknown
 }
 
 function readLines(model: VimTextModel): string[] {
@@ -105,6 +111,7 @@ export function createVimEditorController(
     contextKeyService,
     vimModeService,
     inputMethodService,
+    executeCommand: runPlatformCommand,
   } = options
   const resolveSurfaceKey = typeof surfaceKey === 'function' ? surfaceKey : () => surfaceKey
   // The key follows the model: until Monaco swaps models the controller is still
@@ -772,6 +779,63 @@ export function createVimEditorController(
     else clearSearchHighlight()
   }
 
+  /**
+   * `*` / `#`: search for the keyword under the cursor. The search core is
+   * literal, so this matches the word as plain text rather than Vim's
+   * `\<...\>` whole-word pattern.
+   */
+  function searchWord(direction: VimSearchDirection, count: number): void {
+    const model = editor.getModel()
+    if (model === null) return
+    const from = primaryPosition()
+    const line = model.getLineContent(from.line)
+    const isKeyword = (value: string | undefined): boolean =>
+      value !== undefined && /[A-Za-z0-9_$]/.test(value)
+
+    let start = from.column - 1
+    if (!isKeyword(line[start])) {
+      while (start < line.length && !isKeyword(line[start])) start++
+      if (start >= line.length) return
+    }
+    let end = start
+    while (end < line.length && isKeyword(line[end])) end++
+    const word = line.slice(start, end)
+    if (word.length === 0) return
+
+    searchCaseOverride = null
+    const pattern = resolveCurrentSearch(word)
+    setLastVimSearch({
+      text: pattern.text,
+      direction,
+      caseSensitive: pattern.caseSensitive,
+    })
+    searchHighlightSuppressed = false
+    // Start after the word so `*` / `#` skip the match under the cursor.
+    let origin: VimPosition
+    if (direction === 'forward') {
+      origin = { line: from.line, column: end + 1 }
+    } else if (start > 0) {
+      origin = { line: from.line, column: start }
+    } else {
+      const previousLine = from.line - 1
+      if (previousLine >= 1) {
+        origin = { line: previousLine, column: model.getLineContent(previousLine).length + 1 }
+      } else {
+        const lastLine = model.getLineCount()
+        origin = { line: lastLine, column: model.getLineContent(lastLine).length + 1 }
+      }
+    }
+    const match = findVimMatch(model, origin, pattern.text, {
+      direction,
+      count: Math.max(1, count),
+      caseSensitive: pattern.caseSensitive,
+    })
+    if (match === null) return
+    setPosition({ line: match.line, column: match.column })
+    if (highlightSearch) refreshSearchHighlights()
+    else clearSearchHighlight()
+  }
+
   function toggleSearchCase(): void {
     const widget = searchWidget
     if (widget === null || searchOrigin === null) return
@@ -828,6 +892,19 @@ export function createVimEditorController(
       clearSearchHighlight()
       return
     }
+    if (command.type === 'editor-command') {
+      editor.trigger('vim', command.commandId, null)
+      return
+    }
+    if (command.type === 'platform-command') {
+      const steps = Math.max(1, command.count)
+      for (let index = 0; index < steps; index++) void runPlatformCommand?.(command.commandId)
+      return
+    }
+    if (command.type === 'search-word') {
+      searchWord(command.direction, command.count)
+      return
+    }
 
     const model = editor.getModel()
     if (!model) return
@@ -860,6 +937,7 @@ export function createVimEditorController(
         })
         if (command.operator === 'y') return
         applyDelete(opRange.range)
+        if (command.operator === 'c') setMode('insert')
         return
       }
       case 'linewise': {
@@ -870,7 +948,34 @@ export function createVimEditorController(
           linewise: true,
         })
         if (command.operator === 'y') return
+        if (command.operator === 'c') {
+          // `cc` keeps one empty line instead of deleting the line break.
+          const endColumn = (lines[endLine - 1] ?? '').length + 1
+          editor.pushUndoStop()
+          editor.executeEdits('vim', [
+            {
+              range: {
+                startLineNumber: startLine,
+                startColumn: 1,
+                endLineNumber: endLine,
+                endColumn,
+              },
+              text: '',
+            },
+          ])
+          editor.pushUndoStop()
+          editor.setPosition(toMonacoPosition({ line: startLine, column: 1 }), 'vim')
+          setMode('insert')
+          return
+        }
         applyDelete(linewiseRange(lines, startLine, endLine))
+        return
+      }
+      case 'indent': {
+        const steps = Math.max(1, command.count)
+        const commandId =
+          command.direction === 'in' ? 'editor.action.indentLines' : 'editor.action.outdentLines'
+        for (let index = 0; index < steps; index++) editor.trigger('vim', commandId, null)
         return
       }
       case 'enter-insert': {
@@ -879,6 +984,11 @@ export function createVimEditorController(
       }
       case 'delete-char': {
         deleteChars(command.count, command.backward)
+        return
+      }
+      case 'substitute-char': {
+        deleteChars(command.count, false)
+        setMode('insert')
         return
       }
       case 'paste': {
@@ -918,6 +1028,12 @@ export function createVimEditorController(
         break
       case 'line-end':
         setPosition({ line: from.line, column: lineEnd })
+        break
+      case 'new-line-below':
+        editor.trigger('vim', 'editor.action.insertLineAfter', null)
+        break
+      case 'new-line-above':
+        editor.trigger('vim', 'editor.action.insertLineBefore', null)
         break
     }
     setMode('insert')
@@ -1054,6 +1170,8 @@ export function createVimEditorController(
       count: 0,
       pendingOperator: null,
       pendingG: false,
+      pendingBracket: null,
+      pendingIndent: null,
       countAfterOperator: false,
     }
     syncContextKeys()

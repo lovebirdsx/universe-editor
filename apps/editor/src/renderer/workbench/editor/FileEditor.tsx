@@ -347,6 +347,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       contextKeyService,
       vimModeService,
       inputMethodService: vimInputMethodService,
+      executeCommand: (id, args) => commandService.executeCommand(id, args),
     })
     const vimRegistration = registerVimSurface({
       get id() {

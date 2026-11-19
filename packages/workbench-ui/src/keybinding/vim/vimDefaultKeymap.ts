@@ -380,4 +380,111 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
     keys: ['<leader>', 'w', 'c'],
     command: 'workbench.action.closeActiveEditor',
   },
+
+  // -- editor: code navigation & actions ------------------------------------
+  // The native keys (`gd`, `gr`, …) live in the editor Vim core; these leader
+  // entries are the discoverable aliases and the only way to reach the actions
+  // that have no native mapping.
+  {
+    id: 'editor.definition',
+    keys: ['<leader>', 'd'],
+    command: 'editor.action.revealDefinition',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.peekDefinition',
+    keys: ['<leader>', 'D'],
+    command: 'editor.action.peekDefinition',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.references',
+    keys: ['<leader>', 'r'],
+    command: 'editor.action.goToReferences',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.peekReferences',
+    keys: ['<leader>', 'R'],
+    command: 'editor.action.referenceSearch.trigger',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.typeDefinition',
+    keys: ['<leader>', 'y'],
+    command: 'editor.action.goToTypeDefinition',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.implementation',
+    keys: ['<leader>', 'i'],
+    command: 'editor.action.goToImplementation',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.hover',
+    keys: ['<leader>', 'k'],
+    command: 'editor.action.showHover',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.quickFix',
+    keys: ['<leader>', 'a'],
+    command: 'editor.action.quickFix',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.comment',
+    keys: ['<leader>', 'c'],
+    command: 'editor.action.commentLine',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.rename',
+    keys: ['<leader>', 'm'],
+    command: 'editor.action.rename',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.format',
+    keys: ['<leader>', 'F'],
+    command: 'editor.action.formatDocument',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.organizeImports',
+    keys: ['<leader>', 'I'],
+    command: 'editor.action.organizeImports',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.gotoLine',
+    keys: ['<leader>', 'G'],
+    command: 'editor.action.gotoLine',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.symbols',
+    keys: ['<leader>', 'O'],
+    command: 'editor.action.quickOutline',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.workspaceSymbols',
+    keys: ['<leader>', 'S'],
+    command: 'workbench.action.showAllSymbols',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.goBack',
+    keys: ['<leader>', 'h'],
+    command: 'workbench.action.goBack',
+    surfaces: ['editor'],
+  },
+  {
+    id: 'editor.goForward',
+    keys: ['<leader>', 'l'],
+    command: 'workbench.action.goForward',
+    surfaces: ['editor'],
+  },
 ]

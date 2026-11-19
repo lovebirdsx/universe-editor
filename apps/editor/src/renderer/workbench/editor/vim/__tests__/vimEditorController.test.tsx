@@ -193,6 +193,25 @@ function createInputMethodService() {
 describe('createVimEditorController', () => {
   beforeEach(() => resetVimSearchForTests())
 
+  function createNormalHarness(
+    lines: string[],
+    extra: Partial<Parameters<typeof createVimEditorController>[0]> = {},
+  ) {
+    const fake = createFakeEditor(lines)
+    const vim = createVimModeService()
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
+      contextKeyService: createContext() as never,
+      vimModeService: vim as never,
+      inputMethodService: createInputMethodService() as never,
+      ...extra,
+    })
+    fake.focus()
+    return { fake, vim, controller }
+  }
+
   it('does nothing while disabled', () => {
     const fake = createFakeEditor(['abc', 'def'])
     const controller = createVimEditorController({
@@ -1208,6 +1227,104 @@ describe('createVimEditorController', () => {
     input.dispatchEvent(escape)
     expect(node.hidden).toBe(false)
     expect(node.querySelector<HTMLInputElement>('input')?.value).toBe('foo')
+    controller.dispose()
+  })
+
+  it('runs code-navigation editor commands from the g prefix', () => {
+    const { fake, controller } = createNormalHarness(['const value = 1'])
+    const mappings = [
+      [['g', 'd'], 'editor.action.revealDefinition'],
+      [['g', 'D'], 'editor.action.revealDeclaration'],
+      [['g', 'y'], 'editor.action.goToTypeDefinition'],
+      [['g', 'i'], 'editor.action.goToImplementation'],
+      [['g', 'r'], 'editor.action.goToReferences'],
+      [['g', 'R'], 'editor.action.referenceSearch.trigger'],
+      [['g', 'h'], 'editor.action.showHover'],
+    ] as const
+    for (const [keys, commandId] of mappings) {
+      for (const stroke of keys) controller.handleKeyDown(key(stroke))
+      expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', commandId, null)
+    }
+    controller.dispose()
+  })
+
+  it('runs hover, bracket, marker and change navigation', () => {
+    const executeCommand = vi.fn()
+    const { fake, controller } = createNormalHarness(['(a)'], { executeCommand })
+    controller.handleKeyDown(key('K'))
+    expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'editor.action.showHover', null)
+    controller.handleKeyDown(key('%'))
+    expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'editor.action.jumpToBracket', null)
+    controller.handleKeyDown(key(']'))
+    controller.handleKeyDown(key('d'))
+    expect(fake.editor.trigger).toHaveBeenLastCalledWith(
+      'vim',
+      'editor.action.marker.nextInFiles',
+      null,
+    )
+    controller.handleKeyDown(key('['))
+    controller.handleKeyDown(key('c'))
+    expect(executeCommand).toHaveBeenLastCalledWith('workbench.action.editor.previousChange')
+    controller.dispose()
+  })
+
+  it('opens a new line with o/O and enters Insert', () => {
+    const { fake, vim, controller } = createNormalHarness(['abc'])
+    controller.handleKeyDown(key('o'))
+    expect(fake.editor.trigger).toHaveBeenLastCalledWith(
+      'vim',
+      'editor.action.insertLineAfter',
+      null,
+    )
+    expect(vim.modes.get('editor:test')).toBe('insert')
+    controller.handleKeyDown(key('Escape'))
+    controller.handleKeyDown(key('O'))
+    expect(fake.editor.trigger).toHaveBeenLastCalledWith(
+      'vim',
+      'editor.action.insertLineBefore',
+      null,
+    )
+    expect(vim.modes.get('editor:test')).toBe('insert')
+    controller.dispose()
+  })
+
+  it('indents and outdents with >> and << including counts', () => {
+    const { fake, controller } = createNormalHarness(['abc'])
+    controller.handleKeyDown(key('2'))
+    controller.handleKeyDown(key('>'))
+    controller.handleKeyDown(key('>'))
+    expect(fake.editor.trigger).toHaveBeenCalledTimes(2)
+    expect(fake.editor.trigger).toHaveBeenNthCalledWith(1, 'vim', 'editor.action.indentLines', null)
+    controller.handleKeyDown(key('<'))
+    controller.handleKeyDown(key('<'))
+    expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'editor.action.outdentLines', null)
+    controller.dispose()
+  })
+
+  it('changes text and enters Insert for cc, s and C', () => {
+    const { fake, vim, controller } = createNormalHarness(['abc', 'def'])
+    controller.handleKeyDown(key('c'))
+    controller.handleKeyDown(key('c'))
+    expect(fake.editor.executeEdits).toHaveBeenCalled()
+    expect(vim.modes.get('editor:test')).toBe('insert')
+    controller.handleKeyDown(key('Escape'))
+    controller.handleKeyDown(key('s'))
+    expect(fake.editor.executeEdits).toHaveBeenCalledTimes(2)
+    expect(vim.modes.get('editor:test')).toBe('insert')
+    controller.handleKeyDown(key('Escape'))
+    controller.handleKeyDown(key('C'))
+    expect(fake.editor.executeEdits).toHaveBeenCalledTimes(3)
+    expect(vim.modes.get('editor:test')).toBe('insert')
+    controller.dispose()
+  })
+
+  it('searches the word under the cursor with * and #', () => {
+    const { fake, controller } = createNormalHarness(['foo bar foo', 'foo'])
+    controller.handleKeyDown(key('*'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 9 })
+    expect(getLastVimSearch()?.text).toBe('foo')
+    controller.handleKeyDown(key('#'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
     controller.dispose()
   })
 })

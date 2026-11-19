@@ -120,19 +120,46 @@ describe('reduceVimKey', () => {
     for (const [key, placement] of Object.entries(placements)) {
       expect(press(INITIAL_VIM_STATE, key).command).toEqual({ type: 'enter-insert', placement })
     }
-    for (const key of ['o', 'O', 's', 'S', 'C']) {
-      const result = press(INITIAL_VIM_STATE, key)
-      expect(result.command).toBeNull()
-      expect(result.state.mode).toBe('normal')
-      expect(result.handled).toBe(true)
-    }
   })
 
-  it('does not treat c as an operator', () => {
+  it('maps o/O/s/S/C to their commands', () => {
+    expect(press(INITIAL_VIM_STATE, 'o').command).toEqual({
+      type: 'enter-insert',
+      placement: 'new-line-below',
+    })
+    expect(press(INITIAL_VIM_STATE, 'O').command).toEqual({
+      type: 'enter-insert',
+      placement: 'new-line-above',
+    })
+    expect(press(INITIAL_VIM_STATE, 's').command).toEqual({ type: 'substitute-char', count: 1 })
+    expect(press(INITIAL_VIM_STATE, 'S').command).toEqual({
+      type: 'linewise',
+      operator: 'c',
+      count: 1,
+    })
+    expect(press(INITIAL_VIM_STATE, 'C').command).toEqual({
+      type: 'operator',
+      operator: 'c',
+      motion: '$',
+      count: 1,
+    })
+  })
+
+  it('treats c as an operator', () => {
     const result = press(INITIAL_VIM_STATE, 'c')
-    expect(result.state.pendingOperator).toBeNull()
+    expect(result.state.pendingOperator).toBe('c')
     expect(result.command).toBeNull()
-    expect(press(result.state, 'w').command).toEqual({ type: 'motion', motion: 'w', count: 0 })
+    expect(press(result.state, 'c').command).toEqual({
+      type: 'linewise',
+      operator: 'c',
+      count: 1,
+    })
+    expect(press(result.state, 'w').command).toEqual({
+      type: 'operator',
+      operator: 'c',
+      motion: 'w',
+      count: 0,
+    })
   })
 
   it('handles x/X/p/P/u/J', () => {
@@ -345,6 +372,96 @@ describe('reduceVimKey', () => {
       expect(result.handled).toBe(true)
       expect(result.command).toBeNull()
       expect(result.state.pendingOperator).toBeNull()
+    }
+  })
+
+  it('maps g-prefixed navigation commands', () => {
+    const mappings = [
+      ['d', 'editor.action.revealDefinition'],
+      ['D', 'editor.action.revealDeclaration'],
+      ['y', 'editor.action.goToTypeDefinition'],
+      ['i', 'editor.action.goToImplementation'],
+      ['r', 'editor.action.goToReferences'],
+      ['R', 'editor.action.referenceSearch.trigger'],
+      ['h', 'editor.action.showHover'],
+    ] as const
+    for (const [key, commandId] of mappings) {
+      const g = press(INITIAL_VIM_STATE, 'g')
+      expect(g.state.pendingG).toBe(true)
+      const result = press(g.state, key)
+      expect(result.command).toEqual({ type: 'editor-command', commandId })
+      expect(result.state.pendingG).toBe(false)
+    }
+  })
+
+  it('maps bracket-prefixed diagnostics and change navigation', () => {
+    expect(press(press(INITIAL_VIM_STATE, ']').state, 'd').command).toEqual({
+      type: 'editor-command',
+      commandId: 'editor.action.marker.nextInFiles',
+    })
+    expect(press(press(INITIAL_VIM_STATE, '[').state, 'd').command).toEqual({
+      type: 'editor-command',
+      commandId: 'editor.action.marker.prevInFiles',
+    })
+    expect(press(press(INITIAL_VIM_STATE, ']').state, 'c').command).toEqual({
+      type: 'platform-command',
+      commandId: 'workbench.action.editor.nextChange',
+      count: 1,
+    })
+    expect(press(press(INITIAL_VIM_STATE, '[').state, 'c').command).toEqual({
+      type: 'platform-command',
+      commandId: 'workbench.action.editor.previousChange',
+      count: 1,
+    })
+  })
+
+  it('indents and outdents with >> and << carrying counts', () => {
+    expect(press(press(INITIAL_VIM_STATE, '>').state, '>').command).toEqual({
+      type: 'indent',
+      direction: 'in',
+      count: 1,
+    })
+    const counted = press(press(press(INITIAL_VIM_STATE, '3').state, '>').state, '>')
+    expect(counted.command).toEqual({ type: 'indent', direction: 'in', count: 3 })
+    expect(press(press(INITIAL_VIM_STATE, '<').state, '<').command).toEqual({
+      type: 'indent',
+      direction: 'out',
+      count: 1,
+    })
+  })
+
+  it('maps hover, bracket matching and word search', () => {
+    expect(press(INITIAL_VIM_STATE, 'K').command).toEqual({
+      type: 'editor-command',
+      commandId: 'editor.action.showHover',
+    })
+    expect(press(INITIAL_VIM_STATE, '%').command).toEqual({
+      type: 'editor-command',
+      commandId: 'editor.action.jumpToBracket',
+    })
+    expect(press(INITIAL_VIM_STATE, '*').command).toEqual({
+      type: 'search-word',
+      direction: 'forward',
+      count: 1,
+    })
+    expect(press(INITIAL_VIM_STATE, '#').command).toEqual({
+      type: 'search-word',
+      direction: 'backward',
+      count: 1,
+    })
+    expect(press(press(INITIAL_VIM_STATE, '2').state, '*').command).toEqual({
+      type: 'search-word',
+      direction: 'forward',
+      count: 2,
+    })
+  })
+
+  it('lets function keys through a dangling g / bracket / indent prefix', () => {
+    for (const prefix of ['g', '[', ']', '>', '<']) {
+      const armed = press(INITIAL_VIM_STATE, prefix).state
+      const result = press(armed, 'F5')
+      expect(result.handled).toBe(false)
+      expect(result.command).toBeNull()
     }
   })
 })

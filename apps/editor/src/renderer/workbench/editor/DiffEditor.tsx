@@ -12,6 +12,7 @@
 
 import { useContext, useEffect, useRef, useState } from 'react'
 import {
+  ICommandService,
   IConfigurationService,
   IContextKeyService,
   IEditorGroupsService,
@@ -80,6 +81,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   // provides both.
   const vimModeService = useOptionalService(IVimModeService)
   const vimInputMethodService = useOptionalService(IVimInputMethodService)
+  const commandService = useOptionalService(ICommandService)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
@@ -256,6 +258,12 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
         contextKeyService,
         vimModeService,
         inputMethodService: vimInputMethodService,
+        ...(commandService !== undefined
+          ? {
+              executeCommand: (id: string, args?: unknown) =>
+                commandService.executeCommand(id, args),
+            }
+          : {}),
       })
       vimRegistration = registerVimSurface({
         get id() {
@@ -345,6 +353,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     contextKeyService,
     vimModeService,
     vimInputMethodService,
+    commandService,
   ])
 
   // Refresh both sides in place when the input's content changes (e.g. the file

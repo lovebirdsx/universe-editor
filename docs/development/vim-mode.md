@@ -31,6 +31,8 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | `apps/editor/src/renderer/actions/terminalNormalActions.ts` | 终端 Normal 的进入 / 退出 / 滚动 / 选择 / 复制命令 |
 | `apps/editor/src/renderer/workbench/panel/terminal/terminalNormalMode.ts` | 终端 Normal 状态机（视口滚动 + 按行选择） |
 | `apps/editor/src/renderer/services/terminal/terminalNormalModeRegistry.ts` | 当前持有焦点的终端 controller 注册表 |
+| `apps/editor/src/renderer/workbench/editor/vim/vimKeymap.ts` | 编辑器 Normal/Insert reducer：裸键、计数、待定前缀（`g` / `[` / `]` / `>` / `<`）、operator |
+| `apps/editor/src/renderer/workbench/editor/vim/vimEditorController.ts` | 把 reducer 的输出绑到 Monaco：动作执行、搜索、模式同步；`executeCommand` 回调仅用于 workbench 命令 |
 
 ## 唯一入口与分发顺序
 
@@ -117,6 +119,8 @@ useVimSurface({
 - **三段及以上的歧义序列**：`a` / `ab` / `abc` 同时存在时，引擎只保留**最近一层**的完整匹配作为超时回退。依次按 `a`、`b` 后停在 `ab`：此时超时（或下一个不延续前缀的键）执行 **`ab` 的命令**；若继续按 `c` 则执行 `abc`。更早的 `a` 不会在超时后补发——待定分支始终是当前最长前缀，回退目标是这条分支上最后一个既完整又是前缀的条目。
 - `runMatches` 会先尝试带 `when` 的条目，再尝试默认条目，取第一条匹配；因此同一键的「视图专用含义」不会被注册顺序遮蔽。所有候选都不匹配时**消费但不执行**。
 - 用户 `vim.keymap` 在服务里按 `id` 覆盖内置条目、其余追加；编辑器内核的 Normal 键不受该表覆盖。
+- 编辑器专属 leader 条目（`editor.*`）带 `surfaces: ['editor']`，不会出现在列表 / 标签栏等 surface 的有效 keymap 里。
+- 编辑器内核的裸键（`g` / `[` / `]` / `>` / `<` 前缀，以及 `K`、`%`、`*`、`#`、`o`、`O`、`c` operator 等）由 `vimKeymap.ts` 的 reducer 直接产出，不进 keymap 表；因此 `vim.keymap` 只能覆盖 leader 别名。Monaco 动作走 `editor.trigger`，workbench 命令（`]c` / `[c`）走 `createVimEditorController` 的 `executeCommand` 回调（`FileEditor` / `DiffEditor` 注入 `ICommandService`）。
 
 ## User 让行与保留集
 
@@ -189,7 +193,7 @@ KeybindingsRegistry.hasBindingAtOrAbove(
 | 服务 / 分发 | `services/vim/__tests__/vimModeService.test.ts`、`workbench/vim/__tests__/vimDispatcher.test.ts` |
 | surface 适配 | `workbench/editor/__tests__/useEditorTabsVim.test.tsx`、`activitybar/__tests__/ActivityBar.vim.test.tsx`、`paneComposite/__tests__/PaneCompositeHeader.vim.test.tsx`、`preferences/__tests__/SettingsEditor.vim.test.tsx`、`gitGraph/__tests__/useGraphKeyboardNav.vim.test.tsx`、`terminal/__tests__/terminalNormalMode.test.ts` |
 | 编辑器内核 | `workbench/editor/vim/__tests__/*` |
-| e2e | `smoke.vimGlobal.spec.ts` / `smoke.vimPriority.spec.ts`（@p0）、`smoke.vimMode` / `smoke.vimTabs` / `smoke.vimTerminalNormal` / `smoke.vimSettings` / `smoke.vimWebview` / `smoke.vimChat`（@p1） |
+| e2e | `smoke.vimGlobal.spec.ts` / `smoke.vimPriority.spec.ts`（@p0）、`smoke.vimMode` / `smoke.vimKeymapNavigation` / `smoke.vimTabs` / `smoke.vimTerminalNormal` / `smoke.vimSettings` / `smoke.vimWebview` / `smoke.vimChat`（@p1） |
 
 e2e 通过 `window.__E2E__.runCommand('_workbench.updateConfiguration', 'vim.enabled', value)` 开关，并用 `getContextKey` / `getStatusBarEntries` / `getActiveEditorUri` 断言，不戳 Monaco 内部 DOM。
 
@@ -206,6 +210,7 @@ e2e 通过 `window.__E2E__.runCommand('_workbench.updateConfiguration', 'vim.ena
 - **surfaceKey 必须稳定**：使用自动键的组件每次挂载都是新实例；需要跨卸载记忆的视图必须传稳定 id，并在真正该重置时 `forgetSurface`。
 - **Ctrl 别名优先级**：`Ctrl+J/K/H/L` 在到达 Vim 前已被 `ctrlNavigationRegistry` 消费；因此 surface 聚焦期间 `Ctrl+K` 和弦不可用，这是设计代价。
 - **模式是内存态**：重启不保留；不要把它当用户设置持久化。
+- **编辑器内核命令分两路**：Monaco action（`editor.action.*`）用 `editor.trigger`；workbench 命令（`workbench.action.editor.*`，如 `]c` / `[c`）必须走注入的 `executeCommand` 回调。把 workbench 命令塞给 `editor.trigger` 会静默 no-op。
 - **多窗口**：provider 按 Document 隔离，`Workbench.tsx` 与 `AuxiliaryWindowHost.tsx` 各装一份 `useVimDispatcher`；新增窗口宿主也要装。
 
 ## 相关

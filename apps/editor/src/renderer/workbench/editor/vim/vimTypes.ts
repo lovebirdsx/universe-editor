@@ -10,7 +10,7 @@ import type { monaco } from '../monaco/MonacoLoader.js'
 
 export type VimMode = 'normal' | 'insert'
 
-export type VimOperator = 'd' | 'y'
+export type VimOperator = 'd' | 'y' | 'c'
 
 /** Direction of a `/` or `?` search. */
 export type VimSearchDirection = 'forward' | 'backward'
@@ -47,8 +47,12 @@ export interface VimState {
   /** Accumulated count; 0 means "none entered". */
   readonly count: number
   readonly pendingOperator: VimOperator | null
-  /** `g` was pressed and we are waiting for the second `g`. */
+  /** `g` was pressed and we are waiting for the command key (`gg`, `gd`, …). */
   readonly pendingG: boolean
+  /** `[` or `]` was pressed and we are waiting for the navigation key. */
+  readonly pendingBracket: '[' | ']' | null
+  /** `>` or `<` was pressed and we are waiting for the same key (`>>`, `<<`). */
+  readonly pendingIndent: '>' | '<' | null
   /**
    * Whether a digit has been typed *after* the pending operator. Vim only lets
    * `0` act as a count digit once a count has started there (`d10w`); a `0`
@@ -62,10 +66,18 @@ export const INITIAL_VIM_STATE: VimState = {
   count: 0,
   pendingOperator: null,
   pendingG: false,
+  pendingBracket: null,
+  pendingIndent: null,
   countAfterOperator: false,
 }
 
-export type VimInsertPlacement = 'before' | 'after' | 'line-start' | 'line-end'
+export type VimInsertPlacement =
+  | 'before'
+  | 'after'
+  | 'line-start'
+  | 'line-end'
+  | 'new-line-below'
+  | 'new-line-above'
 
 export type VimCommand =
   | { readonly type: 'motion'; readonly motion: VimMotion; readonly count: number }
@@ -90,8 +102,30 @@ export type VimCommand =
     }
   /** `n` and `N`: repeat the last search; `reverse` flips its direction. */
   | { readonly type: 'search-repeat'; readonly reverse: boolean; readonly count: number }
+  /** `*` and `#`: search for the word under the cursor. */
+  | {
+      readonly type: 'search-word'
+      readonly direction: VimSearchDirection
+      readonly count: number
+    }
   /** Normal-mode Escape: drop persistent `hlsearch` highlights (`:nohlsearch`). */
   | { readonly type: 'search-highlight-clear' }
+  /** Monaco editor action (`gd`, `%`, `o`, …); executed through `editor.trigger`. */
+  | { readonly type: 'editor-command'; readonly commandId: string }
+  /** Workbench command (`]c`, `[c`); executed through the injected command service. */
+  | {
+      readonly type: 'platform-command'
+      readonly commandId: string
+      readonly count: number
+    }
+  /** `>>` and `<<`: indent/outdent the current line. */
+  | {
+      readonly type: 'indent'
+      readonly direction: 'in' | 'out'
+      readonly count: number
+    }
+  /** `s`: delete characters under the cursor and enter Insert. */
+  | { readonly type: 'substitute-char'; readonly count: number }
 
 export interface VimKeyInput {
   readonly key: string
