@@ -588,8 +588,12 @@ jobs:
       # fast, but still block CI here — same parallel shard mechanism as the main
       # pass. Tag filtering lives in the shared config (UNIVERSE_E2E_ONLY_TAG); no
       # --grep flag. See apps/editor/e2e/CLAUDE.md.
+      #
+      # `!cancelled()` instead of the implicit success(): a smoke failure must not
+      # skip this pass and hide @regression breakage from the run (and from the
+      # next fix), which is exactly how a TOC regression stayed invisible.
       - name: Run E2E regression (Linux, xvfb)
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         env:
           UNIVERSE_E2E_ONLY_TAG: '@regression'
           UNIVERSE_E2E_JSON_REPORT: ${{ runner.temp }}/playwright-json/${{ runner.os }}-${{ matrix.shard }}-regression.json
@@ -653,8 +657,11 @@ jobs:
       # keeps its PR regression pass — it is cheap there and not the critical path.
       # Tag filtering lives in the shared config (UNIVERSE_E2E_ONLY_TAG); no
       # --grep flag. See apps/editor/e2e/CLAUDE.md.
+      #
+      # `!cancelled()` instead of the implicit success() for the same reason as
+      # the Linux pass: a failed smoke step must not hide @regression breakage.
       - name: Run E2E regression (Windows)
-        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        if: ${{ !cancelled() && runner.os == 'Windows' && github.event_name != 'pull_request' }}
         shell: bash
         env:
           UNIVERSE_E2E_ONLY_TAG: '@regression'
