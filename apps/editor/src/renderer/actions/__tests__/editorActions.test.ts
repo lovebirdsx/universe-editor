@@ -863,7 +863,11 @@ describe('FocusActiveEditorGroupAction', () => {
     const mainInput = Object.create(FileEditorInput.prototype) as FileEditorInput
     svc.mainPart.activeGroup.openEditor(mainInput)
     const mainFocus = vi.fn()
-    FileEditorRegistry.register(mainInput, { focus: mainFocus } as never, svc.mainPart.activeGroup.id)
+    FileEditorRegistry.register(
+      mainInput,
+      { focus: mainFocus } as never,
+      svc.mainPart.activeGroup.id,
+    )
 
     // Alt+Tab back to main: the open target stays on the auxiliary window.
     svc.activatePart(svc.mainPart)

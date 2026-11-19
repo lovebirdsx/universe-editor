@@ -104,8 +104,7 @@ export class PerforceGraphEditorInput extends EditorInput {
   override focus(groupId?: number): boolean {
     const state = getPerforceGraphViewState(this.id)
     const focusRows =
-      (groupId !== undefined ? state.focusRowsByGroup.get(groupId) : undefined) ??
-      state.focusRows
+      (groupId !== undefined ? state.focusRowsByGroup.get(groupId) : undefined) ?? state.focusRows
     if (!focusRows) return false
     focusRows()
     return true
