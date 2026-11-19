@@ -170,7 +170,7 @@ KeybindingsRegistry.hasBindingAtOrAbove(
 
 终端 surface 每个实例注册 `kind: 'terminal'`、`defaultMode: 'insert'`、`actions: {}`；实际行为由 `TerminalNormalModeController` 实现，controller 注册到 `terminalNormalModeRegistry`，命令按「当前 DOM 焦点所在的终端」找到它。
 
-- 进入：`workbench.action.terminal.enterNormalMode`，默认 `ctrl+shift+space`，`when: 'terminalFocus'`。
+- 进入：`workbench.action.terminal.enterNormalMode`，默认 `ctrl+shift+\`，`when: 'terminalFocus'`。
 - 状态：模式写进 `IVimModeService`（`terminal-normal`）；组件同步 `data-vim-normal`。
 - 操作：`j/k` 行滚动、`Ctrl+D/U` 半页、`Ctrl+F/B` 整页、`gg/G` 边界、`v` 开始按行选择（`j/k` 扩展）、`y` 复制并退出。
 - 退出：`i` / `a` / `q` / `Esc`。有选区时先清除选区并保持 Normal（`i/a/q/Esc` 都走同一个 `exitNormalMode`），再按一次才回到 shell；`dispose()` / 终端销毁时强制回 `insert` 并恢复输入法。

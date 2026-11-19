@@ -39,13 +39,13 @@ function readCount(arg: unknown): number {
   return 1
 }
 
-/** `ctrl+shift+space` has no platform-registry rival; the scoped `when` is enough. */
+/** `ctrl+shift+\` has no platform-registry rival; the scoped `when` is enough. */
 export class TerminalEnterNormalModeAction extends Action2 {
   static readonly ID = 'workbench.action.terminal.enterNormalMode'
   constructor() {
     super({
       ...options(TerminalEnterNormalModeAction.ID, 'Enter Terminal Normal Mode'),
-      keybinding: { primary: 'ctrl+shift+space', when: 'terminalFocus' },
+      keybinding: { primary: 'ctrl+shift+\\', when: 'terminalFocus' },
     })
   }
 

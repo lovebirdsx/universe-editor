@@ -251,7 +251,7 @@ Panel / 辅助侧边栏的**标签式**容器标题聚焦时：`h` / `l` 切换�
 
 ### 终端 Normal Mode
 
-终端的默认模式是 Insert（所有按键直接送给 shell）。聚焦终端时按 `Ctrl+Shift+Space`（`workbench.action.terminal.enterNormalMode`）进入 Normal Mode；进入时会按 `vim.autoSwitchInputMethod` 把输入法切到英文。Normal Mode 下：
+终端的默认模式是 Insert（所有按键直接送给 shell）。聚焦终端时按 `Ctrl+Shift+\`（`workbench.action.terminal.enterNormalMode`）进入 Normal Mode；进入时会按 `vim.autoSwitchInputMethod` 把输入法切到英文。Normal Mode 下：
 
 | 操作 | 键位 |
 | --- | --- |

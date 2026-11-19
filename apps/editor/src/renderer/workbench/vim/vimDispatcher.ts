@@ -138,6 +138,16 @@ export class VimDispatcher {
     if (isWebviewFocus(doc)) return false
     if (this._options.contextKeyService.get('quickInputVisible') === true) return false
 
+    // Modifier-only keypresses carry no Vim token and must not disrupt a pending sequence.
+    if (
+      event.key === 'Shift' ||
+      event.key === 'Control' ||
+      event.key === 'Alt' ||
+      event.key === 'Meta'
+    ) {
+      return false
+    }
+
     const active = getActiveVimSurface(doc)
     if (active === undefined) return false
     const { surface, surfaceKey } = active

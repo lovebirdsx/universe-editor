@@ -83,8 +83,8 @@ test.describe('@p1 vim terminal normal mode', () => {
 
     const terminalHost = page.locator(`[data-terminal-id="${id}"]`)
 
-    await test.step('Ctrl+Shift+Space enters Normal mode', async () => {
-      await page.keyboard.press('Control+Shift+Space')
+    await test.step('Ctrl+Shift+\\ enters Normal mode', async () => {
+      await page.keyboard.press('Control+Shift+Backslash')
       await expect.poll(() => workbench.getContextKey<boolean>('vimTerminalNormalMode')).toBe(true)
       await expect(terminalHost).toHaveAttribute('data-vim-normal', 'true')
     })
@@ -133,7 +133,7 @@ test.describe('@p1 vim terminal normal mode', () => {
     })
 
     await test.step('i leaves Normal and typed input reaches the shell', async () => {
-      await page.keyboard.press('Control+Shift+Space')
+      await page.keyboard.press('Control+Shift+Backslash')
       await expect.poll(() => workbench.getContextKey<boolean>('vimTerminalNormalMode')).toBe(true)
 
       await page.keyboard.press('i')

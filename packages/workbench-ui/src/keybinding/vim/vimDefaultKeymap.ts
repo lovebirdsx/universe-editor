@@ -104,6 +104,20 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
     surfaces: ['list'],
     when: 'acpChatFocused',
   },
+  {
+    id: 'chat.scrollTimelineDown',
+    keys: ['j'],
+    command: 'workbench.action.agent.scrollTimelineDown',
+    surfaces: ['list'],
+    when: 'acpChatFocused',
+  },
+  {
+    id: 'chat.scrollTimelineUp',
+    keys: ['k'],
+    command: 'workbench.action.agent.scrollTimelineUp',
+    surfaces: ['list'],
+    when: 'acpChatFocused',
+  },
 
   // -- overlay: x dismisses the focused notification --------------------------
   { id: 'overlay.delete', keys: ['x'], command: 'list.delete', surfaces: ['overlay'] },

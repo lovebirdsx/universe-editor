@@ -267,7 +267,7 @@ export class TerminalNormalModeController {
     if (this._options.autoSwitchInputMethod?.() === false) return
     if (this._inputMethodSwitched) return
     this._inputMethodSwitched = true
-    // Serialize with restore: a fast i → Ctrl+Shift+Space pair must not reorder.
+    // Serialize with restore: a fast i → Ctrl+Shift+\ pair must not reorder.
     this._inputMethodChain = this._inputMethodChain
       .then(async () => {
         if (!(await service.switchToEnglish()) && this._inputMethodSwitched) {

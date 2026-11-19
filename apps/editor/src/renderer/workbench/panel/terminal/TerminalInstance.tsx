@@ -74,7 +74,12 @@ export function TerminalInstance({
     read()
     const subscriptions = [
       vimModeService.onDidChangeMode((event) => {
-        if (event.surfaceKey === surfaceKey) read()
+        if (event.surfaceKey !== surfaceKey) return
+        read()
+        // Re-focus xterm when entering normal mode: switchToEn() may briefly move
+        // focus away. Panel terminals recover via `focused` prop re-firing; editor
+        // terminals have no such mechanism and must pull focus back explicitly.
+        if (event.mode === 'terminal-normal') holderRef.current?.focus()
       }),
     ]
     if (configService !== undefined) {
