@@ -5,7 +5,7 @@
  *  ViewPane (multi-view), the SideBar header and ViewContainerHeader (single-view).
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useReducer, useRef } from 'react'
 import {
   IContextKeyService,
   markAsSingleton,
@@ -16,6 +16,7 @@ import { useService } from '../useService.js'
 export function useViewScopedContextKey(viewId: string | undefined): IContextKeyService {
   const rootCtx = useService(IContextKeyService)
   const scopedRef = useRef<IScopedContextKeyService | null>(null)
+  const [, forceUpdate] = useReducer((n: number) => n + 1, 0)
 
   if (scopedRef.current === null) {
     // React useEffect cleanup disposes on unmount, but beforeunload (page
@@ -25,6 +26,14 @@ export function useViewScopedContextKey(viewId: string | undefined): IContextKey
   }
 
   useEffect(() => {
+    // StrictMode's dev dry-run disposes + nulls the instance created during
+    // render before the real mount. Rebuild and re-render so consumers (which
+    // read the service during render) keep a live service instead of the
+    // thrown-away one whose `view` key now falls through to the root.
+    if (scopedRef.current === null) {
+      scopedRef.current = markAsSingleton(rootCtx.createScoped({ view: viewId }))
+      forceUpdate()
+    }
     return () => {
       scopedRef.current?.dispose()
       scopedRef.current = null

@@ -3,7 +3,15 @@
  *  encapsulates the standard popover/dialog focus contract:
  *    - autoFocus:    move focus into the overlay on mount
  *    - contain:      trap Tab/Shift+Tab inside the overlay
- *    - restoreFocus: on unmount, return focus to whatever held it before mount
+ *    - restoreFocus: on close, return focus to whatever held it when the overlay
+ *                    became visible
+ *
+ *  The restore target is captured once per visible session (false→true render)
+ *  and stays read-only afterwards: cleanup must not consume it, because in dev
+ *  StrictMode replays setup→cleanup→setup for newly mounted components. The
+ *  restore is deferred one microtask so a cleanup immediately followed by a
+ *  re-setup (the rehearsal) restores nothing, while a real close still hands
+ *  focus back to the pre-overlay element.
  *
  *  Use this for QuickInput, Dialog, Popover — anywhere that conceptually steals
  *  focus from the underlying workbench Part and must restore it on close.
@@ -60,13 +68,26 @@ export function FocusScopeOverlay({
   }
   wasVisibleRef.current = visible
 
+  // A fresh session id per effect setup lets a deferred restore notice that a
+  // newer setup (StrictMode's rehearsal re-setup) superseded it. The object is
+  // stable; only its counter changes.
+  const sessionStateRef = useRef({ session: 0 })
   useEffect(() => {
     if (!visible || !ownsRestore) return
+    const sessionState = sessionStateRef.current
+    const session = ++sessionState.session
     return () => {
-      const previous = previousFocusRef.current
-      previousFocusRef.current = null
-      if (conditionRef.current?.() === false) return
-      if (previous?.isConnected) previous.focus()
+      // Restore on the next microtask and only if no setup superseded this
+      // cleanup. StrictMode's mount rehearsal runs cleanup→setup synchronously;
+      // restoring there would fire spurious focus/context-key events (and steal
+      // focus from the child autoFocus that reclaims it right after). The
+      // snapshot itself is read-only so the real close still has it.
+      queueMicrotask(() => {
+        if (sessionState.session !== session) return
+        if (conditionRef.current?.() === false) return
+        const previous = previousFocusRef.current
+        if (previous?.isConnected) previous.focus()
+      })
     }
     // `conditionRef` keeps the predicate out of the deps: an inline arrow would
     // otherwise re-run this effect (and restore focus) on every render.

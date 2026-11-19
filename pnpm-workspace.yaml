@@ -156,7 +156,7 @@ catalog:
   esbuild: ^0.25.0
 
   # Test
-  '@testing-library/react': ^16.0.0
+  '@testing-library/react': ^16.1.0
   'happy-dom': ^17.0.0
   vitest: ^3.0.0
   # 1.62+ 才修复 Electron 40+ 的 electron.launch 启动问题(playwright#39008/#39922 链)

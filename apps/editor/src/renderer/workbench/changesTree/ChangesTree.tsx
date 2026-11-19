@@ -452,16 +452,20 @@ export function ChangesTree<TEntry>({
   // focus the tree on it. A plain data refresh (no revealPath) never steals
   // focus. `snapshot` is a dependency so a reveal issued before the tree has
   // content retries once data lands.
-  const revealDoneRef = useRef(false)
+  const revealDoneRef = useRef<{ model: typeof treeModel; path: string } | null>(null)
   useEffect(() => {
-    if (revealDoneRef.current) return
     if (revealPath === undefined) {
-      revealDoneRef.current = true
+      revealDoneRef.current = null
       return
     }
+    // Key the guard by the model instance: StrictMode's dry run disposes the
+    // first owned TreeModel and the live one is rebuilt, so a bare "done" flag
+    // would be consumed on the throwaway model and the row would never select.
+    const done = revealDoneRef.current
+    if (done?.model === treeModel && done.path === revealPath) return
     const node = findChangesTreeFileNode(snapshotRef.current, revealPath)
     if (!node) return
-    revealDoneRef.current = true
+    revealDoneRef.current = { model: treeModel, path: revealPath }
     void treeModel.reveal(node)
     treeRef.current?.focus({ preventScroll: true })
   }, [snapshot, treeModel, revealPath])

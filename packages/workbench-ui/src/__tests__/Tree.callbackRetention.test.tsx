@@ -111,7 +111,7 @@ describe('Tree — superseded renders are collectable', () => {
     render(<View />)
     const bump = setter.current
     if (!bump) throw new Error('视图没有渲染')
-    expect(payloads).toHaveLength(1)
+    expect(payloads.length).toBeGreaterThanOrEqual(1)
 
     // 交替且不批处理的两次提交：父组件带新的内联 onActivate 重渲染（makeClickHandler 的旧依赖），
     // 随后 model.refresh 让树自己重渲染（sizeAt 的旧依赖）。并成一次提交会同时换身份，掩盖交替失效。

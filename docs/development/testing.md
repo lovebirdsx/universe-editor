@@ -17,6 +17,7 @@
 - 测试文件放 `src/**/__tests__/`，命名 `*.test.ts(x)`。
 - `apps/editor` 用 vitest `test.projects` 同时跑三档：`main`（node，`src/main/**` + `src/shared/**`）、`renderer-node`（node，`src/renderer/**/*.test.ts`，无 React/Monaco 预热）、`renderer`（happy-dom，`*.test.tsx`）。新增 renderer 纯逻辑测试默认落 `renderer-node`，需要 DOM 才写 `.tsx`。
 - platform / 主进程 → node；renderer → happy-dom。
+- **React 测试默认跑在 StrictMode 下**（`configure({ reactStrictMode: true })`，见 `packages/workbench-ui/vitest.setup.ts`、`apps/editor/vitest.renderer-strict-setup.ts`），与 dev 运行时一致。dev 的 StrictMode 会对新挂载组件演练 setup→cleanup→setup，而 e2e 跑生产构建、不会双调用，所以“effect 非幂等”类 bug 只能靠单测拦截（先例：`FocusScopeOverlay` 在 cleanup 里一次性消费焦点快照，演练时被提前吃掉，导致 Esc 关命令面板后焦点丢到 body）。写法约定：一次性快照/守卫不要在 cleanup 里消费或置位，guard 要以实例为键，需要“真卸载才做”的副作用推迟到微任务，并用会话号判断是否已被重新 setup 取代。少数仍按单次 effect 断言计数的旧测试暂留在 `renderer-dom-legacy`（名单在 `apps/editor/src/shared/testing/vitestStrictModeExclusions.ts`，只减不增，由测试守护）。
 - 跑法：`pnpm test`（turbo 全量、带缓存）或 `pnpm --filter @universe-editor/editor test:unit` 单包。
 
 ## 集成测试

@@ -61,15 +61,21 @@ export function TerminalView() {
     if (didInit.current) return
     didInit.current = true
     let cancelled = false
+    let decided = false
     void (async () => {
       await manager.waitForInitialLoad()
       if (cancelled) return
+      decided = true
       if (manager.panelTerminals.get().length === 0) {
         void manager.newTerminal({ target: 'panel' })
       }
     })()
     return () => {
       cancelled = true
+      // A StrictMode mount rehearsal (or a real unmount before the load settles)
+      // must let the next mount retry; once the spawn decision was taken, keep
+      // the flag so closing the last terminal never respawns one.
+      if (!decided) didInit.current = false
     }
   }, [terminals, manager])
 

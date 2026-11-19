@@ -4,5 +4,6 @@ export default defineConfig({
   test: {
     silent: 'passed-only',
     environment: 'happy-dom',
+    setupFiles: ['./vitest.setup.ts'],
   },
 })

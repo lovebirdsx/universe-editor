@@ -269,7 +269,7 @@ describe('PerforceGraphSyncDialog — auxiliary document', () => {
     expect(isButtonTarget(null)).toBe(false)
   })
 
-  it('restores focus into the auxiliary document and leaves the main one alone', () => {
+  it('restores focus into the auxiliary document and leaves the main one alone', async () => {
     const win = new Window()
     const doc = win.document as unknown as Document
     const opener = doc.createElement('button')
@@ -292,6 +292,11 @@ describe('PerforceGraphSyncDialog — auxiliary document', () => {
     expect(doc.activeElement?.tagName).toBe('INPUT')
 
     unmount()
+    // FocusScopeOverlay defers the restore one microtask so StrictMode's
+    // rehearsal cleanup cannot consume the captured target.
+    await act(async () => {
+      await Promise.resolve()
+    })
     expect(doc.activeElement).toBe(opener)
     expect(document.activeElement).toBe(mainActive)
   })

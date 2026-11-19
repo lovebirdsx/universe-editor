@@ -273,19 +273,38 @@ describe('Tree — visible-window report', () => {
 
   it('attaches no scroll listener when the prop is omitted', async () => {
     const spy = vi.spyOn(Element.prototype, 'addEventListener')
-    const scrollListeners = (): number => spy.mock.calls.filter((c) => c[0] === 'scroll').length
+    const uniqueScrollListeners = (): number => {
+      const ctxs = spy.mock.contexts as Element[]
+      const seen = new Map<Element, Set<unknown>>()
+      spy.mock.calls.forEach((c, i) => {
+        if (c[0] !== 'scroll') return
+        const ctx = ctxs[i]
+        if (!ctx) return
+        let set = seen.get(ctx)
+        if (!set) {
+          set = new Set()
+          seen.set(ctx, set)
+        }
+        set.add(c[1])
+      })
+      let n = 0
+      for (const set of seen.values()) n += set.size
+      return n
+    }
 
     renderTree(makeModel(20))
-    const without = scrollListeners()
+    const without = uniqueScrollListeners()
 
     cleanup()
     spy.mockClear()
 
     renderTree(makeModel(20), { onVisible: vi.fn() })
-    const withProp = scrollListeners()
+    const withProp = uniqueScrollListeners()
 
     // A tree without the prop adds exactly one listener fewer than one with it —
-    // both render the same VirtualList, so its own listener cancels out.
+    // both render the same VirtualList, so its own listener cancels out. Count
+    // distinct (element, listener) pairs: StrictMode invokes effects twice, so
+    // raw addEventListener calls would include the duplicate setup.
     expect(without).toBeGreaterThan(0)
     expect(withProp).toBe(without + 1)
   })

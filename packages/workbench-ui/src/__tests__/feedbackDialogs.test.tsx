@@ -361,10 +361,10 @@ describe('dialog focus restore gate', () => {
   }
 
   /**
-   * The custom gate restores focus synchronously in the unmount effect, while
-   * react-aria schedules its own restore in rAF. Waiting one frame makes the two
-   * paths observable: the allowed case is asserted before (synchronous custom
-   * restore), the blocked case after (react-aria would have restored by then).
+   * The custom gate restores focus on a microtask (so StrictMode's rehearsal
+   * cleanup restores nothing), while react-aria schedules its own restore in
+   * rAF. Waiting one frame flushes both: the allowed case must have restored,
+   * the blocked case must still decline.
    */
   async function nextFrame(): Promise<void> {
     await act(async () => {
@@ -395,6 +395,7 @@ describe('dialog focus restore gate', () => {
       />,
     )
     allowed.unmount()
+    await nextFrame()
     expect(document.activeElement).toBe(allowedFocus)
     allowedFocus.remove()
   })
@@ -418,6 +419,7 @@ describe('dialog focus restore gate', () => {
       <PromptDialog opts={{ title: 'Name' }} onResolve={vi.fn()} shouldRestoreFocus={() => true} />,
     )
     allowed.unmount()
+    await nextFrame()
     expect(document.activeElement).toBe(allowedFocus)
     allowedFocus.remove()
   })

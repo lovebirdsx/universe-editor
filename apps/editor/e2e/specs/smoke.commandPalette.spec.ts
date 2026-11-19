@@ -46,6 +46,15 @@ test.describe('@p0 command palette', () => {
     await page.keyboard.press('Escape')
     await workbench.quickInput.waitForHidden()
     await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
+    // The context key tracks focus intent; pin the actual DOM focus target too
+    // (Monaco's focus host — native-edit-context — lives under .monaco-editor).
+    expect(
+      await page.evaluate(
+        () =>
+          document.activeElement instanceof Element &&
+          document.activeElement.closest('.monaco-editor') !== null,
+      ),
+    ).toBe(true)
   })
 
   test('prefills the > prefix to indicate command mode', async ({ page, workbench }) => {

@@ -13,6 +13,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { StrictMode } from 'react'
 import { act, cleanup, render } from '@testing-library/react'
 import { ILayoutService, PartId, autorun, observableValue } from '@universe-editor/platform'
 import { IWorkspaceService } from '@universe-editor/platform'
@@ -87,7 +88,7 @@ function makeManager(initial: readonly string[], opts?: { initialLoadDone?: bool
   return { manager, newTerminal, setPanel, loadDone }
 }
 
-function renderView(manager: unknown) {
+function renderView(manager: unknown, strict = false) {
   const workspace = { current: { folder: { fsPath: '/work' } } }
   const visible = observableValue('test.layout.visible', {
     [PartId.ActivityBar]: true,
@@ -111,9 +112,17 @@ function renderView(manager: unknown) {
       fn({ get: (id: unknown) => map.get(id) }),
   }
   return render(
-    <ServicesContext.Provider value={container as never}>
-      <TerminalView />
-    </ServicesContext.Provider>,
+    strict ? (
+      <StrictMode>
+        <ServicesContext.Provider value={container as never}>
+          <TerminalView />
+        </ServicesContext.Provider>
+      </StrictMode>
+    ) : (
+      <ServicesContext.Provider value={container as never}>
+        <TerminalView />
+      </ServicesContext.Provider>
+    ),
   )
 }
 
@@ -124,6 +133,14 @@ describe('TerminalView auto-spawn', () => {
     const h = makeManager([])
     await act(async () => {
       renderView(h.manager)
+    })
+    expect(h.newTerminal).toHaveBeenCalledTimes(1)
+  })
+
+  it('spawns exactly one terminal when mounted empty under StrictMode (dev double-invoke)', async () => {
+    const h = makeManager([])
+    await act(async () => {
+      renderView(h.manager, true)
     })
     expect(h.newTerminal).toHaveBeenCalledTimes(1)
   })

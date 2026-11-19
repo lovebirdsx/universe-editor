@@ -219,6 +219,21 @@ describe('TreeModel.refreshWithFocusRecovery', () => {
     expect(onSelection).not.toHaveBeenCalled()
   })
 
+  it('still finds the vanished seat when an earlier refresh had no cursor to recover', () => {
+    const harness = makeModel([{ id: 'a' }, { id: 'b' }, { id: 'c' }])
+    harness.model.getVisibleNodes()
+    // StrictMode remounts an owned model; its mount effect refreshes while the
+    // cursor is still empty, which used to leave the cache invalidated.
+    harness.model.refreshWithFocusRecovery()
+    harness.model.setSelection(['c'], 'c')
+
+    harness.setRoots([{ id: 'a' }, { id: 'b' }])
+    harness.model.refreshWithFocusRecovery()
+
+    expect(harness.model.focused).toBe('b')
+    expect(harness.model.selection).toEqual(['b'])
+  })
+
   it('is a plain refresh when nothing is selected or focused', () => {
     const harness = makeModel([{ id: 'a' }])
     const onStructure = vi.fn()

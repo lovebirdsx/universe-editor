@@ -90,6 +90,11 @@ export class TreeModel<T> extends Disposable {
   private _structureVersion = 0
   private _visibleCache: readonly IVisibleNode<T>[] | null = null
   private _visibleCacheVersion = -1
+  // Last rows actually computed, kept across invalidation. A data swap can
+  // arrive after the cache was invalidated but before recovery runs (StrictMode
+  // remounts an owned model, whose mount refresh clears the cache); rebuilding
+  // "previous" from the new data would lose the vanished row's seat.
+  private _lastVisible: readonly IVisibleNode<T>[] | null = null
 
   private readonly _onDidChangeStructure = this._register(new Emitter<void>())
   readonly onDidChangeStructure: Event<void> = this._onDidChangeStructure.event
@@ -156,6 +161,7 @@ export class TreeModel<T> extends Disposable {
     }
     this._visibleCache = out
     this._visibleCacheVersion = this._structureVersion
+    this._lastVisible = out
     return out
   }
 
@@ -354,9 +360,14 @@ export class TreeModel<T> extends Disposable {
       this.refresh()
       return
     }
-    // Read before invalidating: the old cache is what says which row used to
-    // occupy the seat the successor must take.
-    const previous = this.getVisibleNodes()
+    // Read before invalidating: the old rows are what say which row used to
+    // occupy the seat the successor must take. If the cache was invalidated
+    // earlier (see _lastVisible), fall back to the last computed rows.
+    const cached = this._visibleCache
+    const previous =
+      cached !== null && this._visibleCacheVersion === this._structureVersion
+        ? cached
+        : (this._lastVisible ?? this.getVisibleNodes())
     const focusIdx = previousFocus === null ? -1 : previous.findIndex((n) => n.id === previousFocus)
     // -1 when the cursor was outside the selection (or not on screen).
     const focusSeat = previousFocus === null ? -1 : this._selection.indexOf(previousFocus)
