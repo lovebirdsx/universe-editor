@@ -72,12 +72,11 @@ export {
   ensureNavigationDocument,
   type CtrlNavigationLayerKind,
   type ICtrlNavigationLayerOptions,
-  type IVimListNavigationOptions,
 } from './keybinding/ctrlNavigationRegistry.js'
 export * from './keybinding/vim/navigationLayers.js'
 export * from './keybinding/vim/vimTypes.js'
 export * from './keybinding/vim/vimSequence.js'
 export * from './keybinding/vim/vimDefaultKeymap.js'
 export * from './keybinding/vim/vimSurfaceRegistry.js'
-export * from './keybinding/vimListNavigation.js'
+export * from './keybinding/vim/vimSurfaceId.js'
 export * from './keybinding/keybindingChordState.js'

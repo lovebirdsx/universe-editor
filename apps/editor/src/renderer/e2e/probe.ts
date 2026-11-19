@@ -1483,6 +1483,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return Promise.resolve()
     },
     terminalReadBuffer: (id: string): string => terminalBuffers.get(id) ?? '',
+    terminalViewportY: (id: string): number =>
+      services.terminalXtermService.get(id)?.term.buffer.active.viewportY ?? -1,
     terminalRestartCount: (id: string): number => terminalRestarts.get(id) ?? 0,
     terminalProvideLinks: (id: string, row: number): Promise<readonly E2ETerminalLink[]> => {
       const holder = services.terminalXtermService.get(id)

@@ -57,12 +57,13 @@ React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keyb
 
 ## Vim 模式：Normal 模式的按键归属
 
-`editor.vimMode.enabled` 打开后，Normal 模式的裸键（`h/j/k/l`、`w/b/e`、`gg`/`G`、`d`/`y` + motion、`x`/`p`/`u`/`J` 等）必须**先于**全局 dispatcher 被认领，否则 `d` 会触发删除、`p` 会打开 Quick Open 之类。两条链路都走 **window capture**：
+`vim.enabled` 打开后，Normal 模式的裸键（`h/j/k/l`、`w/b/e`、`gg`/`G`、`d`/`y` + motion、`x`/`p`/`u`/`J` 等）必须**先于**全局 dispatcher 被认领，否则 `d` 会触发删除、`p` 会打开 Quick Open 之类。
 
-- 编辑器：`apps/editor/src/renderer/workbench/editor/vim/vimEditorRegistry.ts` 每个 `Document` 一个 window-capture 监听，按 `container.contains(activeElement)` + `hasTextFocus()` 路由到唯一 `VimEditorController`。**不要用 `editor.addCommand`**——standalone Monaco 的 keybinding service 跨实例共享，会吞掉其它编辑器的键。
-- 列表 / 树 / 菜单 / 浮层：扩展现有 `ctrlNavigationRegistry` 的 `vim` 选项（见上节），可编辑焦点一律拒绝。
+- 唯一 window-capture 入口是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts`：保留 `Ctrl+J/K/H/L` 别名仲裁，其余按键交给 `setVimKeyHandlerProvider` 注入的 `VimDispatcher`（`apps/editor/src/renderer/workbench/vim/vimDispatcher.ts`）。
+- 活跃 surface 由 `getActiveVimSurface`（`packages/workbench-ui/src/keybinding/vim/vimSurfaceRegistry.ts`）按 `menu > overlay > list > terminal > editor > chrome` 解析；编辑器 Normal 下把 `handleStroke` 交给 `vimEditorController`，只有 leader 与已在途的序列例外（走共享序列引擎执行工作台命令）。**不要用 `editor.addCommand`**——standalone Monaco 的 keybinding service 跨实例共享，会吞掉其它编辑器的键。
+- 列表 / 树 / 菜单 / 浮层同样注册为 surface，可编辑焦点一律拒绝。
 
-**上下文键**：`vimMode`（`'normal' | 'insert' | ''`）与 `vimNormalMode`（编辑器文本聚焦且处于 Normal 模式）由控制器写入；`vimNormalMode` 同时是 dispatcher 的放行条件——`useGlobalKeybindingHandler` 在 `Ctrl+F/B/D/U` 上先于单键解析返回，把翻页留给编辑器。
+**上下文键**：`vimMode`（`'normal' | 'insert' | ''`）、`vimNormalMode`（活跃 surface 处于 Normal）、`vimSurface` / `vimSurfaceId` / `vimTerminalNormalMode` 由 `IVimModeService` 写入；`vimNormalMode` 同时是全局分发器 paging 安全网的放行条件。
 
 **必须让行的三种情况**（否则会抢走别人的键）：
 

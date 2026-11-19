@@ -36,6 +36,7 @@ import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { createWorkbenchEditor } from './monaco/workbenchEditorFactory.js'
 import { createVimEditorController } from './vim/vimEditorController.js'
+import { editorVimSurfaceKey } from './vim/vimSurfaceKeys.js'
 import { IVimInputMethodService } from '../../../shared/ipc/vimInputMethodService.js'
 import { IVimModeService } from '../../services/vim/vimModeService.js'
 import {
@@ -138,8 +139,6 @@ const DROP_INTO_EDITOR_LINK: NonNullable<monaco.editor.IEditorOptions['dropIntoE
   showDropSelector: 'never',
 }
 
-let nextEditorSurfaceId = 1
-
 export function FileEditor({ input }: { input: IEditorInput }) {
   const fileInput = input as FileEditorInput
   const groupsService = useService(IEditorGroupsService)
@@ -153,13 +152,18 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
-  const surfaceKeyRef = useRef<string | null>(null)
-  if (surfaceKeyRef.current === null) surfaceKeyRef.current = `editor:${nextEditorSurfaceId++}`
-  const surfaceKey = surfaceKeyRef.current
+  // Every surface key this editor has driven, so closing the group (whose
+  // closeAll event carries no editor) can still drop all of its memories.
+  const knownSurfaceKeysRef = useRef<Set<string>>(new Set())
   // Latest input, read by long-lived editor callbacks (e.g. the blur handler)
   // that must not be recreated on tab switch. Kept in sync by the model-swap
   // effect below so switching tabs stays a cheap setModel — no editor rebuild.
   const fileInputRef = useRef(fileInput)
+  const currentSurfaceKey = (): string => editorVimSurfaceKey(group?.id, fileInputRef.current.id)
+  const forgetKnownSurfaceKeys = (): void => {
+    for (const key of knownSurfaceKeysRef.current) vimModeService.forgetSurface(key)
+    knownSurfaceKeysRef.current.clear()
+  }
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
   const [contextMenu, setContextMenu] = useState<{
     x: number
@@ -338,18 +342,20 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // subscriptions never observe a half-disposed instance.
     const vimController = createVimEditorController({
       editor: ed,
-      surfaceKey,
+      surfaceKey: currentSurfaceKey,
       configService,
       contextKeyService,
       vimModeService,
       inputMethodService: vimInputMethodService,
     })
     const vimRegistration = registerVimSurface({
-      id: surfaceKey,
+      get id() {
+        return currentSurfaceKey()
+      },
       kind: 'editor',
       getElement: () => ed.getContainerDomNode(),
       focus: 'within',
-      getSurfaceKey: () => surfaceKey,
+      getSurfaceKey: currentSurfaceKey,
       defaultMode: 'normal',
       actions: { handleStroke: (event) => vimController.handleKeyDown(event) },
     })
@@ -361,6 +367,12 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       hoverGuard.dispose()
       vimRegistration.dispose()
       vimController.dispose()
+      // A closed group leaves the service before React unmounts it, and its
+      // closeAll event carries no editor: drop every key this editor saw. A swap
+      // to a non-file editor keeps the group, whose memories must survive.
+      if (group !== null && groupsService.groups?.includes?.(group) === false) {
+        forgetKnownSurfaceKeys()
+      }
       editorFocusSub.dispose()
       textFocusSub.dispose()
       textBlurSub.dispose()
@@ -380,6 +392,24 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // changes with setModel, so neither is a dependency here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [monacoNs, commandService, configService, contextKeyService, focusStackService, group])
+
+  // Closing an editor drops its remembered Vim mode, so reopening the file
+  // starts in Normal again. Switching tabs (active event) must keep it.
+  useEffect(() => {
+    if (group === null) return undefined
+    const subscription = group.onDidChangeModel?.((event) => {
+      const closed =
+        event.kind === 'close'
+          ? event.editor
+          : event.kind === 'replace' || event.kind === 'previewReplace'
+            ? event.replacedEditor
+            : undefined
+      if (closed !== undefined) {
+        vimModeService.forgetSurface(editorVimSurfaceKey(group.id, closed.id))
+      }
+    })
+    return () => subscription?.dispose()
+  }, [group, vimModeService])
 
   // Apply config changes to the live editor instance.
   useEffect(() => {
@@ -439,6 +469,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   // focusing between setModel and Monaco's render forces a wasted full relayout.
   useLayoutEffect(() => {
     fileInputRef.current = fileInput
+    knownSurfaceKeysRef.current.add(editorVimSurfaceKey(group?.id, fileInput.id))
     if (!monacoNs) return
     let cancelled = false
     let modelRaf: OwnerFrame | undefined
@@ -493,6 +524,20 @@ export function FileEditor({ input }: { input: IEditorInput }) {
           ...getEditorTypographyOptions(configService, fileInput.language),
         }),
       )
+
+      // The swap moves the surface key (mode memory is per input), yet DOM focus
+      // stays on the same textarea, so no focusin announces the new surface.
+      // Republish it while this editor owns the keyboard; otherwise the status
+      // bar keeps reporting the previous tab's mode until the next keystroke.
+      if (editorRef.current?.hasTextFocus?.() === true) {
+        const key = currentSurfaceKey()
+        vimModeService.activateSurface({
+          surfaceKey: key,
+          kind: 'editor',
+          id: key,
+          defaultMode: 'normal',
+        })
+      }
 
       // Initialise dirty state: covers hot-exit restore (pending dirty content)
       // and shared models that are already dirty in another split.
@@ -621,6 +666,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       scrollSub?.dispose()
       if (registeredEditor) FileEditorRegistry.unregister(fileInput, registeredEditor)
     }
+    // currentSurfaceKey closes over refs; a per-render identity must not re-run
+    // the model swap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     monacoNs,
     contextKeyService,
@@ -629,6 +677,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     group,
     configService,
     recentEditsTracker,
+    vimModeService,
   ])
 
   useEffect(() => {

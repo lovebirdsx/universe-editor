@@ -23,9 +23,8 @@
  *  `setVimKeyHandlerProvider`; it runs after the Ctrl aliases and returns true
  *  when it consumed the stroke. This listener is installed even when no list
  *  layer is registered (`ensureNavigationDocument`) so bare Vim keys work on
- *  the editor and the chrome surfaces too. `useCtrlNavigationLayer({ vim })`
- *  still exists as a compatibility bridge: it registers an implicit Vim surface
- *  whose actions replay the old `onMove(motion)` callback.
+ *  the editor and the chrome surfaces too. Surfaces register themselves with
+ *  `vim/vimSurfaceRegistry`, not through the Ctrl layer.
  *--------------------------------------------------------------------------------------------*/
 
 import { useContext, useEffect, useRef } from 'react'
@@ -33,21 +32,9 @@ import { OwnerDocumentContext } from '../overlay/ownerDocumentContext.js'
 import { ctrlNavigationDirection, type CtrlNavigationDirection } from './ctrlNavigation.js'
 import { isKeybindingChordPending } from './keybindingChordState.js'
 import { isNavigationLayerActive, navigationLayerOutranks } from './vim/navigationLayers.js'
-import { registerVimSurface } from './vim/vimSurfaceRegistry.js'
-import type { IVimSurfaceActions, VimDirection, VimSurfaceKind } from './vim/vimTypes.js'
-import type { VimListMotion } from './vimListNavigation.js'
 export type { CtrlNavigationDirection }
 
 export type CtrlNavigationLayerKind = 'menu' | 'dialog' | 'overlay' | 'list'
-
-export interface IVimListNavigationOptions {
-  readonly directions: readonly VimDirection[]
-  /** Whether gg/G jump to the first/last row. Defaults to true. */
-  readonly jumps?: boolean | undefined
-  /** Whether Ctrl+d/u page the list. Defaults to true. */
-  readonly paging?: boolean | undefined
-  readonly onMove: (motion: VimListMotion, event: KeyboardEvent) => void
-}
 
 export interface ICtrlNavigationLayerOptions {
   readonly kind: CtrlNavigationLayerKind
@@ -80,8 +67,6 @@ export interface ICtrlNavigationLayerOptions {
    */
   readonly allowEditableFocus?: boolean | undefined
   readonly targetDocument?: Document | undefined
-  /** Opt in to bare-key Vim navigation (hjkl/gg/G/Ctrl+d/u). */
-  readonly vim?: IVimListNavigationOptions | undefined
 }
 
 interface LayerEntry {
@@ -107,10 +92,6 @@ const KIND_PRIORITY: Record<CtrlNavigationLayerKind, number> = {
 
 const documents = new Map<Document, DocumentState>()
 let nextSequence = 1
-
-// Legacy callbacks accept a KeyboardEvent but none of the five consumers read
-// it; a synthetic event would need DOM at call time in node-only tests.
-const BRIDGE_EVENT = {} as KeyboardEvent
 
 let vimKeyHandlerProvider: ((doc: Document, event: KeyboardEvent) => boolean) | undefined
 
@@ -254,51 +235,6 @@ function registerLayer(doc: Document, entry: LayerEntry): () => void {
   }
 }
 
-function bridgeSurfaceKind(kind: CtrlNavigationLayerKind): VimSurfaceKind | undefined {
-  return kind === 'dialog' ? undefined : kind
-}
-
-/**
- * The old per-layer Vim callbacks become an implicit surface. Actions read the
- * live options ref so a render never re-registers; `count` is ignored because
- * the legacy callback has no count parameter.
- */
-function bridgeVimSurface(optionsRef: { current: ICtrlNavigationLayerOptions }, id: string) {
-  const kind = bridgeSurfaceKind(optionsRef.current.kind)
-  if (kind === undefined) return undefined
-  const actions: IVimSurfaceActions = {
-    move: (direction: VimDirection) => {
-      const vim = optionsRef.current.vim
-      if (vim === undefined || !vim.directions.includes(direction)) return
-      vim.onMove({ kind: 'direction', direction }, BRIDGE_EVENT)
-    },
-    first: () => {
-      const vim = optionsRef.current.vim
-      if (vim === undefined || vim.jumps === false) return
-      vim.onMove({ kind: 'first' }, BRIDGE_EVENT)
-    },
-    last: () => {
-      const vim = optionsRef.current.vim
-      if (vim === undefined || vim.jumps === false) return
-      vim.onMove({ kind: 'last' }, BRIDGE_EVENT)
-    },
-    page: (direction) => {
-      const vim = optionsRef.current.vim
-      if (vim === undefined || vim.paging === false) return
-      vim.onMove({ kind: 'page', direction }, BRIDGE_EVENT)
-    },
-  }
-  return {
-    id,
-    kind,
-    getElement: () => optionsRef.current.getElement?.() ?? null,
-    focus: optionsRef.current.focus ?? (optionsRef.current.kind === 'list' ? 'self' : 'within'),
-    getSurfaceKey: () => id,
-    defaultMode: 'normal' as const,
-    actions,
-  }
-}
-
 /**
  * Register the calling component as the current document's list-navigation
  * layer. Register only the directions the surface really implements: a flat
@@ -315,7 +251,6 @@ export function useCtrlNavigationLayer(options: ICtrlNavigationLayerOptions): vo
   // listener is not torn down and re-installed on every keystroke-driven render.
   const optionsRef = useRef(options)
   optionsRef.current = options
-  const hasVim = options.vim !== undefined
   useEffect(() => {
     if (!enabled) return undefined
     // Resolve inside the effect: a callback ref (the popup element, the list
@@ -329,16 +264,8 @@ export function useCtrlNavigationLayer(options: ICtrlNavigationLayerOptions): vo
       (typeof document === 'undefined' ? undefined : document)
     if (doc === undefined) return undefined
     const sequence = nextSequence++
-    const unregister = registerLayer(doc, { options: optionsRef, sequence })
-    const bridge = hasVim
-      ? bridgeVimSurface(optionsRef, `${optionsRef.current.kind}:bridge:${sequence}`)
-      : undefined
-    const surfaceRegistration = bridge === undefined ? undefined : registerVimSurface(bridge, doc)
-    return () => {
-      surfaceRegistration?.dispose()
-      unregister()
-    }
-  }, [contextDoc, enabled, targetDocument, hasVim])
+    return registerLayer(doc, { options: optionsRef, sequence })
+  }, [contextDoc, enabled, targetDocument])
 }
 
 /** Test-only: drop every registered document and listener. */

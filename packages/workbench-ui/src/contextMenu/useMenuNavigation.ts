@@ -22,6 +22,8 @@ import {
   useCtrlNavigationLayer,
   type CtrlNavigationDirection,
 } from '../keybinding/ctrlNavigationRegistry.js'
+import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
+import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
 import { rowsAtLevel, stepIndex, type RowModel } from './menuModel.js'
 
@@ -93,9 +95,16 @@ export function useMenuNavigation(
    * `OwnerDocumentProvider`，再退回全局 document。
    */
   targetDocument?: Document | undefined,
+  /**
+   * Close the whole menu. Used by the Vim `surface.escape` action when there is
+   * no submenu level left to peel (`onEscape` returns false); without it Esc is
+   * consumed by the dispatcher before AnchoredSurface's listener can close.
+   */
+  onDismiss?: (() => void) | undefined,
 ): MenuNavigation {
   const doc = useOwnerDocument(targetDocument)
   const view = doc ? doc.defaultView : typeof window !== 'undefined' ? window : undefined
+  const vimSurfaceKey = useVimSurfaceKey('menu')
 
   // Lazy initializer: `rows` is final on the first render (both flavours resolve
   // synchronously), so the opening highlight lands on the right row without an
@@ -249,19 +258,50 @@ export function useMenuNavigation(
   // One implementation for the four Ctrl aliases, shared with the registry.
   // Vertical steps skip separators/disabled rows through `stepIndex`; horizontal
   // steps reuse the same expand/collapse the arrow keys use.
+  const moveVertical = useCallback(
+    (direction: 'up' | 'down', steps = 1): void => {
+      const s = stateRef.current
+      const level = activeLevel(s)
+      const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
+      if (!levelRows) return
+      let index = s.active?.index
+      let moved = false
+      for (let step = 0; step < Math.max(1, steps); step++) {
+        const next = stepIndex(levelRows, index, direction === 'down' ? 1 : -1)
+        if (next === undefined || next === index) break
+        index = next
+        moved = true
+      }
+      if (!moved || index === undefined) return
+      cancelClose()
+      setState({
+        open: s.open.slice(0, level),
+        active: { level, index, source: 'keyboard' },
+      })
+    },
+    [cancelClose],
+  )
+
   const moveByDirection = useCallback(
     (direction: CtrlNavigationDirection): void => {
-      const s = stateRef.current
       if (direction === 'left' || direction === 'right') {
         cancelClose()
         if (direction === 'left') collapse()
         else expand()
         return
       }
+      moveVertical(direction, 1)
+    },
+    [cancelClose, collapse, expand, moveVertical],
+  )
+
+  const jumpToEnd = useCallback(
+    (end: 'first' | 'last'): void => {
+      const s = stateRef.current
       const level = activeLevel(s)
       const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
       if (!levelRows) return
-      const next = stepIndex(levelRows, s.active?.index, direction === 'down' ? 1 : -1)
+      const next = stepIndex(levelRows, undefined, end === 'first' ? 1 : -1)
       if (next === undefined) return
       cancelClose()
       setState({
@@ -269,8 +309,21 @@ export function useMenuNavigation(
         active: { level, index: next, source: 'keyboard' },
       })
     },
-    [cancelClose, collapse, expand],
+    [cancelClose],
   )
+
+  const runActiveRow = useCallback((): void => {
+    const s = stateRef.current
+    const level = activeLevel(s)
+    const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
+    const index = s.active?.index
+    const row = index === undefined ? undefined : levelRows?.[index]
+    if (row?.kind === 'item') {
+      if (row.disabled !== true) row.run()
+      return
+    }
+    if (row?.kind === 'submenu') expand()
+  }, [expand])
 
   // Menus win over the list underneath while open: the registry is the only
   // place that claims the Ctrl aliases, so the virtual focus never races with
@@ -281,30 +334,40 @@ export function useMenuNavigation(
     directions: ['up', 'down', 'left', 'right'],
     onMove: moveByDirection,
     targetDocument: doc,
-    vim: {
-      directions: ['up', 'down', 'left', 'right'],
-      // Menus have no paging; gg/G jump to the first/last row.
-      paging: false,
-      onMove: (motion) => {
-        if (motion.kind === 'direction') {
-          moveByDirection(motion.direction)
-          return
-        }
-        if (motion.kind !== 'first' && motion.kind !== 'last') return
-        const s = stateRef.current
-        const level = activeLevel(s)
-        const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
-        if (!levelRows) return
-        const next = stepIndex(levelRows, undefined, motion.kind === 'first' ? 1 : -1)
-        if (next === undefined) return
-        cancelClose()
-        setState({
-          open: s.open.slice(0, level),
-          active: { level, index: next, source: 'keyboard' },
-        })
+  })
+
+  // Bare Vim keys arrive as commands from the workbench dispatcher. A menu is
+  // active without DOM focus (it paints with virtual focus), so `enabled` gates
+  // a menu that resolved to zero rows. Escape peels one submenu level, then
+  // dismisses the whole surface.
+  useVimSurface(
+    {
+      id: vimSurfaceKey,
+      kind: 'menu',
+      enabled,
+      getSurfaceKey: () => vimSurfaceKey,
+      defaultMode: 'normal',
+      actions: {
+        move: (direction, count) => {
+          if (direction === 'left' || direction === 'right') {
+            moveByDirection(direction)
+            return
+          }
+          moveVertical(direction, count)
+        },
+        first: () => jumpToEnd('first'),
+        last: () => jumpToEnd('last'),
+        // A menu has no viewport to page by; Ctrl+d/u land on the ends, which is
+        // what a page gesture means for the handful of rows a menu has.
+        page: (direction) => jumpToEnd(direction === 'down' ? 'last' : 'first'),
+        activate: () => runActiveRow(),
+        escape: () => {
+          if (!onEscape()) onDismiss?.()
+        },
       },
     },
-  })
+    doc,
+  )
 
   // Window capture: the workbench keybinding dispatcher listens on *document*
   // capture, so registering here runs first; stopping propagation also keeps the

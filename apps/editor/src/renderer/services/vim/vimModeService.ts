@@ -49,6 +49,8 @@ export interface IVimModeService {
   getEnabled(): boolean
   getMode(surfaceKey: string, defaultMode: VimSurfaceMode): VimSurfaceMode
   setMode(surfaceKey: string, mode: VimSurfaceMode): void
+  /** Drop a surface's remembered mode, e.g. when its editor is closed. */
+  forgetSurface(surfaceKey: string): void
   /** Report the surface that owns the keyboard, or undefined when none does. */
   activateSurface(surface: IVimActiveSurface | undefined): void
   readonly activeSurface: IVimActiveSurface | undefined
@@ -219,6 +221,12 @@ export class VimModeService extends Disposable implements IVimModeService {
     this._modeBySurface.set(surfaceKey, mode)
     this._onDidChangeMode.fire({ surfaceKey, mode })
     console.debug(`[vim] mode ${surfaceKey} -> ${mode}`)
+    if (this._activeSurface?.surfaceKey === surfaceKey) this.applyActiveSurface()
+  }
+
+  forgetSurface(surfaceKey: string): void {
+    if (!this._modeBySurface.delete(surfaceKey)) return
+    console.debug(`[vim] mode forgotten: ${surfaceKey}`)
     if (this._activeSurface?.surfaceKey === surfaceKey) this.applyActiveSurface()
   }
 

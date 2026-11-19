@@ -77,6 +77,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
           onDidChangeModelContent: () => disposable(),
           onDidChangeConfiguration: () => disposable(),
           getContainerDomNode: () => container,
+          hasTextFocus: () => true,
           dispose: () => {},
         }
       },
@@ -192,14 +193,30 @@ class FakeConfigurationService {
   }
 }
 
+interface FakeGroupModelEvent {
+  kind: string
+  editor?: { id: string } | undefined
+  replacedEditor?: { id: string } | undefined
+}
+
 class FakeGroup {
   readonly id = 1
   previewEditor: FileEditorInput | undefined
+  private readonly modelListeners = new Set<(event: FakeGroupModelEvent) => void>()
 
   constructor(public activeEditor: FileEditorInput | undefined) {}
 
   pinEditor(input: FileEditorInput): void {
     if (this.previewEditor === input) this.previewEditor = undefined
+  }
+
+  onDidChangeModel(listener: (event: FakeGroupModelEvent) => void) {
+    this.modelListeners.add(listener)
+    return { dispose: () => this.modelListeners.delete(listener) }
+  }
+
+  emitModelChange(event: FakeGroupModelEvent): void {
+    for (const listener of this.modelListeners) listener(event)
   }
 }
 
@@ -307,7 +324,15 @@ describe('FileEditor tab switching', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
-    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
+    const forgetSurface = vi.fn()
+    const activateSurface = vi.fn()
+    services.set(IVimModeService, {
+      _serviceBrand: undefined,
+      setMode: () => {},
+      getMode: (_key: string, fallback: string) => fallback,
+      forgetSurface,
+      activateSurface,
+    } as never)
 
     const { rerender } = render(renderEditor(instantiation, group, inputA))
 
@@ -329,5 +354,18 @@ describe('FileEditor tab switching', () => {
     await vi.waitFor(() => {
       expect(MonacoModelRegistry.peek(uriA)?.getValue()).toBe('A edited')
     })
+
+    // Closing the tab drops the surface's remembered Vim mode; switching tabs
+    // above must not (it only fires an `active` change).
+    group.emitModelChange({ kind: 'close', editor: inputA })
+    expect(forgetSurface).toHaveBeenCalledWith(`editor:1:${uriA.toString()}`)
+
+    // The surface key follows the active input, and an in-place model swap
+    // republicshes it (DOM focus never leaves the textarea).
+    const keys = activateSurface.mock.calls.map(([surface]) => surface.surfaceKey)
+    expect(keys).toContain(`editor:1:${uriB.toString()}`)
+    await vi.waitFor(() =>
+      expect(activateSurface.mock.calls.at(-1)?.[0].surfaceKey).toBe(`editor:1:${uriA.toString()}`),
+    )
   })
 })

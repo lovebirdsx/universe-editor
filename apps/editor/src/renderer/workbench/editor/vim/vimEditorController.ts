@@ -72,8 +72,12 @@ export interface IVimEditorController extends IDisposable {
 
 export interface IVimEditorControllerOptions {
   readonly editor: VimEditor
-  /** Identifies this editor instance for per-surface mode memory. */
-  readonly surfaceKey: string
+  /**
+   * Identifies this editor surface for per-surface mode memory. A function is
+   * re-read when the Monaco model changes, so one editor instance reused across
+   * tabs follows the active input's key without being rebuilt.
+   */
+  readonly surfaceKey: string | (() => string)
   readonly configService: IConfigurationService
   readonly contextKeyService: IContextKeyService
   readonly vimModeService: IVimModeService
@@ -102,7 +106,12 @@ export function createVimEditorController(
     vimModeService,
     inputMethodService,
   } = options
-  let state: VimState = INITIAL_VIM_STATE
+  const resolveSurfaceKey = typeof surfaceKey === 'function' ? surfaceKey : () => surfaceKey
+  // The key follows the model: until Monaco swaps models the controller is still
+  // driving the old input, so writes must not land on the newly active key.
+  let currentSurfaceKey = resolveSurfaceKey()
+  // A surface returns in the mode it left (focus may sit in a list meanwhile).
+  let state: VimState = { ...INITIAL_VIM_STATE, mode: readStoredMode() }
   let enabled = configService.get<boolean>('vim.enabled') === true
   let autoSwitchInputMethod = configService.get<boolean>('vim.autoSwitchInputMethod') !== false
   let searchCaseMode: VimSearchCaseMode = readSearchCaseMode()
@@ -175,11 +184,15 @@ export function createVimEditorController(
       })
   }
 
+  function readStoredMode(): VimState['mode'] {
+    return vimModeService.getMode(currentSurfaceKey, 'normal') === 'insert' ? 'insert' : 'normal'
+  }
+
   function syncContextKeys(): void {
     syncInputMethod()
-    // The service owns the root keys; report this editor's mode only while it
-    // holds text focus so an unfocused controller cannot claim the mode.
-    vimModeService.setMode(surfaceKey, textFocused ? state.mode : 'normal')
+    // Blur keeps this surface's mode memory; while it does not hold text focus
+    // the service's active-surface snapshot owns the root context keys.
+    if (textFocused) vimModeService.setMode(currentSurfaceKey, state.mode)
   }
 
   function setMode(mode: VimState['mode']): void {
@@ -1034,11 +1047,20 @@ export function createVimEditorController(
   })
   const blurSubscription = editor.onDidBlurEditorText(() => {
     textFocused = false
-    state = { ...state, mode: 'normal', count: 0, pendingOperator: null, pendingG: false }
+    // Keep the mode so returning focus resumes it; only the in-flight count /
+    // operator prefix belongs to the focus that was lost.
+    state = {
+      ...state,
+      count: 0,
+      pendingOperator: null,
+      pendingG: false,
+      countAfterOperator: false,
+    }
     syncContextKeys()
   })
   const modelSubscription = editor.onDidChangeModel(() => {
-    state = INITIAL_VIM_STATE
+    currentSurfaceKey = resolveSurfaceKey()
+    state = { ...INITIAL_VIM_STATE, mode: readStoredMode() }
     cancelSearchRefreshTimer()
     cancelPreviewHighlightTimer()
     closeSearch(false, false)

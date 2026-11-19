@@ -107,6 +107,18 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
     surfaces: ['terminal'],
   },
   {
+    id: 'terminal.scrollPageDown',
+    keys: ['ctrl+f'],
+    command: 'workbench.action.terminal.normalScrollPageDown',
+    surfaces: ['terminal'],
+  },
+  {
+    id: 'terminal.scrollPageUp',
+    keys: ['ctrl+b'],
+    command: 'workbench.action.terminal.normalScrollPageUp',
+    surfaces: ['terminal'],
+  },
+  {
     id: 'terminal.scrollToTop',
     keys: ['g', 'g'],
     command: 'workbench.action.terminal.normalScrollToTop',
@@ -139,6 +151,18 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
   {
     id: 'terminal.exitNormal.escape',
     keys: ['escape'],
+    command: 'workbench.action.terminal.exitNormalMode',
+    surfaces: ['terminal'],
+  },
+  {
+    id: 'terminal.exitNormal.a',
+    keys: ['a'],
+    command: 'workbench.action.terminal.exitNormalMode',
+    surfaces: ['terminal'],
+  },
+  {
+    id: 'terminal.exitNormal.q',
+    keys: ['q'],
     command: 'workbench.action.terminal.exitNormalMode',
     surfaces: ['terminal'],
   },

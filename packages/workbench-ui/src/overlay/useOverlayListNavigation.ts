@@ -41,7 +41,9 @@ import {
   type MouseEvent,
 } from 'react'
 import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
-import { resolveIndexNavigation } from '../list/listKeyboard.js'
+import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
+import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
+import { LIST_PAGE_STEP, resolveIndexNavigation } from '../list/listKeyboard.js'
 
 /** Typeahead buffer lifetime — a pause longer than this starts a fresh query. */
 const TYPEAHEAD_RESET_MS = 500
@@ -97,6 +99,13 @@ export interface IUseOverlayListNavigationOptions {
    * 辅助窗口的 popup 若仍注册在主窗口就永远收不到这些按键。
    */
   readonly targetDocument?: Document | undefined
+  /**
+   * Vim Normal-mode Escape (`surface.escape`). Hosts wire this to their close
+   * callback; without it Esc is consumed by the dispatcher and does nothing.
+   */
+  readonly onEscape?: (() => void) | undefined
+  /** Stable identity for Vim mode memory (`overlay:<vimSurfaceId>`). */
+  readonly vimSurfaceId?: string | undefined
 }
 
 export interface IOverlayListContainerProps {
@@ -152,6 +161,7 @@ export function useOverlayListNavigation(
 
   const activeIndexRef = useRef(activeIndex)
   activeIndexRef.current = activeIndex
+  const vimSurfaceKey = useVimSurfaceKey('overlay', options.vimSurfaceId)
 
   // The host reuses one element position when the overlay swaps to a different
   // list (Alt+<digit> between config entries), so a fresh mount is not guaranteed
@@ -211,23 +221,34 @@ export function useOverlayListNavigation(
   // One implementation of the index arithmetic for every stroke that moves the
   // cursor — arrows/Home/End and the Ctrl+J/K aliases alike — so wrap and the
   // end-of-list exits cannot drift between the paths that reach them. Returns
-  // whether the key was the list's to take.
-  const applyIndexKey = useCallback((key: string): boolean => {
+  // whether the key was the list's to take. `steps` applies a Vim count in one
+  // pass so `5j` renders once instead of five times.
+  const moveIndex = useCallback((key: string, steps = 1): boolean => {
     const { count: total, wrap = true } = optionsRef.current
     if (total <= 0) return false
-    const next = resolveIndexNavigation(key, { index: activeIndexRef.current, count: total })
-    if (next === undefined) return false
-    const target = wrap ? applyWrap(key, activeIndexRef.current, next, total) : next
-    // Clamped onto the row we are already on = the key hit an end. With wrapping
-    // off that is where a nested region hands the cursor back.
-    if (!wrap && target === activeIndexRef.current) {
-      if (key === 'ArrowUp') optionsRef.current.onExitUp?.()
-      else if (key === 'ArrowDown') optionsRef.current.onExitDown?.()
-      return true
+    let index = activeIndexRef.current
+    let moved = false
+    for (let step = 0; step < Math.max(1, steps); step++) {
+      const next = resolveIndexNavigation(key, { index, count: total })
+      if (next === undefined) return moved
+      const target = wrap ? applyWrap(key, index, next, total) : next
+      // Clamped onto the row we are already on = the key hit an end. With
+      // wrapping off that is where a nested region hands the cursor back.
+      if (!wrap && target === index) {
+        if (key === 'ArrowUp') optionsRef.current.onExitUp?.()
+        else if (key === 'ArrowDown') optionsRef.current.onExitDown?.()
+        return true
+      }
+      if (target !== index) {
+        index = target
+        moved = true
+      }
     }
-    setActiveIndex(target)
+    if (moved) setActiveIndex(index)
     return true
   }, [])
+
+  const applyIndexKey = useCallback((key: string): boolean => moveIndex(key, 1), [moveIndex])
 
   // Whether the host took the horizontal stroke. `false` is the fall-through case
   // the bare arrow honours and the Ctrl alias does not.
@@ -253,30 +274,51 @@ export function useOverlayListNavigation(
         handleHorizontal(direction === 'left' ? 'ArrowLeft' : 'ArrowRight')
       }
     },
-    vim: {
-      directions: ['up', 'down', 'left', 'right'],
-      onMove: (motion) => {
-        if (motion.kind === 'direction') {
-          if (motion.direction === 'up' || motion.direction === 'down') {
-            applyIndexKey(motion.direction === 'down' ? 'ArrowDown' : 'ArrowUp')
-          } else {
-            handleHorizontal(motion.direction === 'left' ? 'ArrowLeft' : 'ArrowRight')
-          }
-          return
-        }
-        if (motion.kind === 'first') {
-          applyIndexKey('Home')
-          return
-        }
-        if (motion.kind === 'last') {
-          applyIndexKey('End')
-          return
-        }
-        applyIndexKey(motion.direction === 'down' ? 'PageDown' : 'PageUp')
-      },
-    },
     ...(options.targetDocument !== undefined ? { targetDocument: options.targetDocument } : {}),
   })
+
+  // Bare Vim keys (j/k/h/l, gg/G, Ctrl+d/u, Enter, Esc) arrive as commands from
+  // the workbench dispatcher. Counts move in one pass; horizontal strokes go to
+  // the host, which owns the "step out of this nested overlay" semantics.
+  useVimSurface(
+    {
+      id: vimSurfaceKey,
+      kind: 'overlay',
+      focus: 'within',
+      getElement: () => containerElRef.current,
+      getSurfaceKey: () => vimSurfaceKey,
+      defaultMode: 'normal',
+      actions: {
+        move: (direction, count) => {
+          if (direction === 'up' || direction === 'down') {
+            moveIndex(direction === 'down' ? 'ArrowDown' : 'ArrowUp', count)
+          } else {
+            handleHorizontal(direction === 'left' ? 'ArrowLeft' : 'ArrowRight')
+          }
+        },
+        first: () => moveIndex('Home', 1),
+        last: () => moveIndex('End', 1),
+        page: (direction, count) => {
+          const total = optionsRef.current.count
+          if (total <= 0) return
+          const next = resolveIndexNavigation(direction === 'down' ? 'PageDown' : 'PageUp', {
+            index: activeIndexRef.current,
+            count: total,
+            pageSize: LIST_PAGE_STEP * Math.max(1, count),
+          })
+          if (next !== undefined) setActiveIndex(next)
+        },
+        activate: (_count, preview) => {
+          const total = optionsRef.current.count
+          const index = activeIndexRef.current
+          if (index < 0 || index >= total) return
+          optionsRef.current.onActivate(index, { preview })
+        },
+        escape: () => optionsRef.current.onEscape?.(),
+      },
+    },
+    options.targetDocument,
+  )
 
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent) => {

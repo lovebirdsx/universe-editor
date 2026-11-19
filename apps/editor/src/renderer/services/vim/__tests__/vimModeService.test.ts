@@ -120,6 +120,21 @@ describe('VimModeService', () => {
     expect(context.get('vimNormalMode')).toBe(false)
   })
 
+  it('forgets a closed surface and falls back to its default mode', () => {
+    const { service, context } = create()
+    service.activateSurface(EDITOR)
+    service.setMode(EDITOR.surfaceKey, 'insert')
+    expect(context.get('vimMode')).toBe('insert')
+
+    service.forgetSurface(EDITOR.surfaceKey)
+    expect(service.getMode(EDITOR.surfaceKey, 'normal')).toBe('normal')
+    expect(context.get('vimMode')).toBe('normal')
+
+    // Forgetting a key that was never remembered is a no-op.
+    service.forgetSurface('editor:9:9')
+    expect(service.getMode('editor:9:9', 'normal')).toBe('normal')
+  })
+
   it('clears the keys when no surface owns the keyboard', () => {
     const { service, context } = create()
     service.activateSurface(EDITOR)

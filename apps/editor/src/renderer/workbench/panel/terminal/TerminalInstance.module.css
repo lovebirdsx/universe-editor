@@ -13,3 +13,9 @@
   outline: 1px solid var(--vscode-list-activeSelectionBar, #007acc);
   outline-offset: -1px;
 }
+
+/* Vim Terminal Normal Mode — a quiet frame, never a hardcoded palette entry. */
+.instance[data-vim-normal='true'] {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}

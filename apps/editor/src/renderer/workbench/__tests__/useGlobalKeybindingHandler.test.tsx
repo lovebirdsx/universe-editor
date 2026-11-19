@@ -218,6 +218,28 @@ describe('useGlobalKeybindingHandler', () => {
     expect(timelineDown.preventDefault).not.toHaveBeenCalled()
   })
 
+  it('executes a User binding for a printable key in Vim Normal mode', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'i',
+        command: 'test.userInsert',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('test.userInsert', () => {}))
+    const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    ck.createKey('vimNormalMode', true)
+    ck.createKey('editorTextFocus', true)
+    mountHost(instantiation)
+
+    // The Vim dispatcher yields Normal-mode strokes to User bindings; dropping
+    // them here would run neither the command nor the editor's Vim core.
+    const { preventDefault } = dispatch({ key: 'i' })
+    expect(executeCommand).toHaveBeenCalledWith('test.userInsert')
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+  })
+
   it('still fires when ctrl is pressed inside editable target', () => {
     const { executeCommand, instantiation } = createHarness()
     bind('ctrl+b', 'test.toggle')

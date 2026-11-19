@@ -99,6 +99,9 @@ function addSurface(doc: Document, read: () => IVimSurfaceRegistration): { dispo
     // this the editable-target guard would reject them.
     allowEditableFocus: registration.kind === 'editor' || registration.kind === 'terminal',
     getElement: () => read().getElement?.() ?? null,
+    get enabled() {
+      return read().enabled
+    },
     read,
     engine: new VimSequenceEngine(),
   })
@@ -149,8 +152,13 @@ export function getActiveVimSurface(doc: Document): IActiveVimSurface | undefine
 /**
  * React binding. The registration is read through a ref so per-render handler
  * identities do not tear down and re-register the surface on every keystroke.
+ * `targetDocument` wins over the owner-document context for portals whose host
+ * already knows where it renders (Select, menus, popups).
  */
-export function useVimSurface(registration: IVimSurfaceRegistration): void {
+export function useVimSurface(
+  registration: IVimSurfaceRegistration,
+  targetDocument?: Document,
+): void {
   const contextDoc = useContext(OwnerDocumentContext)
   const registrationRef = useRef(registration)
   registrationRef.current = registration
@@ -158,10 +166,14 @@ export function useVimSurface(registration: IVimSurfaceRegistration): void {
   // carry their owner document through context.
   const elementDoc = registration.getElement?.()?.ownerDocument
   useEffect(() => {
-    const doc = contextDoc ?? elementDoc ?? (typeof document === 'undefined' ? undefined : document)
+    const doc =
+      targetDocument ??
+      contextDoc ??
+      elementDoc ??
+      (typeof document === 'undefined' ? undefined : document)
     if (doc === undefined) return undefined
     return addSurface(doc, () => registrationRef.current).dispose
-  }, [contextDoc, elementDoc])
+  }, [contextDoc, elementDoc, targetDocument])
 }
 
 /** Test-only: drop every registered surface and listener. */

@@ -10,24 +10,45 @@
 import {
   Action2,
   ILayoutService,
+  IViewsService,
   PartId,
+  ViewContainerLocation,
   localize2,
   type IAction2Options,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 
+interface DefaultContainer {
+  readonly location: ViewContainerLocation
+  readonly containerId: string
+}
+
 abstract class FocusPartAction extends Action2 {
   protected constructor(
     options: IAction2Options,
     private readonly _partId: PartId,
+    private readonly _defaultContainer?: DefaultContainer,
   ) {
     super(options)
   }
 
   override run(accessor: ServicesAccessor): void {
-    // Grab the service before any async boundary; the accessor dies there.
+    // Grab every service before the async boundary; the accessor dies there.
     const layoutService = accessor.get(ILayoutService)
-    void layoutService.focusPart(this._partId)
+    // `focusPart` reveals the part itself, but an empty panel / secondary side
+    // bar would still focus a blank surface. Mirror the toggle commands: bring
+    // the part up with its default container before moving focus.
+    if (!layoutService.getVisible(this._partId)) {
+      layoutService.setVisible(this._partId, true)
+      if (this._defaultContainer !== undefined) {
+        const { location, containerId } = this._defaultContainer
+        const viewsService = accessor.get(IViewsService)
+        if (!viewsService.getActiveViewContainerId(location)) {
+          viewsService.openViewContainer(containerId)
+        }
+      }
+    }
+    void layoutService.focusPart(this._partId, { source: 'command' })
   }
 }
 
@@ -52,7 +73,10 @@ export class FocusSideBarAction extends FocusPartAction {
 export class FocusPanelAction extends FocusPartAction {
   static readonly ID = 'workbench.action.focusPanel'
   constructor() {
-    super(options(FocusPanelAction.ID, 'Focus Panel'), PartId.Panel)
+    super(options(FocusPanelAction.ID, 'Focus Panel'), PartId.Panel, {
+      location: ViewContainerLocation.Panel,
+      containerId: 'workbench.view.output',
+    })
   }
 }
 
@@ -62,6 +86,10 @@ export class FocusSecondarySideBarAction extends FocusPartAction {
     super(
       options(FocusSecondarySideBarAction.ID, 'Focus Secondary Side Bar'),
       PartId.SecondarySideBar,
+      {
+        location: ViewContainerLocation.SecondarySideBar,
+        containerId: 'workbench.view.outline',
+      },
     )
   }
 }

@@ -71,6 +71,11 @@ export interface IVimSurfaceRegistration {
   readonly focus?: 'self' | 'within' | undefined
   /** Identifies the concrete instance for per-surface mode memory. */
   readonly getSurfaceKey: () => string
+  /**
+   * Closed / row-less widgets stay registered but must not claim strokes.
+   * Read at stroke time so a menu that resolves to zero rows is inert.
+   */
+  readonly enabled?: boolean | undefined
   readonly defaultMode: VimSurfaceMode
   readonly actions: IVimSurfaceActions
 }

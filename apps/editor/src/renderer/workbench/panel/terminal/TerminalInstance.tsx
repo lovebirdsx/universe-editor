@@ -1,18 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { URI } from '@universe-editor/platform'
-import { localize, markAsSingleton } from '@universe-editor/platform'
+import { IConfigurationService, localize, markAsSingleton } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import {
   ITerminalXtermService,
   type ITerminalXtermHolder,
 } from '../../../services/terminal/TerminalXtermService.js'
-import { useService } from '../../useService.js'
+import { useOptionalService, useService } from '../../useService.js'
+import { IVimModeService } from '../../../services/vim/vimModeService.js'
+import { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
+import { registerTerminalNormalModeController } from '../../../services/terminal/terminalNormalModeRegistry.js'
+import { TerminalNormalModeController } from './terminalNormalMode.js'
+import { copyTerminalSelection } from './terminalClipboard.js'
 import type { OpenTarget } from '../../../services/editor/openTarget.js'
 import type { ResolveTerminalFile } from './terminalLinkProvider.js'
 import {
   dragContainsResources,
   getOwnerResizeObserver,
   ListMenu,
+  registerVimSurface,
   type ListMenuEntry,
 } from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../../icons/menuIcon.js'
@@ -46,6 +52,48 @@ export function TerminalInstance({
   const isFocused = focused ?? active
   const manager = useService(ITerminalManagerService)
   const xtermService = useService(ITerminalXtermService)
+  // Soft: unit tests render this component without the workbench Vim services.
+  const vimModeService = useOptionalService(IVimModeService)
+  const vimInputMethodService = useOptionalService(IVimInputMethodService)
+  const configService = useOptionalService(IConfigurationService)
+  const surfaceKey = `terminal:${id}`
+  const [vimNormal, setVimNormal] = useState(false)
+
+  useEffect(() => {
+    if (vimModeService === undefined) {
+      setVimNormal(false)
+      return undefined
+    }
+    const read = (): void => {
+      const next =
+        vimModeService.getEnabled() &&
+        vimModeService.isSurfaceEnabled('terminal') &&
+        vimModeService.getMode(surfaceKey, 'insert') === 'terminal-normal'
+      setVimNormal((previous) => (previous === next ? previous : next))
+    }
+    read()
+    const subscriptions = [
+      vimModeService.onDidChangeMode((event) => {
+        if (event.surfaceKey === surfaceKey) read()
+      }),
+    ]
+    if (configService !== undefined) {
+      subscriptions.push(
+        configService.onDidChangeConfiguration((event) => {
+          if (
+            event.affectsConfiguration('vim.enabled') ||
+            event.affectsConfiguration('vim.surfaces.terminalNormalMode')
+          ) {
+            read()
+          }
+        }),
+      )
+    }
+    for (const subscription of subscriptions) markAsSingleton(subscription)
+    return () => {
+      for (const subscription of subscriptions) subscription.dispose()
+    }
+  }, [surfaceKey, vimModeService, configService])
 
   const hostRef = useRef<HTMLDivElement>(null)
   const holderRef = useRef<ITerminalXtermHolder | null>(null)
@@ -80,6 +128,39 @@ export function TerminalInstance({
     holder.reattachTo(host)
     setHasSelection(holder.hasSelection())
 
+    // Vim's terminal surface. The registration is per terminal instance and
+    // survives a panel/editor reparent (the xterm holder does); Normal mode is
+    // remembered by `surfaceKey` in IVimModeService.
+    const vimSurface =
+      vimModeService === undefined
+        ? undefined
+        : registerVimSurface({
+            id: surfaceKey,
+            kind: 'terminal',
+            getElement: () => hostRef.current,
+            focus: 'within',
+            getSurfaceKey: () => surfaceKey,
+            defaultMode: 'insert',
+            actions: {},
+          })
+    const normalMode =
+      vimModeService === undefined
+        ? undefined
+        : new TerminalNormalModeController({
+            surfaceKey,
+            target: holder.term,
+            getElement: () => hostRef.current,
+            vimModeService,
+            ...(vimInputMethodService !== undefined
+              ? { inputMethodService: vimInputMethodService }
+              : {}),
+            autoSwitchInputMethod: () =>
+              configService?.get<boolean>('vim.autoSwitchInputMethod') !== false,
+            copySelection: (target) => copyTerminalSelection(target),
+          })
+    const normalModeRegistration =
+      normalMode === undefined ? undefined : registerTerminalNormalModeController(normalMode)
+
     const selectionSub = markAsSingleton(
       holder.onDidChangeSelection(() => setHasSelection(holder.hasSelection())),
     )
@@ -90,11 +171,14 @@ export function TerminalInstance({
     return () => {
       observer?.disconnect()
       selectionSub.dispose()
+      normalModeRegistration?.dispose()
+      normalMode?.dispose()
+      vimSurface?.dispose()
       holder.saveScroll()
       holder.wrapper.remove()
       holderRef.current = null
     }
-  }, [id, xtermService])
+  }, [id, xtermService, surfaceKey, vimModeService, vimInputMethodService, configService])
 
   // Becoming active may follow a display:none (size 0) phase; refit, then focus
   // only the instance that should own focus (the active one within its group).
@@ -188,6 +272,7 @@ export function TerminalInstance({
           .filter(Boolean)
           .join(' ')}
         data-terminal-id={id}
+        data-vim-normal={vimNormal ? 'true' : undefined}
         onContextMenu={handleContextMenu}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}

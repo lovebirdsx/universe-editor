@@ -285,7 +285,12 @@ describe('FileEditor — auto-pin on first edit', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
-    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
+    services.set(IVimModeService, {
+      _serviceBrand: undefined,
+      setMode: () => {},
+      getMode: (_key: string, fallback: string) => fallback,
+      forgetSurface: () => {},
+    } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -326,7 +331,12 @@ describe('FileEditor — auto-pin on first edit', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
-    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
+    services.set(IVimModeService, {
+      _serviceBrand: undefined,
+      setMode: () => {},
+      getMode: (_key: string, fallback: string) => fallback,
+      forgetSurface: () => {},
+    } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -367,7 +377,12 @@ describe('FileEditor — auto-pin on first edit', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
-    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
+    services.set(IVimModeService, {
+      _serviceBrand: undefined,
+      setMode: () => {},
+      getMode: (_key: string, fallback: string) => fallback,
+      forgetSurface: () => {},
+    } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -421,7 +436,12 @@ describe('FileEditor — auto-pin on first edit', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
-    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
+    services.set(IVimModeService, {
+      _serviceBrand: undefined,
+      setMode: () => {},
+      getMode: (_key: string, fallback: string) => fallback,
+      forgetSurface: () => {},
+    } as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -474,7 +494,12 @@ describe('FileEditor — auto-pin on first edit', () => {
       switchToEnglish: async () => false,
       restore: async () => undefined,
     } as never)
-    services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
+    services.set(IVimModeService, {
+      _serviceBrand: undefined,
+      setMode: () => {},
+      getMode: (_key: string, fallback: string) => fallback,
+      forgetSurface: () => {},
+    } as never)
 
     render(
       <ServicesContext.Provider value={inst}>

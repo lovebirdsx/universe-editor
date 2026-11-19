@@ -34,8 +34,13 @@ abstract class VimSurfaceCommandAction extends Action2 {
   }
 
   override run(_accessor: ServicesAccessor, ...args: unknown[]): void {
+    // No service is needed: the active surface is resolved from DOM focus, and
+    // the accessor would die at the first await anyway.
     const active = getActiveVimSurface(getActiveWorkbenchDocument())
-    if (active === undefined) return
+    if (active === undefined) {
+      console.debug(`[vim] ${this.desc.id}: no active surface`)
+      return
+    }
     this._invoke(active.surface.actions, readCount(args[0]))
   }
 }

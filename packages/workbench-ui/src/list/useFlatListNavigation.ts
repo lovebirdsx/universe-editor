@@ -33,7 +33,9 @@ import {
 } from 'react'
 import { isOpenTargetEnter } from '@universe-editor/platform'
 import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
-import { resolveIndexNavigation } from './listKeyboard.js'
+import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
+import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
+import { LIST_PAGE_STEP, resolveIndexNavigation } from './listKeyboard.js'
 import {
   dispatchKeyboardContextMenu,
   findRowElement,
@@ -110,6 +112,11 @@ export interface IUseFlatListNavigationOptions {
    * editor, which does not preselect a row either.
    */
   readonly focusSelectsFirst?: boolean | undefined
+  /**
+   * Stable view identity for Vim mode memory (`list:<vimSurfaceId>`). Omit for
+   * a per-instance auto key.
+   */
+  readonly vimSurfaceId?: string | undefined
 }
 
 export interface IFlatListContainerProps {
@@ -157,6 +164,7 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
   // row, and a fresh handler per render would defeat their memoization.
   const optionsRef = useRef(options)
   optionsRef.current = options
+  const vimSurfaceKey = useVimSurfaceKey('list', options.vimSurfaceId)
 
   const revealRow = useCallback((index: number) => {
     const { getContainer, getItemKey, rowDataAttr, scrollToIndex, count } = optionsRef.current
@@ -211,42 +219,6 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
       })
       if (next !== undefined) focusRow(next)
     },
-    vim: {
-      directions:
-        options.onMoveHorizontal === undefined ? ['up', 'down'] : ['up', 'down', 'left', 'right'],
-      onMove: (motion) => {
-        const { count, focusedIndex, getPageSize, onMoveHorizontal } = optionsRef.current
-        if (count === 0) return
-        if (motion.kind === 'direction') {
-          if (motion.direction === 'left' || motion.direction === 'right') {
-            if (onMoveHorizontal === undefined) return
-            if (focusedIndex < 0 || focusedIndex >= count) return
-            onMoveHorizontal(motion.direction, focusedIndex)
-            return
-          }
-          const next = resolveIndexNavigation(
-            motion.direction === 'down' ? 'ArrowDown' : 'ArrowUp',
-            { index: focusedIndex, count, pageSize: getPageSize?.() },
-          )
-          if (next !== undefined) focusRow(next)
-          return
-        }
-        if (motion.kind === 'first') {
-          focusRow(0)
-          return
-        }
-        if (motion.kind === 'last') {
-          focusRow(count - 1)
-          return
-        }
-        const next = resolveIndexNavigation(motion.direction === 'down' ? 'PageDown' : 'PageUp', {
-          index: focusedIndex,
-          count,
-          pageSize: getPageSize?.(),
-        })
-        if (next !== undefined) focusRow(next)
-      },
-    },
   })
 
   const openContextMenu = useCallback(() => {
@@ -264,6 +236,54 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
         : null
     dispatchKeyboardContextMenu(row ?? container, row !== null)
   }, [])
+
+  // Bare Vim keys (j/k/H/L, gg/G, Ctrl+d/u, Enter, m) arrive as commands from
+  // the workbench dispatcher; the actions below drive the same focus model as
+  // the arrow-key handler. Counts resolve to one target index so a `5j` is a
+  // single focus change and a single reveal.
+  useVimSurface({
+    id: vimSurfaceKey,
+    kind: 'list',
+    focus: 'self',
+    getElement: () => optionsRef.current.getContainer(),
+    getSurfaceKey: () => vimSurfaceKey,
+    defaultMode: 'normal',
+    actions: {
+      move: (direction, count) => {
+        const { count: total, focusedIndex, onMoveHorizontal } = optionsRef.current
+        if (total === 0) return
+        if (direction === 'left' || direction === 'right') {
+          if (onMoveHorizontal === undefined) return
+          if (focusedIndex < 0 || focusedIndex >= total) return
+          onMoveHorizontal(direction, focusedIndex)
+          return
+        }
+        const steps = Math.max(1, count)
+        const from = focusedIndex < 0 ? (direction === 'down' ? -1 : 0) : focusedIndex
+        const delta = direction === 'down' ? steps : -steps
+        focusRow(Math.max(0, Math.min(total - 1, from + delta)))
+      },
+      first: () => focusRow(0),
+      last: () => focusRow(optionsRef.current.count - 1),
+      page: (direction, count) => {
+        const { count: total, focusedIndex, getPageSize } = optionsRef.current
+        const pageSize = (getPageSize?.() ?? LIST_PAGE_STEP) * Math.max(1, count)
+        const next = resolveIndexNavigation(direction === 'down' ? 'PageDown' : 'PageUp', {
+          index: focusedIndex,
+          count: total,
+          pageSize,
+        })
+        if (next !== undefined) focusRow(next)
+      },
+      activate: (_count, preview) => {
+        const { count: total, focusedIndex, onActivate } = optionsRef.current
+        if (onActivate === undefined) return
+        if (focusedIndex < 0 || focusedIndex >= total) return
+        onActivate(focusedIndex, { preview })
+      },
+      contextMenu: () => openContextMenu(),
+    },
+  })
 
   const onKeyDown = useCallback(
     (e: KeyboardEvent) => {

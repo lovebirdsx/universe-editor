@@ -421,4 +421,55 @@ test.describe('@p1 vim mode', () => {
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
     await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
   })
+
+  test('mode is remembered per editor surface', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    const dir = mkTempDir('universe-editor-e2e-vim-memory-')
+    const fileA = join(dir, 'a.txt')
+    const fileB = join(dir, 'b.txt')
+    writeFileSync(fileA, BODY, 'utf8')
+    writeFileSync(fileB, BODY, 'utf8')
+    await workbench.openWorkspace(dir)
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), fileA)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')))
+      .toBe(true)
+    await setVimModeEnabled(page, true)
+    // Let the post-workspace focus-restore window elapse, or it would pull focus
+    // back out of the sidebar during the step below.
+    await page.waitForTimeout(RESTORE_WINDOW_MS)
+
+    await test.step('Insert survives a focus move to another surface', async () => {
+      await page.keyboard.press('i')
+      await expect.poll(() => statusIcon(page)).toBe('vim-insert')
+      await expect.poll(() => workbench.getContextKey<string>('vimMode')).toBe('insert')
+
+      await workbench.runCommand('workbench.action.focusSideBar')
+      // Leaving the editor only clears/retargets the active-surface keys; the
+      // editor's own memory must not be reset to Normal.
+      await expect.poll(() => workbench.getContextKey<string>('vimMode')).not.toBe('insert')
+      await expect.poll(() => workbench.getContextKey<string>('focusedPart')).toBe('sideBar')
+
+      await workbench.runCommand('workbench.action.focusActiveEditorGroup')
+      await expect.poll(() => statusIcon(page)).toBe('vim-insert')
+      await expect.poll(() => workbench.getContextKey<string>('vimMode')).toBe('insert')
+    })
+
+    await test.step('another editor starts Normal and each keeps its own mode', async () => {
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), fileB)
+      await expect.poll(() => statusIcon(page)).toBe('vim-normal')
+      await expect.poll(() => workbench.getContextKey<string>('vimMode')).toBe('normal')
+
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), fileA)
+      await expect.poll(() => statusIcon(page)).toBe('vim-insert')
+
+      // Esc only changes A; returning to B must still find Normal.
+      await page.keyboard.press('Escape')
+      await expect.poll(() => statusIcon(page)).toBe('vim-normal')
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), fileB)
+      await expect.poll(() => statusIcon(page)).toBe('vim-normal')
+    })
+  })
 })

@@ -36,6 +36,8 @@ import { resolveIndexNavigation } from '../list/listKeyboard.js'
 import { hasTrustworthyViewport } from '../list/scrollElementLayout.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
+import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
+import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { useStableCallback } from '../hooks/useStableCallback.js'
 import { isOpenTargetEnter, markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
@@ -207,6 +209,11 @@ export interface ITreeProps<T> {
    * in-memory ScrollStateCache. Must be a stable object across renders.
    */
   readonly scrollStatePersister?: IScrollStatePersister
+  /**
+   * Stable view identity for Vim mode memory (`list:<vimSurfaceId>`). Omit for
+   * a per-instance auto key.
+   */
+  readonly vimSurfaceId?: string | undefined
 }
 
 export function Tree<T>(props: ITreeProps<T>) {
@@ -233,6 +240,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     maxStickyRows = DEFAULT_MAX_STICKY_ROWS,
     scrollStateKey,
     scrollStatePersister,
+    vimSurfaceId,
   } = props
 
   const { selectionVersion, structureVersion, visibleNodes } = useTreeModel(model)
@@ -246,6 +254,7 @@ export function Tree<T>(props: ITreeProps<T>) {
   const pointerFocusRef = useRef(false)
   const visibleRef = useRef(visibleNodes)
   visibleRef.current = visibleNodes
+  const vimSurfaceKey = useVimSurfaceKey('list', vimSurfaceId)
 
   // React attaches child refs before parent ones, so on the first render the
   // container does not exist yet and the virtualizer would find no scroll
@@ -633,30 +642,84 @@ export function Tree<T>(props: ITreeProps<T>) {
     directions: ['up', 'down', 'left', 'right'],
     getElement: () => containerRef.current,
     onMove: (direction) => model.navigate(direction),
-    vim: {
-      directions: ['up', 'down', 'left', 'right'],
-      onMove: (motion) => {
-        if (motion.kind === 'direction') {
-          model.navigate(motion.direction)
+  })
+
+  // Bare Vim keys arrive as commands from the workbench dispatcher. Movement
+  // counts resolve to one target index (one selection change / reveal); Left /
+  // Right keep their structural meaning (collapse-then-parent, expand-then-
+  // child) and therefore apply once per stroke.
+  useVimSurface({
+    id: vimSurfaceKey,
+    kind: 'list',
+    focus: 'within',
+    getElement: () => containerRef.current,
+    getSurfaceKey: () => vimSurfaceKey,
+    defaultMode: 'normal',
+    actions: {
+      move: (direction, count) => {
+        if (direction === 'left' || direction === 'right') {
+          model.navigate(direction)
           return
         }
         const vis = model.getVisibleNodes()
         if (vis.length === 0) return
-        if (motion.kind === 'first' || motion.kind === 'last') {
-          const target = motion.kind === 'first' ? vis[0] : vis[vis.length - 1]
-          if (target) model.setSelection([target.id], target.id)
-          return
-        }
         const focusedId = model.focused
         const currentIndex = focusedId ? vis.findIndex((n) => n.id === focusedId) : -1
-        const next = resolveIndexNavigation(motion.direction === 'down' ? 'PageDown' : 'PageUp', {
+        const steps = Math.max(1, count)
+        const from = currentIndex < 0 ? (direction === 'down' ? -1 : 0) : currentIndex
+        const target =
+          vis[Math.max(0, Math.min(vis.length - 1, from + (direction === 'down' ? steps : -steps)))]
+        if (target) model.setSelection([target.id], target.id)
+      },
+      first: () => {
+        const vis = model.getVisibleNodes()
+        const target = vis[0]
+        if (target) model.setSelection([target.id], target.id)
+      },
+      last: () => {
+        const vis = model.getVisibleNodes()
+        const target = vis[vis.length - 1]
+        if (target) model.setSelection([target.id], target.id)
+      },
+      page: (direction, count) => {
+        const vis = model.getVisibleNodes()
+        if (vis.length === 0) return
+        const focusedId = model.focused
+        const currentIndex = focusedId ? vis.findIndex((n) => n.id === focusedId) : -1
+        const next = resolveIndexNavigation(direction === 'down' ? 'PageDown' : 'PageUp', {
           index: currentIndex,
           count: vis.length,
-          pageSize: PAGE_STEP,
+          pageSize: PAGE_STEP * Math.max(1, count),
         })
         const target = next === undefined ? undefined : vis[next]
         if (target) model.setSelection([target.id], target.id)
       },
+      expand: () => {
+        const vis = model.getVisibleNodes()
+        const current = vis.find((n) => n.id === model.focused)
+        if (current?.hasChildren === true && !current.expanded) void model.expand(current.element)
+      },
+      collapse: () => model.navigate('left'),
+      toggle: () => {
+        const vis = model.getVisibleNodes()
+        const current = vis.find((n) => n.id === model.focused)
+        if (current?.hasChildren === true) void model.toggle(current.element)
+      },
+      activate: (_count, preview) => {
+        const vis = model.getVisibleNodes()
+        const current = vis.find((n) => n.id === model.focused)
+        if (current === undefined) return
+        if (current.hasChildren && (!activateNonLeafOnEnter || preview)) {
+          void model.toggle(current.element)
+          return
+        }
+        onActivate?.(current, { preview, source: 'keyboard' })
+      },
+      contextMenu: () => {
+        const current = model.getVisibleNodes().find((n) => n.id === model.focused)
+        openKeyboardContextMenu(current ?? null)
+      },
+      escape: () => model.collapseSelectionToFocus(),
     },
   })
 

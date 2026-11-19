@@ -42,11 +42,18 @@ import {
   formatVimUserShadow,
 } from './vimDebugFormat.js'
 
-const PRINTABLE_SWALLOW_KINDS: ReadonlySet<VimSurfaceKind> = new Set(['list', 'menu', 'overlay'])
+const PRINTABLE_SWALLOW_KINDS: ReadonlySet<VimSurfaceKind> = new Set([
+  'list',
+  'menu',
+  'overlay',
+  'terminal',
+])
 
 interface PendingSequence {
   readonly timer: ReturnType<typeof setTimeout>
 }
+
+type VimTrace = { readonly surface: string; readonly surfaceId: string; readonly mode: string }
 
 export interface VimDispatcherOptions {
   readonly commandService: ICommandService
@@ -163,7 +170,12 @@ export class VimDispatcher {
 
     if (debug?.enabled) debug.append(formatVimSurface(trace))
 
-    if (kind === 'editor') return this.editorStroke(active, event)
+    if (kind === 'editor') {
+      // The leader and an in-flight sequence belong to the shared engine even
+      // on editors; every other Normal-mode stroke is the editor's Vim core.
+      if (this.dispatchEditorSequence(active, token, surfaceKey, trace, debug)) return true
+      return this.editorStroke(active, event)
+    }
 
     const surfaceKeys = vim.getEffectiveKeymap(kind)
     active.sequence.setEntries(surfaceKeys)
@@ -185,6 +197,41 @@ export class VimDispatcher {
       case 'none':
         this.clearPending(surfaceKey)
         return this.handleUnmapped(kind, token, event, trace, debug)
+    }
+  }
+
+  /**
+   * Editors own their Vim core (counts, operators, search) and normally bypass
+   * the shared sequence engine. The configured leader and a sequence already
+   * pending on this surface are workbench commands, so they go through the
+   * engine; a broken prefix falls back to the controller like any other key.
+   */
+  private dispatchEditorSequence(
+    active: IActiveVimSurface,
+    token: string,
+    surfaceKey: string,
+    trace: VimTrace,
+    debug: IKeyboardDebugService | undefined,
+  ): boolean {
+    const vim = this._options.vimModeService
+    if (token !== vim.getLeader() && !active.sequence.isPending) return false
+    active.sequence.setEntries(vim.getEffectiveKeymap('editor'))
+    const step = active.sequence.feed(token)
+    switch (step.kind) {
+      case 'cancel':
+        this.clearPending(surfaceKey)
+        return true
+      case 'pending':
+        this.armPending(active, surfaceKey, trace)
+        if (debug?.enabled) debug.append(formatVimPending(trace, [...step.prefix]))
+        return true
+      case 'execute':
+        this.clearPending(surfaceKey)
+        this.runMatches(step.matches, step.count, trace, debug)
+        return true
+      case 'none':
+        this.clearPending(surfaceKey)
+        return false
     }
   }
 
@@ -219,11 +266,7 @@ export class VimDispatcher {
       : undefined
   }
 
-  private armPending(
-    active: IActiveVimSurface,
-    surfaceKey: string,
-    trace: { readonly surface: string; readonly surfaceId: string; readonly mode: string },
-  ): void {
+  private armPending(active: IActiveVimSurface, surfaceKey: string, trace: VimTrace): void {
     this.clearPending(surfaceKey)
     const timeoutMs = this._options.vimModeService.getSequenceTimeoutMs()
     const timer = setTimeout(() => {
@@ -244,7 +287,7 @@ export class VimDispatcher {
   private runMatches(
     matches: readonly IVimKeymapEntry[],
     count: number,
-    trace: { readonly surface: string; readonly surfaceId: string; readonly mode: string },
+    trace: VimTrace,
     debug: IKeyboardDebugService | undefined,
   ): void {
     const context = this._options.contextKeyService
@@ -262,7 +305,7 @@ export class VimDispatcher {
     kind: VimSurfaceKind,
     token: string,
     event: KeyboardEvent,
-    trace: { readonly surface: string; readonly surfaceId: string; readonly mode: string },
+    trace: VimTrace,
     debug: IKeyboardDebugService | undefined,
   ): boolean {
     if (this._options.vimModeService.getPassThroughUnmappedKeys()) return false

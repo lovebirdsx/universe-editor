@@ -407,13 +407,26 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
       // a DOM-editable element — `editorTextFocus` (file editors) and
       // `acpPromptInputFocused` (the ACP prompt input) are the reliable signals —
       // so a global Delete binding (e.g. delete-file) never steals the editor's key.
+      //
+      // Vim Normal mode is the exception: those keys are commands there, and the
+      // Vim dispatcher has already yielded explicitly for a User binding (it
+      // claims every other Normal-mode stroke on window capture). Dropping them
+      // here would honor neither side.
       const inTextSurface =
         isEditableTarget(e.target) ||
         contextKeyService.get('editorTextFocus') === true ||
         contextKeyService.get('acpPromptInputFocused') === true
+      const inVimNormalSurface =
+        (contextKeyService.get('vimNormalMode') === true &&
+          contextKeyService.get('editorTextFocus') === true) ||
+        contextKeyService.get('vimTerminalNormalMode') === true
+      const userBindingOwnsKey = result.kind === 'execute' && result.weight >= KeybindingWeight.User
       const k = e.key.toLowerCase()
-      const isPrintableTyping = e.key.length === 1 && !hasFunctionalModifier(e) && inTextSurface
-      const isNativeEditing = inTextSurface && (k === 'delete' || k === 'backspace')
+      const isVimUserCommand = inVimNormalSurface && userBindingOwnsKey
+      const isPrintableTyping =
+        e.key.length === 1 && !hasFunctionalModifier(e) && inTextSurface && !isVimUserCommand
+      const isNativeEditing =
+        inTextSurface && (k === 'delete' || k === 'backspace') && !isVimUserCommand
       if (isPrintableTyping || isNativeEditing) {
         if (dbg && diag) {
           keyboardDebugService.append(

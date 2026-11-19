@@ -24,6 +24,8 @@ import {
 } from '@floating-ui/react'
 import { cx } from './cx.js'
 import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
+import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
+import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
 import styles from './Select.module.css'
 
@@ -98,6 +100,9 @@ export function Select<T extends string>({
   const doc = useOwnerDocument(targetDocument)
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
+  const activeIndexRef = useRef(activeIndex)
+  activeIndexRef.current = activeIndex
+  const vimSurfaceKey = useVimSurfaceKey('overlay')
 
   const selectedIndex = options.findIndex((o) => o.value === value)
   const selected = selectedIndex >= 0 ? options[selectedIndex] : undefined
@@ -185,6 +190,55 @@ export function Select<T extends string>({
     onChange(opt.value)
     setOpen(false)
   }
+
+  const moveBy = (delta: 1 | -1, steps = 1) => {
+    let index: number | undefined
+    let from = activeIndexRef.current
+    for (let step = 0; step < Math.max(1, steps); step++) {
+      const next = stepEnabled(options, from, delta)
+      if (next === undefined || next === from) break
+      index = next
+      from = next
+    }
+    if (index === undefined) return
+    setActiveIndex(index)
+    listRef.current[index]?.focus()
+  }
+
+  const moveTo = (index: number | undefined) => {
+    if (index === undefined) return
+    setActiveIndex(index)
+    listRef.current[index]?.focus()
+  }
+
+  // Bare Vim keys (j/k, gg/G, Ctrl+d/u, Enter, Esc) arrive as commands from the
+  // workbench dispatcher while the popup holds focus. Movement skips disabled
+  // options through the same `stepEnabled` the Ctrl+J/K aliases use.
+  useVimSurface(
+    {
+      id: vimSurfaceKey,
+      kind: 'overlay',
+      focus: 'within',
+      getElement: () => popupRef.current,
+      getSurfaceKey: () => vimSurfaceKey,
+      defaultMode: 'normal',
+      actions: {
+        move: (direction, count) => {
+          if (direction === 'down') moveBy(1, count)
+          else if (direction === 'up') moveBy(-1, count)
+        },
+        first: () => moveTo(stepEnabled(options, null, 1)),
+        last: () => moveTo(stepEnabled(options, null, -1)),
+        page: (direction, count) => moveBy(direction === 'down' ? 1 : -1, 10 * Math.max(1, count)),
+        activate: () => {
+          const index = activeIndexRef.current ?? selectedIndex
+          if (index >= 0) select(index)
+        },
+        escape: () => setOpen(false),
+      },
+    },
+    doc ?? undefined,
+  )
 
   return (
     <>

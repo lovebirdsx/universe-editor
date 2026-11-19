@@ -1654,6 +1654,12 @@ export interface E2EProbe {
   terminalClose(id: string): Promise<void>
   /** All output observed for a terminal id since creation. */
   terminalReadBuffer(id: string): string
+  /**
+   * Absolute buffer line at the top of the live xterm viewport (0 = top of
+   * scrollback, `baseY` = bottom). Reads xterm's own state: the DOM renderer's
+   * scrollbar is virtual, so `scrollTop` on `.xterm-viewport` stays 0.
+   */
+  terminalViewportY(id: string): number
   /** How often a terminal got a fresh pty after its remote connection was lost (id unchanged). */
   terminalRestartCount(id: string): number
   /**

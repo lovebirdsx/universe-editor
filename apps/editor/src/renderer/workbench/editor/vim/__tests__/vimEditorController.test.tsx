@@ -280,6 +280,99 @@ describe('createVimEditorController', () => {
     controller.dispose()
   })
 
+  it('keeps the mode across a focus move and restores it on return', () => {
+    const fake = createFakeEditor(['abc'])
+    const vim = createVimModeService()
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      surfaceKey: 'editor:1:a',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
+      contextKeyService: createContext() as never,
+      vimModeService: vim as never,
+      inputMethodService: createInputMethodService() as never,
+    })
+    fake.focus()
+    controller.handleKeyDown(key('i'))
+    expect(vim.modes.get('editor:1:a')).toBe('insert')
+
+    fake.blur()
+    // Focus leaving is not a mode change: the surface remembers Insert.
+    expect(vim.modes.get('editor:1:a')).toBe('insert')
+
+    fake.focus()
+    expect(vim.modes.get('editor:1:a')).toBe('insert')
+    // The reducer still holds Insert, so typing passes through and Esc works.
+    expect(controller.handleKeyDown(key('x'))).toBe(false)
+    expect(controller.handleKeyDown(key('Escape'))).toBe(true)
+    expect(vim.modes.get('editor:1:a')).toBe('normal')
+    controller.dispose()
+  })
+
+  it('restores the mode of the surface the model switches to', () => {
+    const fake = createFakeEditor(['abc'])
+    const vim = createVimModeService()
+    let surface = 'editor:1:a'
+    vim.modes.set('editor:1:b', 'insert')
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      surfaceKey: () => surface,
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
+      contextKeyService: createContext() as never,
+      vimModeService: vim as never,
+      inputMethodService: createInputMethodService() as never,
+    })
+    fake.focus()
+    expect(controller.handleKeyDown(key('j'))).toBe(true)
+
+    surface = 'editor:1:b'
+    fake.modelChange()
+    // B was left in Insert: printable keys must reach the editor again.
+    expect(controller.handleKeyDown(key('x'))).toBe(false)
+    expect(controller.handleKeyDown(key('Escape'))).toBe(true)
+    expect(vim.modes.get('editor:1:b')).toBe('normal')
+
+    surface = 'editor:1:a'
+    fake.modelChange()
+    expect(controller.handleKeyDown(key('j'))).toBe(true)
+    controller.dispose()
+  })
+
+  it('remembers modes per surface so two splits of one file stay independent', () => {
+    const vim = createVimModeService()
+    const first = createFakeEditor(['abc'])
+    const second = createFakeEditor(['abc'])
+    const options = {
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
+      contextKeyService: createContext() as never,
+      vimModeService: vim as never,
+      inputMethodService: createInputMethodService() as never,
+    }
+    const firstController = createVimEditorController({
+      ...options,
+      editor: first.editor,
+      surfaceKey: 'editor:1:file:///ws/a.txt',
+    })
+    const secondController = createVimEditorController({
+      ...options,
+      editor: second.editor,
+      surfaceKey: 'editor:2:file:///ws/a.txt',
+    })
+
+    first.focus()
+    firstController.handleKeyDown(key('i'))
+    expect(vim.modes.get('editor:1:file:///ws/a.txt')).toBe('insert')
+    first.blur()
+
+    second.focus()
+    expect(secondController.handleKeyDown(key('j'))).toBe(true)
+    expect(vim.modes.get('editor:2:file:///ws/a.txt')).toBe('normal')
+
+    first.focus()
+    expect(firstController.handleKeyDown(key('x'))).toBe(false)
+    firstController.dispose()
+    secondController.dispose()
+  })
+
   it('enters Insert after the cursor with a, and after the line with A', () => {
     const fake = createFakeEditor(['abc', 'de'])
     const context = createContext()
@@ -386,6 +479,36 @@ describe('createVimEditorController', () => {
     fake.focus()
     await Promise.resolve()
     expect(inputMethod.switchToEnglish).not.toHaveBeenCalled()
+    controller.dispose()
+  })
+
+  it('keeps the native IME while an Insert surface is unfocused and refocused', async () => {
+    const fake = createFakeEditor(['abc'])
+    const inputMethod = createInputMethodService()
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      surfaceKey: 'editor:test',
+      configService: createFakeConfig({ 'vim.enabled': true }) as never,
+      contextKeyService: createContext() as never,
+      vimModeService: createVimModeService() as never,
+      inputMethodService: inputMethod as never,
+    })
+    fake.focus()
+    await vi.waitFor(() => expect(inputMethod.switchToEnglish).toHaveBeenCalledTimes(1))
+
+    controller.handleKeyDown(key('i'))
+    await vi.waitFor(() => expect(inputMethod.restore).toHaveBeenCalledTimes(1))
+
+    fake.blur()
+    fake.focus()
+    await Promise.resolve()
+    // Entering Insert already restored the native IME; coming back in Insert
+    // must not switch to English just because the editor regained text focus.
+    expect(inputMethod.switchToEnglish).toHaveBeenCalledTimes(1)
+    expect(inputMethod.restore).toHaveBeenCalledTimes(1)
+
+    controller.handleKeyDown(key('Escape'))
+    await vi.waitFor(() => expect(inputMethod.switchToEnglish).toHaveBeenCalledTimes(2))
     controller.dispose()
   })
 

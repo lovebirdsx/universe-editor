@@ -281,7 +281,12 @@ function makeServices() {
     switchToEnglish: async () => false,
     restore: async () => undefined,
   } as never)
-  services.set(IVimModeService, { _serviceBrand: undefined, setMode: () => {} } as never)
+  services.set(IVimModeService, {
+    _serviceBrand: undefined,
+    setMode: () => {},
+    getMode: (_key: string, fallback: string) => fallback,
+    forgetSurface: () => {},
+  } as never)
   const instantiation = new InstantiationService(services)
   const inputA = instantiation.createInstance(FileEditorInput, uriA)
   const inputB = instantiation.createInstance(FileEditorInput, uriB)

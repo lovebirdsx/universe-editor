@@ -213,6 +213,7 @@ export function ContextMenu({
     hasRows,
     initialActivePath,
     targetDocument,
+    onClose,
   )
 
   // An empty menu never opens: report the close so the host drops its state

@@ -15,7 +15,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, type KeyboardEvent, type RefObject } from 'react'
-import { isContextMenuKey, useCtrlNavigationLayer } from '@universe-editor/workbench-ui'
+import {
+  isContextMenuKey,
+  useCtrlNavigationLayer,
+  useVimSurface,
+  useVimSurfaceKey,
+} from '@universe-editor/workbench-ui'
 
 export interface GraphKeyboardNavOptions {
   /** Keys of the currently rendered rows, top to bottom (after filtering). */
@@ -36,6 +41,8 @@ export interface GraphKeyboardNavOptions {
   /** Windowed lists: scroll by index instead of looking the row up in the DOM
    *  (off-screen rows are not rendered). Omit for plain DOM lists. */
   readonly scrollToRow?: ((index: number) => void) | undefined
+  /** Stable identity for Vim mode memory (`list:<vimSurfaceId>`). */
+  readonly vimSurfaceId?: string | undefined
 }
 
 export function useGraphKeyboardNav({
@@ -48,7 +55,9 @@ export function useGraphKeyboardNav({
   rowAttribute,
   rowHeight,
   scrollToRow,
+  vimSurfaceId,
 }: GraphKeyboardNavOptions): (e: KeyboardEvent<HTMLDivElement>) => void {
+  const vimSurfaceKey = useVimSurfaceKey('list', vimSurfaceId)
   const moveTo = useCallback(
     (index: number) => {
       if (rows.length === 0) return
@@ -88,26 +97,49 @@ export function useGraphKeyboardNav({
     directions: ['up', 'down'],
     getElement: () => scrollRef.current,
     onMove: (direction) => moveBy(direction === 'down' ? 1 : -1),
-    vim: {
-      directions: ['up', 'down'],
-      onMove: (motion) => {
-        if (motion.kind === 'direction') {
-          moveBy(motion.direction === 'down' ? 1 : -1)
-          return
+  })
+
+  // Bare Vim keys (j/k, gg/G, Ctrl+d/u, Enter, m) arrive as commands from the
+  // workbench dispatcher. A count resolves to one target row so `5j` scrolls
+  // and selects once; paging clamps at the ends like the arrow-key handler.
+  const pageSize = (): number =>
+    Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 0) / rowHeight))
+
+  useVimSurface({
+    id: vimSurfaceKey,
+    kind: 'list',
+    focus: 'self',
+    getElement: () => scrollRef.current,
+    getSurfaceKey: () => vimSurfaceKey,
+    defaultMode: 'normal',
+    actions: {
+      move: (direction, count) => {
+        if (rows.length === 0) return
+        const currentKey = selectionRef.current[0]
+        const currentIndex = currentKey === undefined ? -1 : rows.indexOf(currentKey)
+        const steps = Math.max(1, count)
+        if (direction === 'down') {
+          moveTo(currentIndex < 0 ? steps - 1 : currentIndex + steps)
+        } else if (direction === 'up') {
+          moveTo(currentIndex < 0 ? rows.length - steps : currentIndex - steps)
         }
-        if (motion.kind === 'first') {
-          moveTo(0)
-          return
-        }
-        if (motion.kind === 'last') {
-          moveTo(rows.length - 1)
-          return
-        }
-        const pageSize = Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 0) / rowHeight))
+      },
+      first: () => moveTo(0),
+      last: () => moveTo(rows.length - 1),
+      page: (direction, count) => {
         const currentKey = selectionRef.current[0]
         const currentIndex = currentKey === undefined ? -1 : rows.indexOf(currentKey)
         const base = currentIndex < 0 ? 0 : currentIndex
-        moveTo(base + (motion.direction === 'down' ? pageSize : -pageSize))
+        const delta = pageSize() * Math.max(1, count)
+        moveTo(direction === 'down' ? base + delta : base - delta)
+      },
+      activate: () => {
+        if (selectionRef.current[0] === undefined) return
+        openCommitChanges()
+      },
+      contextMenu: () => {
+        const key = selectionRef.current[0]
+        if (key !== undefined) openMenu(key)
       },
     },
   })

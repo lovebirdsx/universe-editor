@@ -50,6 +50,9 @@ function createVim(overrides: Partial<FakeVim> = {}): FakeVim {
     setMode: (key, mode) => {
       modes.set(key, mode)
     },
+    forgetSurface: (key) => {
+      modes.delete(key)
+    },
     activateSurface: (surface: IVimActiveSurface | undefined) => {
       Object.defineProperty(fake, 'activeSurface', { value: surface, configurable: true })
     },
@@ -169,6 +172,17 @@ describe('VimDispatcher', () => {
     expect(commands).toHaveBeenCalledWith('list.focusFirst', { count: 1 })
   })
 
+  it('passes a stroke another listener already prevented', () => {
+    const el = element()
+    registerVimSurface(surface('list', el), doc)
+    el.focus()
+    const { dispatcher, commands } = createDispatcher()
+    const event = press('j')
+    event.preventDefault()
+    expect(dispatcher.handleKeyDown(doc, event)).toBe(false)
+    expect(commands).not.toHaveBeenCalled()
+  })
+
   it('passes IME composition strokes through', () => {
     const el = element()
     registerVimSurface(surface('list', el), doc)
@@ -281,6 +295,20 @@ describe('VimDispatcher', () => {
     })
   })
 
+  it('swallows unmapped printables on a terminal in Normal mode', () => {
+    const container = element()
+    const textarea = doc.createElement('textarea')
+    container.appendChild(textarea)
+    textarea.focus()
+    registerVimSurface(surface('terminal', container, { defaultMode: 'insert' }), doc)
+    const vim = createVim({ getEffectiveKeymap: () => [] })
+    vim.setMode('terminal:1', 'terminal-normal')
+    const { dispatcher, commands } = createDispatcher({ vim })
+
+    expect(dispatcher.handleKeyDown(doc, press('x'))).toBe(true)
+    expect(commands).not.toHaveBeenCalled()
+  })
+
   it('swallows an unmapped printable key on list surfaces', () => {
     const el = element()
     registerVimSurface(surface('list', el), doc)
@@ -308,6 +336,47 @@ describe('VimDispatcher', () => {
     registerVimSurface(surface('editor', container, { actions: { handleStroke } }), doc)
     const { dispatcher } = createDispatcher({ handleStroke })
     expect(dispatcher.handleKeyDown(doc, press('j'))).toBe(true)
+    expect(handleStroke).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes a leader sequence on an editor to the command registry', () => {
+    const container = element()
+    const textarea = doc.createElement('textarea')
+    container.appendChild(textarea)
+    textarea.focus()
+    const handleStroke = vi.fn(() => true)
+    registerVimSurface(surface('editor', container, { actions: { handleStroke } }), doc)
+    const leaderKeymap: readonly IVimKeymapEntry[] = [
+      { id: 'leader.explorer', keys: ['space', 'e'], command: 'workbench.view.explorer' },
+    ]
+    const vim = createVim({ getEffectiveKeymap: () => leaderKeymap, getLeader: () => 'space' })
+    const { dispatcher, commands } = createDispatcher({ vim })
+
+    expect(dispatcher.handleKeyDown(doc, press(' '))).toBe(true)
+    expect(handleStroke).not.toHaveBeenCalled()
+    expect(commands).not.toHaveBeenCalled()
+
+    expect(dispatcher.handleKeyDown(doc, press('e'))).toBe(true)
+    expect(commands).toHaveBeenCalledWith('workbench.view.explorer', { count: 1 })
+    expect(handleStroke).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the editor controller when a leader prefix matches nothing', () => {
+    const container = element()
+    const textarea = doc.createElement('textarea')
+    container.appendChild(textarea)
+    textarea.focus()
+    const handleStroke = vi.fn(() => true)
+    registerVimSurface(surface('editor', container, { actions: { handleStroke } }), doc)
+    const leaderKeymap: readonly IVimKeymapEntry[] = [
+      { id: 'leader.explorer', keys: ['space', 'e'], command: 'workbench.view.explorer' },
+    ]
+    const vim = createVim({ getEffectiveKeymap: () => leaderKeymap, getLeader: () => 'space' })
+    const { dispatcher, commands } = createDispatcher({ vim })
+
+    dispatcher.handleKeyDown(doc, press(' '))
+    expect(dispatcher.handleKeyDown(doc, press('z'))).toBe(true)
+    expect(commands).not.toHaveBeenCalled()
     expect(handleStroke).toHaveBeenCalledTimes(1)
   })
 })

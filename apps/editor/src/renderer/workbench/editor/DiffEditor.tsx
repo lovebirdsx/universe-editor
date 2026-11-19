@@ -19,9 +19,14 @@ import {
   type IEditorInput,
   localize,
 } from '@universe-editor/platform'
-import { useService } from '../useService.js'
+import { useOptionalService, useService } from '../useService.js'
+import { registerVimSurface } from '@universe-editor/workbench-ui'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
+import { createVimEditorController } from './vim/vimEditorController.js'
+import { editorVimSurfaceKey } from './vim/vimSurfaceKeys.js'
+import { IVimInputMethodService } from '../../../shared/ipc/vimInputMethodService.js'
+import { IVimModeService } from '../../services/vim/vimModeService.js'
 import {
   affectsBridgedEditorOption,
   buildBridgedEditorOptions,
@@ -70,6 +75,11 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   const configService = useService(IConfigurationService)
   const contextKeyService = useService(IContextKeyService)
   const groupsService = useService(IEditorGroupsService)
+  // Optional so the diff-editor unit tests (which build a minimal service
+  // container) keep running without the Vim kernel; the real workbench always
+  // provides both.
+  const vimModeService = useOptionalService(IVimModeService)
+  const vimInputMethodService = useOptionalService(IVimInputMethodService)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
@@ -158,6 +168,23 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     return () => disposable.dispose()
   }, [configService])
 
+  // Closing a diff drops its remembered Vim mode, like a file editor tab.
+  useEffect(() => {
+    if (group === null) return undefined
+    const subscription = group.onDidChangeModel?.((event) => {
+      const closed =
+        event.kind === 'close'
+          ? event.editor
+          : event.kind === 'replace' || event.kind === 'previewReplace'
+            ? event.replacedEditor
+            : undefined
+      if (closed !== undefined) {
+        vimModeService?.forgetSurface(editorVimSurfaceKey(group.id, closed.id))
+      }
+    })
+    return () => subscription?.dispose()
+  }, [group, vimModeService])
+
   // Set the diff model when the input changes, and wire viewState save/restore.
   useEffect(() => {
     if (!monacoNs || !diffEditorRef.current) return
@@ -214,6 +241,46 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     modifiedModelEditableRef.current = modifiedEditable
     DiffEditorRegistry.register(diffInput, ed, group?.id)
 
+    // Vim on the modified side. The original side stays a plain viewer. Only the
+    // editable (live working-tree) diff is a text surface: a read-only snapshot
+    // diff would report Insert mode while every keystroke was dropped.
+    const vimSurfaceKey = (): string => editorVimSurfaceKey(group?.id, diffInput.id)
+    let vimController: ReturnType<typeof createVimEditorController> | undefined
+    let vimRegistration: { dispose(): void } | undefined
+    if (modifiedEditable && vimModeService !== undefined && vimInputMethodService !== undefined) {
+      const modifiedEditor = ed.getModifiedEditor()
+      vimController = createVimEditorController({
+        editor: modifiedEditor,
+        surfaceKey: vimSurfaceKey,
+        configService,
+        contextKeyService,
+        vimModeService,
+        inputMethodService: vimInputMethodService,
+      })
+      vimRegistration = registerVimSurface({
+        get id() {
+          return vimSurfaceKey()
+        },
+        kind: 'editor',
+        getElement: () => modifiedEditor.getContainerDomNode(),
+        focus: 'within',
+        getSurfaceKey: vimSurfaceKey,
+        defaultMode: 'normal',
+        actions: { handleStroke: (event) => vimController?.handleKeyDown(event) ?? false },
+      })
+    }
+    // Focus does not move on an in-place model swap, so republish the surface
+    // while the modified side owns the keyboard (mode memory is per input).
+    if (modifiedEditable && vimModeService !== undefined && ed.getModifiedEditor().hasTextFocus()) {
+      const key = vimSurfaceKey()
+      vimModeService.activateSurface({
+        surfaceKey: key,
+        kind: 'editor',
+        id: key,
+        defaultMode: 'normal',
+      })
+    }
+
     // Monaco loads asynchronously, so the group's synchronous focus attempt (in
     // EditorGroupView) ran before this instance existed. Mirror the file editor:
     // once registered, pull focus to the modified side if we're the active editor
@@ -242,6 +309,12 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
         viewStateRef.current = null
       }
       DiffEditorRegistry.unregister(diffInput, ed)
+      vimRegistration?.dispose()
+      vimController?.dispose()
+      if (group !== null && groupsService.groups?.includes?.(group) === false) {
+        // The whole group is going away (its closeAll event carries no editor).
+        vimModeService?.forgetSurface(vimSurfaceKey())
+      }
       // create-effect cleanup may have already disposed the instance (React runs
       // effect cleanups in declaration order), so guard against a disposed editor.
       diffEditorRef.current?.setModel(null)
@@ -270,6 +343,8 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     configService,
     groupsService,
     contextKeyService,
+    vimModeService,
+    vimInputMethodService,
   ])
 
   // Refresh both sides in place when the input's content changes (e.g. the file
