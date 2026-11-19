@@ -1,4 +1,7 @@
 .vim-search-widget {
+  /* Monaco's sticky-scroll overlay is z-index 4; match its find widget so the
+     box paints above the pinned lines instead of underneath them. */
+  z-index: 35;
   display: flex;
   align-items: center;
   gap: 4px;

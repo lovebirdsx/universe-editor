@@ -314,6 +314,54 @@ test.describe('@p1 vim mode', () => {
     await expect.poll(() => text(page)).toBe(body)
   })
 
+  /**
+   * The `/` box is a plain overlay widget, so it takes `.overlayWidgets` paint
+   * order. Monaco's sticky-scroll widget is an overlay too but carries
+   * `z-index: 4`; a box without its own z-index paints underneath the sticky
+   * lines. Playwright's visibility check cannot see occlusion, so hit-test the
+   * input's center — the only faithful assertion for a stacking bug.
+   */
+  test('Normal-mode search box is not obscured by sticky scroll @regression', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    // Two nested indentation scopes: `root` + `child` stay pinned while the
+    // leaves scroll, so at least two sticky rows cover the box's vertical band.
+    const scopedBody = `root\n  child\n${Array.from({ length: 120 }, (_, i) => `    leaf ${i + 1}`).join('\n')}\n`
+    await openEditor(page, workbench, scopedBody)
+    await setVimModeEnabled(page, true)
+
+    await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(100, 5))
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const sticky = document.querySelector<HTMLElement>('.monaco-editor .sticky-widget')
+          return sticky?.clientHeight ?? 0
+        }),
+      )
+      .toBeGreaterThan(0)
+
+    await page.keyboard.press('/')
+    await expect
+      .poll(() => page.evaluate(() => document.querySelector('.vim-search-input') !== null))
+      .toBe(true)
+
+    const hit = await page.evaluate(() => {
+      const input = document.querySelector<HTMLElement>('.vim-search-input')
+      if (!input) return { reachedInput: false, topClass: null as string | null }
+      const rect = input.getBoundingClientRect()
+      const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      return {
+        reachedInput: top !== null && (top === input || input.contains(top)),
+        topClass: top?.getAttribute('class') ?? null,
+      }
+    })
+    expect(hit.reachedInput, `top element over the search input: ${hit.topClass}`).toBe(true)
+  })
+
   test('turning the setting off restores plain typing', async ({ page, workbench }) => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
