@@ -120,6 +120,8 @@ async function makeHarness(): Promise<{
 }
 
 describe('applySwarmReviewToLocal', () => {
+  // freshModules() re-imports the whole platform chain; under turbo's parallel
+  // editor test projects this first case can exceed the 5s default on a busy box.
   it('returns without any dialog/command when change or files are missing', async () => {
     const { run, harness } = await makeHarness()
     await run({ reviewId: '1001', change: '', files: [IN_WS] })
@@ -127,7 +129,7 @@ describe('applySwarmReviewToLocal', () => {
     expect(harness.dialog.confirm).not.toHaveBeenCalled()
     expect(harness.commands.executeCommand).not.toHaveBeenCalled()
     expect(harness.notifications.notify).not.toHaveBeenCalled()
-  })
+  }, 15_000)
 
   it('reports the mismatch wording when every file is unmapped and no stream is known', async () => {
     const { run, harness } = await makeHarness()
