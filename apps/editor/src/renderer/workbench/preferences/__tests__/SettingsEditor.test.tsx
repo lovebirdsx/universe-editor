@@ -195,8 +195,13 @@ describe('SettingsEditor', () => {
     registerSeedSchema()
     const { container } = mount()
     const toc = container.querySelector('[data-testid="settings-toc"]')!
+    // Vim flat-list navigation owns the a11y roles: listbox container, option rows.
+    expect(toc.getAttribute('role')).toBe('listbox')
     const items = toc.querySelectorAll('button')
     expect(items.length).toBe(2)
+    expect(Array.from(items).map((item) => item.getAttribute('role'))).toEqual(['option', 'option'])
+    expect(container.querySelector('[data-testid="settings-toc-editor"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="settings-toc-files"]')).toBeTruthy()
     expect(items[0]?.textContent).toBe('Editor2')
     expect(items[1]?.textContent).toBe('Files1')
   })
@@ -230,6 +235,9 @@ describe('SettingsEditor', () => {
     const buttons = (): Element[] => Array.from(toc.querySelectorAll('button'))
     expect(buttons().map((b) => b.textContent)).toEqual(['alpha4', 'beta4', 'gamma4'])
 
+    // A real click focuses the container first, which seeds the keyboard cursor
+    // on the first row; the click must move the cursor to the clicked row.
+    fireEvent.focus(toc)
     fireEvent.click(buttons()[2]!)
 
     await waitFor(() => {

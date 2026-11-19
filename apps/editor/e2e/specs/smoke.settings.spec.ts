@@ -88,8 +88,12 @@ test.describe('@p1 settings editor', () => {
     page,
   }) => {
     const toc = page.getByTestId('settings-toc')
-    const performanceEntry = toc.getByRole('button', { name: 'Performance' })
+    // Vim flat-list navigation owns the a11y roles (listbox/option); anchor on
+    // stable test ids so role changes don't break navigation.
+    const performanceEntry = page.getByTestId('settings-toc-performance')
     await expect(performanceEntry).toBeVisible()
+    await expect(toc).toHaveAttribute('role', 'listbox')
+    await expect(performanceEntry).toHaveAttribute('role', 'option')
 
     // The highlight drifts only after rows above the target have been measured:
     // until then the virtualizer's estimate table and the spy agree. Scroll in
@@ -123,9 +127,6 @@ test.describe('@p1 settings editor', () => {
       .toBeLessThan(80)
 
     await expect(performanceEntry).toHaveAttribute('aria-current', 'true')
-    await expect(toc.getByRole('button', { name: 'Search' })).toHaveAttribute(
-      'aria-current',
-      'false',
-    )
+    await expect(page.getByTestId('settings-toc-search')).toHaveAttribute('aria-current', 'false')
   })
 })

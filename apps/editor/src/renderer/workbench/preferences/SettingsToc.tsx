@@ -70,13 +70,19 @@ export function SettingsToc({ entries, activeId, onNavigate, onActivate }: Setti
         <button
           key={entry.id}
           type="button"
+          data-testid={`settings-toc-${entry.id}`}
           {...nav.getRowProps(index)}
           className={`${styles['tocItem']} ${entry.id === currentId ? styles['tocItemActive'] : ''}`}
           aria-current={entry.id === currentId}
           // The container owns focus; letting the button take it would break
           // the `focus: 'self'` Vim contract for the TOC surface.
           onMouseDown={(e) => e.preventDefault()}
-          onClick={() => onNavigate(entry)}
+          // Move the Vim cursor with the click: the focus event seeds it on the
+          // first row, whose id would otherwise override the clicked highlight.
+          onClick={() => {
+            setFocusedIndex(index)
+            onNavigate(entry)
+          }}
         >
           <span className={styles['tocLabel']}>{entry.title}</span>
           <span className={styles['tocCount']}>{entry.count}</span>

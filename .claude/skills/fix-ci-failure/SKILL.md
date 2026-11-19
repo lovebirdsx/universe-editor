@@ -86,8 +86,11 @@ git show -s --format=%B "<headSha>"
 - rerun 后 attempt 会变化，本次 run 结束即可；新的失败会以 `<runId>:<attempt+1>` 再次触发。
 - 修复时遵守仓库 `CLAUDE.md` 与目标目录约定；只做让 CI 变绿的最小改动，不重构、不顺手加功能。
 - 验证：`pnpm check`（只截取错误）；涉及编辑器交互或 e2e 改动时再跑
-  `pnpm e2e specs/<相关>.spec.ts`。本地因 bot clone 缺产物（`scripts/sensitive-rules.json`、
-  workspace 包 `dist/`）失败时，按部署文档补齐后重跑，不要当成代码失败。
+  `pnpm e2e specs/<相关>.spec.ts`。**推送前按失败步骤整趟验证**：失败步骤含
+  `Run E2E regression` → `pnpm e2ea`（或 `pnpm --filter @universe-editor/editor e2e:regression`）；
+  含 `Run E2E smoke` → `pnpm e2e`。`pnpm e2e` 默认排除 `@regression`，只跑相关 spec 会漏掉它们。
+  本地因 bot clone 缺产物（`scripts/sensitive-rules.json`、workspace 包 `dist/`）失败时，
+  按部署文档补齐后重跑，不要当成代码失败。
 
 ## 5. 提交与推送
 
