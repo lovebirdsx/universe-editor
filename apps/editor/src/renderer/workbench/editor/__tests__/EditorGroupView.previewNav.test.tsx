@@ -11,7 +11,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
-import { useEffect, type ComponentType } from 'react'
+import { useEffect, useRef, type ComponentType } from 'react'
 import {
   ContextKeyService,
   EditorInput,
@@ -74,15 +74,20 @@ class FakePreviewInput extends EditorInput {
   }
 }
 
-// Records, per source, how many times the preview component mounted.
-const mountsBySource = new Map<string, number>()
+// Records, per source, the preview instances that really mounted. A Set of
+// instance tokens keeps StrictMode's setup→cleanup→setup rehearsal from counting
+// as a second mount: the rehearsal reuses the same instance.
+const mountedInstancesBySource = new Map<string, Set<object>>()
 
 function ProbePreview({ input }: { input: IEditorInput }) {
   const src = (input as FakePreviewInput).src
+  const instance = useRef<object>({})
   // Empty deps: this runs only on a real mount, not on a prop/input change of a
   // reused instance. That is exactly the distinction the fix is about.
   useEffect(() => {
-    mountsBySource.set(src, (mountsBySource.get(src) ?? 0) + 1)
+    const instances = mountedInstancesBySource.get(src) ?? new Set<object>()
+    instances.add(instance.current)
+    mountedInstancesBySource.set(src, instances)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   return <div data-testid="probe-preview">{src}</div>
@@ -94,7 +99,7 @@ const componentMap = new Map<string, ComponentType<{ input: IEditorInput }>>([
 
 afterEach(() => {
   cleanup()
-  mountsBySource.clear()
+  mountedInstancesBySource.clear()
 })
 
 describe('EditorGroupView — markdown preview in-place navigation', () => {
@@ -116,7 +121,7 @@ describe('EditorGroupView — markdown preview in-place navigation', () => {
         resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
       />,
     )
-    expect(mountsBySource.get('a.md')).toBe(1)
+    expect(mountedInstancesBySource.get('a.md')?.size).toBe(1)
 
     // Navigate in place: open B at A's slot, close A — exactly what link-click /
     // history navigation does for markdown previews.
@@ -128,7 +133,8 @@ describe('EditorGroupView — markdown preview in-place navigation', () => {
     })
 
     // B must have mounted as a fresh instance. Without a per-input React key the
-    // component instance is reused, so this stays 0 and the bug reproduces.
-    expect(mountsBySource.get('b.md')).toBe(1)
+    // component instance is reused, so this stays undefined and the bug
+    // reproduces. StrictMode's rehearsal reuses one instance, hence the Set.
+    expect(mountedInstancesBySource.get('b.md')?.size).toBe(1)
   })
 })

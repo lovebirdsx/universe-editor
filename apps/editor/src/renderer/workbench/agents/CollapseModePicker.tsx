@@ -19,6 +19,7 @@ import {
 import { localize } from '@universe-editor/platform'
 import {
   AnchoredSurface,
+  focusElement,
   useOverlayListNavigation,
   type IOverlayListItemProps,
 } from '@universe-editor/workbench-ui'
@@ -110,7 +111,7 @@ export function CollapseModePicker({
   // list's escape action needs the same hand-back AnchoredSurface performs.
   const escape = (): boolean => {
     setAnchor(null)
-    triggerRef.current?.focus({ preventScroll: true })
+    focusElement(triggerRef.current)
     return false
   }
 

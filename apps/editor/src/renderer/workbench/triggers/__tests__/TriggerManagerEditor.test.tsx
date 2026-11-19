@@ -142,6 +142,7 @@ class FakeFiles {
 function renderEditor(options: HarnessOptions = {}) {
   const changeEmitter = new Emitter<readonly TriggerSummary[]>()
   const subscriptionDispose = vi.fn()
+  let activeSubscriptions = 0
   const listTriggers = vi.fn(async () => options.summaries ?? [])
   const setPaused = vi.fn(async () => undefined)
   const setAllPaused = vi.fn(async () => undefined)
@@ -176,9 +177,11 @@ function renderEditor(options: HarnessOptions = {}) {
     runNow,
     listRuns,
     onDidChangeTriggers: (listener: (list: readonly TriggerSummary[]) => void) => {
+      activeSubscriptions++
       const subscription = changeEmitter.event(listener)
       return {
         dispose: () => {
+          activeSubscriptions--
           subscriptionDispose()
           subscription.dispose()
         },
@@ -253,6 +256,11 @@ function renderEditor(options: HarnessOptions = {}) {
     listRuns,
     rescanWorkspace,
     subscriptionDispose,
+    /** Live change subscriptions — StrictMode's rehearsal subscribes, disposes
+     *  and re-subscribes, so only the net count says whether one is leaked. */
+    get activeSubscriptions() {
+      return activeSubscriptions
+    },
     fireChange: (list: readonly TriggerSummary[]) => act(() => changeEmitter.fire(list)),
   }
 }
@@ -589,10 +597,12 @@ describe('TriggerManagerEditor', () => {
   it('disposes the trigger subscription when unmounted', async () => {
     const harness = renderEditor({ summaries: TWO_WORKSPACES })
     await screen.findAllByTestId('trigger-manager-row')
+    // The rehearsal's own subscription was released, leaving exactly the live one.
+    expect(harness.activeSubscriptions).toBe(1)
 
     harness.view.unmount()
 
-    expect(harness.subscriptionDispose).toHaveBeenCalledTimes(1)
+    expect(harness.activeSubscriptions).toBe(0)
   })
 
   it('applies the list pushed by the change event', async () => {

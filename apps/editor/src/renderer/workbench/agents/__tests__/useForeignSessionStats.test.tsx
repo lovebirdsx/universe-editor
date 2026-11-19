@@ -163,8 +163,10 @@ describe('useForeignSessionStats', () => {
       CURRENT_CWD,
     )
     await waitFor(() => expect(captured.value?.get('f')).toBeDefined())
-    // Only the foreign cwd was read; the current workspace cwd was skipped.
-    expect(calls).toEqual([`acp.sessionHistory@${FOREIGN_CWD}`])
+    // Only the foreign cwd is ever read (the rehearsal effect pass reads it
+    // again, but never the current workspace bucket).
+    expect(new Set(calls)).toEqual(new Set([`acp.sessionHistory@${FOREIGN_CWD}`]))
+    expect(calls).not.toContain(`acp.sessionHistory@${CURRENT_CWD}`)
   })
 
   it('returns empty when the cross-bucket read is unavailable', async () => {
@@ -188,7 +190,8 @@ describe('useForeignSessionStats', () => {
       CURRENT_CWD,
     )
     await waitFor(() => expect(captured.value?.get('b')).toBeDefined())
-    expect(calls).toEqual([`acp.sessionHistory@${FOREIGN_CWD}`])
+    // Two rows, one worktree → one distinct bucket read (per effect pass).
+    expect(new Set(calls)).toEqual(new Set([`acp.sessionHistory@${FOREIGN_CWD}`]))
     expect(captured.value!.get('a')?.accumulatedRunningMs).toBe(1)
     expect(captured.value!.get('b')?.accumulatedRunningMs).toBe(2)
   })

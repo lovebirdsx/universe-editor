@@ -98,26 +98,26 @@ describe('useEventValue', () => {
 
 describe('useEventSubscription', () => {
   it('opens subscriptions on mount and disposes them all on unmount', () => {
-    const disposed = [false, false]
+    // Track each subscription instance: StrictMode's dry run opens a set, tears
+    // it down, then opens the real one, so only the live count is meaningful.
+    const opened: { active: boolean }[] = []
+    const open = () => {
+      const subscription = { active: true }
+      opened.push(subscription)
+      return toDisposable(() => {
+        subscription.active = false
+      })
+    }
     function Consumer() {
-      useEventSubscription(
-        () => [
-          toDisposable(() => {
-            disposed[0] = true
-          }),
-          toDisposable(() => {
-            disposed[1] = true
-          }),
-        ],
-        [],
-      )
+      useEventSubscription(() => [open(), open()], [])
       return null
     }
 
     const { unmount } = render(<Consumer />)
-    expect(disposed).toEqual([false, false])
+    expect(opened.filter((subscription) => subscription.active)).toHaveLength(2)
     act(() => unmount())
-    expect(disposed).toEqual([true, true])
+    expect(opened.length).toBeGreaterThanOrEqual(2)
+    expect(opened.every((subscription) => !subscription.active)).toBe(true)
   })
 
   it('accepts a single disposable return', () => {
@@ -153,26 +153,27 @@ describe('useEventSubscription', () => {
   })
 
   it('re-subscribes when deps change', () => {
-    const opens: number[] = []
-    const closes: number[] = []
+    // Live subscriptions per dep value — the rehearsal's extra open/close pair
+    // nets out, so this is stable under StrictMode.
+    const active = new Map<number, number>()
     let dep = 0
     function Consumer({ d }: { d: number }) {
       useEventSubscription(() => {
-        opens.push(d)
-        return toDisposable(() => closes.push(d))
+        active.set(d, (active.get(d) ?? 0) + 1)
+        return toDisposable(() => active.set(d, (active.get(d) ?? 1) - 1))
       }, [d])
       return null
     }
 
     const { rerender, unmount } = render(<Consumer d={dep} />)
-    expect(opens).toEqual([0])
+    expect(active.get(0)).toBe(1)
 
     dep = 1
     act(() => rerender(<Consumer d={dep} />))
-    expect(closes).toEqual([0])
-    expect(opens).toEqual([0, 1])
+    expect(active.get(0)).toBe(0)
+    expect(active.get(1)).toBe(1)
 
     act(() => unmount())
-    expect(closes).toEqual([0, 1])
+    expect(active.get(1)).toBe(0)
   })
 })

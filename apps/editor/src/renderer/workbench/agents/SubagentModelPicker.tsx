@@ -39,7 +39,7 @@ import type { IAcpSession } from '../../services/acp/session/acpSessionService.j
 import { useClaudeConfig } from '../agentSettings/claude/useClaudeConfig.js'
 import { useProviderRegistry } from '../agentSettings/useProviderRegistry.js'
 import { useObservable, useService } from '../useService.js'
-import { ConfigTrigger, type ConfigBarAnchor } from './ConfigOptionsBar.js'
+import { ConfigTrigger, runSurfaceEscape, type ConfigBarAnchor } from './ConfigOptionsBar.js'
 import styles from './agents.module.css'
 
 /** Inherit is the empty pick — `setSubagentModel(undefined)` clears the env. */
@@ -106,12 +106,7 @@ export function SubagentModelPicker({
             session={session}
             onAltDigit={onAltDigit}
             onConfirmCurrent={() => onClose(true)}
-            onEscape={() => {
-              // Vim's surface.escape path skips AnchoredSurface's own handler,
-              // so reproduce its two-step behaviour: peel (focus the trigger)
-              // then dismiss when the content declined to keep the surface.
-              if (!onEscape()) onClose()
-            }}
+            onEscape={() => runSurfaceEscape(onEscape, onClose)}
           />
         </AnchoredSurface>
       ) : null}

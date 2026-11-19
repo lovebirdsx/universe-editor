@@ -36,7 +36,11 @@ import {
 } from 'react'
 import { ChevronRight, MoreHorizontal, Plug, Users } from 'lucide-react'
 import { IDialogService, INotificationService, localize } from '@universe-editor/platform'
-import { AnchoredSurface, useOverlayListNavigation } from '@universe-editor/workbench-ui'
+import {
+  AnchoredSurface,
+  focusElement,
+  useOverlayListNavigation,
+} from '@universe-editor/workbench-ui'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import { useClaudeConfig } from '../agentSettings/claude/useClaudeConfig.js'
 import { useObservable, useOptionalService, useService } from '../useService.js'
@@ -215,7 +219,7 @@ export function ConfigBarOverflowMenu({
     // About to dismiss: hand the cursor back to the "…" button. AnchoredSurface
     // calls onClose right after, so the panel is gone once focus lands.
     const button = buttonRef as { current?: HTMLButtonElement | null } | null
-    button?.current?.focus()
+    focusElement(button?.current)
     return false
   }, [expandedKey, leaveBody, buttonRef])
 

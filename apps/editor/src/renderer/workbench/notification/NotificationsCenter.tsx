@@ -11,12 +11,13 @@
  *  closes the center.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { INotificationService, type INotification } from '@universe-editor/platform'
 import {
   NotificationsCenter as NotificationsCenterUI,
   OwnerDocumentProvider,
+  useFocusRestore,
   useVimSurface,
   useVimSurfaceKey,
   type IVimSurfaceActions,
@@ -34,39 +35,21 @@ export function NotificationsCenter() {
   const origins = useObservable(service.notificationOrigins)
   const centerDocument = useObservable(service.centerDocument)
 
-  // The panel's own autoFocus effect steals focus on mount, so the hand-back
-  // target has to be read during render (before child effects run). The snapshot
-  // is never consumed by a cleanup: dev's StrictMode replays mount effects and a
-  // cleanup-time restore would eat it before the real close.
-  const restoreFocusRef = useRef<HTMLElement | null>(null)
-  const wasVisibleRef = useRef(false)
+  // The panel's own autoFocus steals focus on mount, so the hand-back target is
+  // the element that held it before the center became visible. The panel root is
+  // remembered so a close can tell "the center still owned focus" (restore) from
+  // "the user moved elsewhere while it was open" (leave it alone) even though
+  // the panel is already unmounted by the time the restore runs.
+  const panelElRef = useRef<Element | null>(null)
   const doc = workbenchDocumentOrMain(centerDocument)
-  if (visible && !wasVisibleRef.current && doc !== undefined) {
-    const active = doc.activeElement
-    const candidate = active as HTMLElement | null
-    restoreFocusRef.current =
-      candidate !== null &&
-      candidate !== doc.body &&
-      typeof candidate.focus === 'function' &&
-      candidate.closest?.('[data-testid="notifications-center"]') === null
-        ? candidate
-        : null
-  }
-  wasVisibleRef.current = visible
-
-  // Close (Esc / × / the toggle command) drops focus to <body> because the
-  // panel took it on open. Hand it back only when the panel still owned focus;
-  // a user who moved elsewhere keeps the new focus.
-  useEffect(() => {
-    if (visible) return
-    const target = restoreFocusRef.current
-    restoreFocusRef.current = null
-    if (target === null) return
-    const targetDocument = target.ownerDocument
-    const active = targetDocument.activeElement
-    if (active !== null && active !== targetDocument.body && active !== target) return
-    if (target.isConnected) target.focus()
-  }, [visible])
+  useLayoutEffect(() => {
+    if (!visible || doc === undefined) return
+    panelElRef.current = doc.querySelector('[data-testid="notifications-center"]')
+  }, [visible, doc])
+  useFocusRestore(visible, {
+    targetDocument: doc,
+    onlyIfLost: () => panelElRef.current,
+  })
 
   if (!visible) return null
   if (!doc) return null

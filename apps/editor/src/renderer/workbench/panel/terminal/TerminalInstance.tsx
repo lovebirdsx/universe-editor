@@ -102,6 +102,10 @@ export function TerminalInstance({
 
   const hostRef = useRef<HTMLDivElement>(null)
   const holderRef = useRef<ITerminalXtermHolder | null>(null)
+  // Fresh per effect setup; a deferred teardown step compares it to tell dev
+  // StrictMode's rehearsal cleanup (immediately followed by a re-setup) from a
+  // real unmount. The object is stable; only its counter changes.
+  const setupSessionRef = useRef({ session: 0 })
   const resolveFileRef = useRef(resolveFile)
   resolveFileRef.current = resolveFile
   const openFileRef = useRef(openFile)
@@ -121,6 +125,8 @@ export function TerminalInstance({
     const host = hostRef.current
     if (!host) return
 
+    const setupSession = setupSessionRef.current
+    const setupSeq = ++setupSession.session
     const holder = xtermService.acquire(id)
     holderRef.current = holder
     holder.setLinkHandlers({
@@ -192,9 +198,16 @@ export function TerminalInstance({
       normalModeRegistration?.dispose()
       normalMode?.dispose()
       vimSurface?.dispose()
-      holder.saveScroll()
       holder.wrapper.remove()
       holderRef.current = null
+      // Only a REAL unmount may persist the viewport. StrictMode's rehearsal
+      // cleanup runs between the first setup and its synchronous re-setup, when
+      // the holder is detached/being repainted — saving there would overwrite
+      // the scroll the user actually left with that transient position. Defer
+      // one microtask and skip when a newer setup superseded this cleanup.
+      queueMicrotask(() => {
+        if (setupSession.session === setupSeq) holder.saveScroll()
+      })
     }
   }, [id, xtermService, surfaceKey, vimModeService, vimInputMethodService, configService, manager])
 

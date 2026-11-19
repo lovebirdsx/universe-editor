@@ -6,20 +6,18 @@
  *    - restoreFocus: on close, return focus to whatever held it when the overlay
  *                    became visible
  *
- *  The restore target is captured once per visible session (false→true render)
- *  and stays read-only afterwards: cleanup must not consume it, because in dev
- *  StrictMode replays setup→cleanup→setup for newly mounted components. The
- *  restore is deferred one microtask so a cleanup immediately followed by a
- *  re-setup (the rehearsal) restores nothing, while a real close still hands
- *  focus back to the pre-overlay element.
+ *  The restore half is the shared `useFocusRestore` contract (capture in the
+ *  visible false→true render, read-only cleanup, a microtask + session counter
+ *  so dev StrictMode's rehearsal restores nothing). Keep both in sync through
+ *  that hook rather than re-implementing the snapshot here.
  *
  *  Use this for QuickInput, Dialog, Popover — anywhere that conceptually steals
  *  focus from the underlying workbench Part and must restore it on close.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { FocusScope } from '@react-aria/focus'
-import { isHTMLElementLike } from '../dom/domRealm.js'
+import { useFocusRestore } from './focusRestore.js'
 import { useOwnerDocument } from './ownerDocumentContext.js'
 
 export interface FocusScopeOverlayProps {
@@ -54,45 +52,27 @@ export function FocusScopeOverlay({
   const ownsRestore =
     shouldRestoreFocus !== undefined ||
     (doc !== undefined && (typeof document === 'undefined' || doc !== document))
-  const conditionRef = useRef(shouldRestoreFocus)
-  conditionRef.current = shouldRestoreFocus
 
-  // Captured during render: react-aria's autoFocus runs in the child's layout
-  // effect, which would already point at the overlay's own input by the time
-  // this component's effects run.
-  const previousFocusRef = useRef<HTMLElement | null>(null)
-  const wasVisibleRef = useRef(false)
-  if (visible && !wasVisibleRef.current) {
-    const active = doc?.activeElement
-    previousFocusRef.current = isHTMLElementLike(active) ? active : null
-  }
-  wasVisibleRef.current = visible
+  useFocusRestore(visible, {
+    targetDocument: doc,
+    shouldRestore: () => ownsRestore && (shouldRestoreFocus?.() ?? true),
+  })
 
-  // A fresh session id per effect setup lets a deferred restore notice that a
-  // newer setup (StrictMode's rehearsal re-setup) superseded it. The object is
-  // stable; only its counter changes.
-  const sessionStateRef = useRef({ session: 0 })
-  useEffect(() => {
-    if (!visible || !ownsRestore) return
-    const sessionState = sessionStateRef.current
-    const session = ++sessionState.session
-    return () => {
-      // Restore on the next microtask and only if no setup superseded this
-      // cleanup. StrictMode's mount rehearsal runs cleanup→setup synchronously;
-      // restoring there would fire spurious focus/context-key events (and steal
-      // focus from the child autoFocus that reclaims it right after). The
-      // snapshot itself is read-only so the real close still has it.
-      queueMicrotask(() => {
-        if (sessionState.session !== session) return
-        if (conditionRef.current?.() === false) return
-        const previous = previousFocusRef.current
-        if (previous?.isConnected) previous.focus()
-      })
-    }
-    // `conditionRef` keeps the predicate out of the deps: an inline arrow would
-    // otherwise re-run this effect (and restore focus) on every render.
-  }, [visible, doc, ownsRestore])
+  useDocumentEscape(visible, onEscape, doc)
 
+  if (!visible) return null
+  return (
+    <FocusScope contain restoreFocus={!ownsRestore} autoFocus>
+      {children}
+    </FocusScope>
+  )
+}
+
+function useDocumentEscape(
+  visible: boolean,
+  onEscape: (() => void) | undefined,
+  doc: Document | undefined,
+): void {
   useEffect(() => {
     if (!visible || !onEscape || !doc) return
     const handler = (e: KeyboardEvent) => {
@@ -113,11 +93,4 @@ export function FocusScopeOverlay({
     doc.addEventListener('keydown', handler)
     return () => doc.removeEventListener('keydown', handler)
   }, [visible, onEscape, doc])
-
-  if (!visible) return null
-  return (
-    <FocusScope contain restoreFocus={!ownsRestore} autoFocus>
-      {children}
-    </FocusScope>
-  )
 }

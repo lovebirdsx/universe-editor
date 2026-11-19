@@ -572,16 +572,19 @@ describe('PerforceSyncHistoryEditor', () => {
     renderEditor(commands)
     await flush()
 
-    fireEvent.click(screen.getByTestId('perforce-sync-history-refresh'))
-    await flush()
-
     // Counted per command id: a future refresh that also re-fetches the open
     // detail is a legitimate extra call, and a bare total would red on it for a
     // reason that has nothing to do with what this test is about.
     const callsOf = (id: string): number =>
       (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === id)
         .length
-    expect(callsOf(PerforceSyncHistoryCommands.getRuns)).toBe(2)
+    // StrictMode replays the mount effect, so the absolute mount-time count is
+    // not one; the refresh must add exactly one read of the list.
+    const before = callsOf(PerforceSyncHistoryCommands.getRuns)
+    fireEvent.click(screen.getByTestId('perforce-sync-history-refresh'))
+    await flush()
+
+    expect(callsOf(PerforceSyncHistoryCommands.getRuns)).toBe(before + 1)
     // The input's focus() routes through this, so it has to be registered.
     expect(typeof perforceSyncHistoryViewState.focusRows).toBe('function')
     expect(typeof perforceSyncHistoryViewState.refresh).toBe('function')
@@ -661,16 +664,18 @@ describe('PerforceSyncHistoryEditor', () => {
     const commands = makeCommandService(makePage([run]), new Map([['run-1', makeDetail(run)]]))
     const { unmount } = renderEditor(commands)
     await flush()
+    const runCallsOf = (): number =>
+      (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[0] === PerforceSyncHistoryCommands.getRuns,
+      ).length
+    const afterFirstMount = runCallsOf()
     unmount()
 
     renderEditor(commands)
     await flush()
 
-    // One page load served both mounts: the store the module owns survived.
-    const runCalls = (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
-      (c) => c[0] === PerforceSyncHistoryCommands.getRuns,
-    )
-    expect(runCalls).toHaveLength(1)
+    // The module-owned store survived, so the second mount did not read again.
+    expect(runCallsOf()).toBe(afterFirstMount)
     expect(screen.getAllByTestId('perforce-sync-history-row')).toHaveLength(1)
   })
 
@@ -877,22 +882,40 @@ describe('a record landing while the tab is open', () => {
   it('reloads the list on the poke, without moving the selection', async () => {
     const older = makeRun({ id: 'run-1' })
     const newer = makeRun({ id: 'run-2', at: Date.now() })
-    const commands = makePagedCommandService(
-      [makePage([older], 1), makePage([newer, older], 2)],
-      new Map([
-        ['run-1', makeDetail(older)],
-        ['run-2', makeDetail(newer)],
-      ]),
-    )
+    const details = new Map([
+      ['run-1', makeDetail(older)],
+      ['run-2', makeDetail(newer)],
+    ])
+    // A mutable page rather than a call-count script: StrictMode replays the
+    // mount effect, and both loads must see the same history (the "new run
+    // landed" answer is only current once the test says so).
+    let page = makePage([older], 1)
+    const commands = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async (id: string, arg?: unknown) => {
+        if (id === PerforceSyncHistoryCommands.getRuns) return page
+        if (id === PerforceSyncHistoryCommands.getRun) return details.get(String(arg)) ?? null
+        return undefined
+      }),
+      onWillExecuteCommand: Event.None,
+      onDidExecuteCommand: Event.None,
+    } as unknown as ICommandService
     renderEditor(commands)
     await flush()
+    const runsCalls = (): number =>
+      (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[0] === PerforceSyncHistoryCommands.getRuns,
+      ).length
     expect(screen.getAllByTestId('perforce-sync-history-row')).toHaveLength(1)
     expect(perforceSyncHistoryViewState.selectedId).toBe('run-1')
+    const before = runsCalls()
 
+    page = makePage([newer, older], 2)
     noteSyncHistoryRecorded()
     await waitForPoke()
     await flush()
 
+    expect(runsCalls()).toBe(before + 1)
     expect(screen.getAllByTestId('perforce-sync-history-row')).toHaveLength(2)
     // The row the user was reading keeps the highlight: a new run landing is not
     // a reason to move them.
@@ -912,6 +935,12 @@ describe('a record landing while the tab is open', () => {
     )
     const { unmount } = renderEditor(commands)
     await flush()
+    const getRunsCalls = (): number =>
+      (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[0] === PerforceSyncHistoryCommands.getRuns,
+      ).length
+    // Whatever StrictMode's rehearsal cost, an unmounted page must add nothing.
+    const before = getRunsCalls()
     unmount()
 
     noteSyncHistoryRecorded()
@@ -919,15 +948,12 @@ describe('a record landing while the tab is open', () => {
 
     // Nothing to reload into — the record is remembered instead.
     expect(perforceSyncHistoryViewState.stale).toBe(true)
-    expect(
-      (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c) => c[0] === PerforceSyncHistoryCommands.getRuns,
-      ),
-    ).toHaveLength(1)
+    expect(getRunsCalls()).toBe(before)
 
     renderEditor(commands)
     await flush()
 
+    expect(getRunsCalls()).toBeGreaterThan(before)
     expect(screen.getAllByTestId('perforce-sync-history-row')).toHaveLength(2)
     expect(perforceSyncHistoryViewState.stale).toBe(false)
   })
@@ -935,9 +961,10 @@ describe('a record landing while the tab is open', () => {
   it('keeps the size the user asked for when the poke lands mid-Load more', async () => {
     const held = makeHeldCommandService()
     renderEditor(held.service)
-    // The mount load, answered so the page is on screen with a "Load more".
     const first = makeRun({ id: 'run-1' })
-    held.pending[0]?.(makePage([first], 60, true))
+    // StrictMode replays the mount effect: answer EVERY load it dispatched with
+    // the same page, so the rehearsal does not consume a "next page" of its own.
+    for (const settle of held.pending.splice(0)) settle(makePage([first], 60, true))
     await flush()
 
     fireEvent.click(screen.getByTestId('perforce-sync-history-load-more'))
@@ -945,17 +972,20 @@ describe('a record landing while the tab is open', () => {
     noteSyncHistoryRecorded()
     // Polled, not slept-then-asserted: the debounce runs on real timers here, and
     // a loaded machine must not turn a late dispatch into a failure.
-    await vi.waitFor(() => expect(held.askedMax).toHaveLength(3))
+    await vi.waitFor(() => expect(held.askedMax).toHaveLength(4))
 
-    // The reload asks for what the user asked for — a stale `limit` here would
-    // quietly drop the page back to 50 rows.
-    expect(held.askedMax).toEqual([50, 100, 100])
+    // The last two dispatches are the user's Load more and the poke's reload:
+    // both ask for what the user asked for — a stale `limit` here would quietly
+    // drop the page back to 50 rows.
+    expect(held.askedMax.slice(-2)).toEqual([100, 100])
     expect(perforceSyncHistoryViewState.limit).toBe(100)
 
-    // The poked reload answers first and is the one that may write; the held
-    // Load more settling afterwards must not shrink the page it asked for.
-    held.pending[2]?.(makePage([first], 60, true))
-    held.pending[1]?.(makePage([first], 1, false))
+    // The poked reload (dispatched last) answers first and is the one that may
+    // write; the held Load more settling afterwards must not shrink the page it
+    // asked for.
+    const [loadMore, poke] = held.pending.splice(0)
+    poke?.(makePage([first], 60, true))
+    loadMore?.(makePage([first], 1, false))
     await flush()
 
     expect(perforceSyncHistoryViewState.total).toBe(60)
@@ -991,18 +1021,19 @@ describe('a record landing while the tab is open', () => {
     renderEditor(commands)
     await flush()
     expect(screen.getByTestId('perforce-sync-history-unavailable')).toBeTruthy()
+    const getRunsCalls = (): number =>
+      (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[0] === PerforceSyncHistoryCommands.getRuns,
+      ).length
+    const before = getRunsCalls()
 
     noteSyncHistoryRecorded()
     await waitForPoke()
     await flush()
 
-    // Asked again (the extension may have come up since), and still honest about
-    // not having an answer.
-    expect(
-      (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c) => c[0] === PerforceSyncHistoryCommands.getRuns,
-      ),
-    ).toHaveLength(2)
+    // Asked again (the extension may have come up since), exactly once, and
+    // still honest about not having an answer.
+    expect(getRunsCalls()).toBe(before + 1)
     expect(screen.getByTestId('perforce-sync-history-unavailable')).toBeTruthy()
   })
 
@@ -1015,13 +1046,14 @@ describe('a record landing while the tab is open', () => {
       )
     const { unmount } = renderEditor(commands)
     await flush()
-    expect(getRunsCalls()).toHaveLength(1)
+    const before = getRunsCalls().length
+    expect(before).toBeGreaterThan(0)
 
     // The extension is gone by the time the poke's reload asks — a host restart,
     // which is exactly when the records it announced have not been seen yet.
     ;(commands.executeCommand as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
     noteSyncHistoryRecorded()
-    await vi.waitFor(() => expect(getRunsCalls()).toHaveLength(2))
+    await vi.waitFor(() => expect(getRunsCalls()).toHaveLength(before + 1))
     await flush()
 
     expect(screen.getByTestId('perforce-sync-history-unavailable')).toBeTruthy()
@@ -1029,10 +1061,11 @@ describe('a record landing while the tab is open', () => {
     // the next mount has to try again rather than show the page it left.
     expect(perforceSyncHistoryViewState.stale).toBe(true)
 
+    const afterPoke = getRunsCalls().length
     unmount()
     renderEditor(commands)
     await flush()
 
-    expect(getRunsCalls()).toHaveLength(3)
+    expect(getRunsCalls().length).toBeGreaterThan(afterPoke)
   })
 })

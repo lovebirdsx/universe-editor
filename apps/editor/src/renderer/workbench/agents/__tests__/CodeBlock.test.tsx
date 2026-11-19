@@ -237,6 +237,11 @@ describe('CodeBlock viewport gate', () => {
     </MarkdownStreamingContext.Provider>
   )
 
+  // StrictMode's dry run disconnects its observer and sets up a second one; the
+  // last instance is the live one the block is actually watching through.
+  const liveObserver = (): FakeIntersectionObserver | undefined =>
+    FakeIntersectionObserver.instances.at(-1)
+
   async function flushColorize(): Promise<void> {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
@@ -247,7 +252,9 @@ describe('CodeBlock viewport gate', () => {
     const { container } = render(block())
     await flushColorize()
 
-    expect(FakeIntersectionObserver.instances).toHaveLength(1)
+    expect(
+      FakeIntersectionObserver.instances.filter((observer) => !observer.disconnected),
+    ).toHaveLength(1)
     // Plain text keeps every code character, so in-chat find still has something to hit.
     expect(container.querySelector('code')?.textContent).toBe('const a = 1')
     expect(mocks.colorize).not.toHaveBeenCalled()
@@ -276,25 +283,25 @@ describe('CodeBlock viewport gate', () => {
     await flushColorize()
 
     act(() => {
-      FakeIntersectionObserver.instances[0]?.emit(true)
+      liveObserver()?.emit(true)
     })
     await flushColorize()
 
     expect(mocks.colorize).toHaveBeenCalledTimes(1)
     expect(container.querySelector('code')?.innerHTML).toBe(HIGHLIGHTED)
-    expect(FakeIntersectionObserver.instances[0]?.disconnected).toBe(true)
+    expect(liveObserver()?.disconnected).toBe(true)
   })
 
   it('does not revert a highlighted block when it leaves the viewport again', async () => {
     const { container, rerender } = render(block())
     await flushColorize()
     act(() => {
-      FakeIntersectionObserver.instances[0]?.emit(true)
+      liveObserver()?.emit(true)
     })
     await flushColorize()
 
     act(() => {
-      FakeIntersectionObserver.instances[0]?.emit(false)
+      liveObserver()?.emit(false)
     })
     rerender(block())
     await flushColorize()
@@ -308,7 +315,7 @@ describe('CodeBlock viewport gate', () => {
     await flushColorize()
 
     unmount()
-    expect(FakeIntersectionObserver.instances[0]?.disconnected).toBe(true)
+    expect(liveObserver()?.disconnected).toBe(true)
   })
 
   it('falls back to an immediate highlight where IntersectionObserver is unavailable', async () => {
@@ -331,7 +338,8 @@ describe('CodeBlock viewport gate', () => {
     await flushColorize()
 
     expect(mocks.colorize).not.toHaveBeenCalled()
-    expect(flowCharsSince(before, 'colorize.skip')).toBe('const a = 1'.length)
+    // Each effect pass records the skipped fence; StrictMode rehearses it twice.
+    expect(flowCharsSince(before, 'colorize.skip')).toBeGreaterThanOrEqual('const a = 1'.length)
   })
 })
 

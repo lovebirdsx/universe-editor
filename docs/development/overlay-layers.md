@@ -31,6 +31,18 @@ C 曾经是缺口：monaco 的编辑器内容浮层不走 `ILayoutService`，默
 
 判据：新增任何 `document.addEventListener`、`createPortal`、focus trap 时，先确认"宿主的 document 是哪一个"——优先让原语从 context 解析，跨文档 portal 则显式重新 provide。完整架构见 [auxiliary-editor-windows.md](auxiliary-editor-windows.md)。
 
+## 浮层焦点恢复约定
+
+浮层打开会抢走底层 Part 的 caret，关闭必须交还。唯一机制是 `@universe-editor/workbench-ui` 的 `overlay/focusRestore.ts`，不要在各浮层手写快照：
+
+- `captureFocus(doc, { exclude })`：记录 `doc.activeElement`；`<body>` / documentElement 记为 null，`exclude` 子树内的（正要被替换的浮层）不算 opener。快照只读——不要在 effect cleanup 里消费它。
+- `restoreFocus(snapshot, { when, onlyIfLost, fallback })`：`when()` false 放弃 → `onlyIfLost` 给定时仅在焦点仍在该容器内或落到 body/null 才恢复（不抢用户主动移走的焦点）→ 元素仍 connected 且 `focus()` 真的生效则成功 → 否则调用 fallback → 都失败则 no-op。**绝不 `body.focus()`**。
+- `useFocusRestore(visible, opts)`：React 浮层用它。在 visible false→true 的那次 render 捕获（早于浮层自身 autoFocus 的 layout effect），cleanup 只读快照，restore 推迟一个微任务并用会话号跳过 StrictMode 的 setup→cleanup→setup 演练；因为推迟，关闭后紧接着执行的命令可能已经把焦点移走（如 Go to Line 先聚焦编辑器再开 Monaco quick input），所以未给 `onlyIfLost` 时只在焦点真正丢失（body / null / 已断开节点）才恢复。`FocusScopeOverlay` 与通知中心都走它。
+- `focusElement(el)`：Vim `surface.escape` 这类「先 peel 再聚焦 trigger」的直接聚焦；带 connected / 可聚焦校验。
+- `FocusRestoreFallbackContext`（值 `(doc) => boolean`）：快照元素失效（编辑器重挂载、Monaco native-edit-context 断开）时的语义兜底。editor 在 `Workbench` 根部用 `focusEditorInput` 聚焦当前活动编辑器（编辑器聚焦唯一入口）；包内/无 provider 的测试里为 undefined。
+
+`useOverlayListNavigation` 不负责关闭后的焦点：它只 autoFocus 容器并回调 `onEscape`，宿主按「commit 回 opener / Escape 回 trigger」自行选用上面的 API。ConfigBar 系列由 `ConfigOptionsBar` 统一捕获 opener（跳过 floating-ui portal 内的当前浮层），各 picker 的 Vim escape 经宿主 `onEscape` 先 `focusElement(trigger)` 再 dismiss，语义不变。
+
 ## 三段式分层
 
 `packages/workbench-ui/src/theme/tokens.css` 是 token 的单一真相（数值、取值理由、第三方占位都写在它的注释里），本文不复述数值。分层是三段：

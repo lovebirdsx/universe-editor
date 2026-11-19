@@ -853,7 +853,9 @@ describe('AiProvidersPanel', () => {
 
     expect(screen.queryByText('No models resolved for this protocol.')).toBeNull()
 
-    gates[0]?.([])
+    // Resolve the live mount enumeration; earlier rehearsal passes were already
+    // superseded and their answers are ignored by design.
+    gates[gates.length - 1]?.([])
     await flushEffects()
 
     expect(screen.getByText('No models resolved for this protocol.')).toBeTruthy()
@@ -875,11 +877,12 @@ describe('AiProvidersPanel', () => {
 
     renderPanel(aiModel)
     await flushEffects()
-    expect(gates).toHaveLength(1)
+    const mountEnumerations = gates.length
+    expect(mountEnumerations).toBeGreaterThan(0)
 
     aiModel.fireModelsChanged()
     await flushEffects()
-    expect(gates).toHaveLength(2)
+    expect(gates).toHaveLength(mountEnumerations + 1)
 
     // The newer enumeration resolves first with two models…
     const plus = {
@@ -888,12 +891,12 @@ describe('AiProvidersPanel', () => {
       channelModel: 'qwen3-coder-plus',
       name: 'Qwen3 Coder Plus',
     } as const
-    gates[1]?.([plus, ACME_MODEL])
+    gates[gates.length - 1]?.([plus, ACME_MODEL])
     await flushEffects()
     expect(screen.getByText('2 models')).toBeTruthy()
 
-    // …then the stale mount enumeration resolves with one model; it must not win.
-    gates[0]?.([ACME_MODEL])
+    // …then the older enumerations resolve with one model; they must not win.
+    for (const stale of gates.slice(0, -1)) stale([ACME_MODEL])
     await flushEffects()
     expect(screen.getByText('2 models')).toBeTruthy()
   })

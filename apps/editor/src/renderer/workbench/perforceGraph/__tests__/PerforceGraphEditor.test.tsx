@@ -1385,9 +1385,11 @@ describe('PerforceGraphEditor sync point races', () => {
         deferChanges: true,
       })
       await flush()
-      changes[0]!()
+      // StrictMode replays the mount effect, so several loads can be out at
+      // once; settle them all rather than indexing into the dispatch order.
+      for (const settle of changes.splice(0)) settle()
       await flush()
-      ledger[0]!(null)
+      for (const settle of ledger.splice(0)) settle(null)
       await flush()
 
       // Press, then change scope while it is out: the load abandons it (its answer
@@ -1397,9 +1399,9 @@ describe('PerforceGraphEditor sync point races', () => {
       expect(queries.length).toBe(1)
       fireEvent.click(screen.getByLabelText('Toggle repository scope'))
       await flush()
-      changes[1]!()
+      for (const settle of changes.splice(0)) settle()
       await flush()
-      ledger[1]!(null)
+      for (const settle of ledger.splice(0)) settle(null)
       await flush()
       expect(screen.queryByTestId('perforceGraph-queryElapsed')).toBeNull()
 
@@ -1613,10 +1615,11 @@ describe('PerforceGraphEditor sync point races', () => {
       deferChanges: true,
     })
     await flush()
-    expect(changes.length).toBe(1)
-    changes[0]!()
+    expect(changes.length).toBeGreaterThan(0)
+    // StrictMode replays the mount effect: settle every load it dispatched.
+    for (const settle of changes.splice(0)) settle()
     await flush()
-    ledger[0]!(ledgerPoint('4519'))
+    for (const settle of ledger.splice(0)) settle(ledgerPoint('4519'))
     await flush()
     expect(badged(container)).toBe('4519')
 
@@ -1624,17 +1627,17 @@ describe('PerforceGraphEditor sync point races', () => {
     // flight when the query goes out.
     fireEvent.click(screen.getByLabelText('Toggle repository scope'))
     await flush()
-    expect(changes.length).toBe(2)
+    expect(changes.length).toBeGreaterThan(0)
     fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
     await flush()
     expect(queries.length).toBe(1)
 
     // The load lands first and reads the ledger for the widened scope — which has
     // nothing recorded for it.
-    changes[1]!()
+    for (const settle of changes.splice(0)) settle()
     await flush()
-    expect(ledger.length).toBe(2)
-    ledger[1]!(null)
+    expect(ledger.length).toBeGreaterThan(0)
+    for (const settle of ledger.splice(0)) settle(null)
     await flush()
 
     // The query still answers, and its answer is the one on screen.
@@ -1950,11 +1953,19 @@ describe('PerforceGraphEditor re-reads after a get', () => {
         (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
           (c) => c[0] === id,
         ).length
-      // The ledger read is the badge's whole input now — a scoped history adds
-      // its own cheap probe, a whole-graph scope never probes unasked.
-      expect(countCalls(PerforceGraphCommands.getChanges)).toBe(1)
-      expect(countCalls(PerforceGraphCommands.getSyncPoint)).toBe(1)
-      expect(countCalls(PerforceGraphCommands.getHaveChange)).toBe(testCase.scoped ? 1 : 0)
+      // The ledger read is the badge's whole input — a scoped history adds its
+      // own cheap probe, a whole-graph scope never probes unasked.
+      // StrictMode replays the mount effect, so the absolute number of listing
+      // loads is not one; the contract under test is that a get re-reads both
+      // the listing and the ledger exactly once.
+      const before = {
+        changes: countCalls(PerforceGraphCommands.getChanges),
+        syncPoint: countCalls(PerforceGraphCommands.getSyncPoint),
+        have: countCalls(PerforceGraphCommands.getHaveChange),
+      }
+      expect(before.changes).toBeGreaterThan(0)
+      expect(before.syncPoint).toBe(1)
+      expect(before.have).toBe(testCase.scoped ? 1 : 0)
 
       testCase.act(container)
       await flush()
@@ -1964,13 +1975,15 @@ describe('PerforceGraphEditor re-reads after a get', () => {
       }
 
       expect(commandService.executeCommand).toHaveBeenCalledWith(testCase.command, ...testCase.args)
-      expect(countCalls(PerforceGraphCommands.getChanges)).toBe(2)
+      expect(countCalls(PerforceGraphCommands.getChanges)).toBe(before.changes + 1)
       // The extension writes the ledger BEFORE the sync command resolves, so
       // re-reading it here is what moves the badge onto the new row. A revalidate
       // that re-reads the list but never the ledger leaves the badge on the
       // pre-get row — the exact bug this table exists for.
-      expect(countCalls(PerforceGraphCommands.getSyncPoint)).toBe(2)
-      expect(countCalls(PerforceGraphCommands.getHaveChange)).toBe(testCase.scoped ? 2 : 0)
+      expect(countCalls(PerforceGraphCommands.getSyncPoint)).toBe(before.syncPoint + 1)
+      expect(countCalls(PerforceGraphCommands.getHaveChange)).toBe(
+        before.have + (testCase.scoped ? 1 : 0),
+      )
     })
   }
 })

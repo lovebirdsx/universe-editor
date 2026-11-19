@@ -34,7 +34,7 @@ import {
   resolveMcpServerSelection,
   type McpServerDefinition,
 } from '../../services/acp/acpMcpServers.js'
-import { ConfigTrigger, type ConfigBarAnchor } from './ConfigOptionsBar.js'
+import { ConfigTrigger, runSurfaceEscape, type ConfigBarAnchor } from './ConfigOptionsBar.js'
 import { McpEnablementToggles } from './McpEnablementToggles.js'
 import styles from './agents.module.css'
 
@@ -167,12 +167,7 @@ function McpServerPickerInner({
             session={session}
             onRequestClose={onClose}
             onAltDigit={onAltDigit}
-            onEscape={() => {
-              // Vim's surface.escape path skips AnchoredSurface's own handler,
-              // so reproduce its two-step behaviour: peel (focus the trigger)
-              // then dismiss when the content declined to keep the surface.
-              if (!onEscape()) onClose()
-            }}
+            onEscape={() => runSurfaceEscape(onEscape, onClose)}
           />
         </AnchoredSurface>
       ) : null}

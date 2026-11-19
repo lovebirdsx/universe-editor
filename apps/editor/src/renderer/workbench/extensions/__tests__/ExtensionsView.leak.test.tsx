@@ -34,14 +34,17 @@ afterEach(() => {
 
 function setup() {
   const onDidChange = new Emitter<void>()
-  let subscriptionDisposed = false
+  let activeSubscriptions = 0
   const workbench = {
     _serviceBrand: undefined,
-    // Wrap the real emitter event so we can observe teardown.
+    // Wrap the real emitter event so we can observe the live subscription count.
+    // StrictMode's rehearsal subscribes, unsubscribes and subscribes again, so a
+    // one-shot "disposed" flag would already be true while the view is mounted.
     onDidChange: (listener: () => unknown) => {
+      activeSubscriptions++
       const d = onDidChange.event(listener)
       return toDisposable(() => {
-        subscriptionDisposed = true
+        activeSubscriptions--
         d.dispose()
       })
     },
@@ -81,7 +84,7 @@ function setup() {
       <ExtensionsView />
     </ServicesContext.Provider>,
   )
-  return { unmount, isSubscriptionDisposed: () => subscriptionDisposed }
+  return { unmount, activeSubscriptions: () => activeSubscriptions }
 }
 
 describe('ExtensionsView disposable hygiene', () => {
@@ -98,9 +101,11 @@ describe('ExtensionsView disposable hygiene', () => {
   })
 
   it('still disposes the subscription on unmount', () => {
-    const { unmount, isSubscriptionDisposed } = setup()
-    expect(isSubscriptionDisposed()).toBe(false)
+    const { unmount, activeSubscriptions } = setup()
+    // Mounted: exactly the one live subscription, regardless of StrictMode's
+    // rehearsal having torn down its first pass.
+    expect(activeSubscriptions()).toBe(1)
     act(() => unmount())
-    expect(isSubscriptionDisposed()).toBe(true)
+    expect(activeSubscriptions()).toBe(0)
   })
 })

@@ -55,12 +55,16 @@ describe('useScopedContextKey', () => {
     }
 
     render(<Probe />)
+    // StrictMode's dry run replaces the first instance once; from the committed
+    // mount on, re-renders with equal overrides must keep the live service.
+    const live = instances.at(-1)
+    const mounts = instances.length
     act(() => {
       fireEvent.click(screen.getByTestId('rerender'))
     })
 
-    expect(instances.length).toBeGreaterThan(1)
-    expect(new Set(instances).size).toBe(1)
+    expect(instances.length).toBeGreaterThan(mounts)
+    expect(instances.slice(mounts).every((instance) => instance === live)).toBe(true)
     parent.dispose()
   })
 
@@ -74,10 +78,15 @@ describe('useScopedContextKey', () => {
     }
 
     const { rerender } = render(<Probe provider="perforce" />)
+    const before = instances.at(-1)
     rerender(<Probe provider="git" />)
 
-    expect(new Set(instances).size).toBe(2)
-    expect(instances.at(-1)?.get('scmProvider')).toBe('git')
+    const after = instances.at(-1)
+    expect(after).not.toBe(before)
+    expect(after?.get('scmProvider')).toBe('git')
+    // The superseded scope was disposed: its keys are cleared, so reads fall
+    // through to the parent instead of answering with the stale value.
+    expect(before?.get('scmProvider')).toBeUndefined()
     parent.dispose()
   })
 })

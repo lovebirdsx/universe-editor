@@ -50,8 +50,15 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
+// The shared focus-restore contract defers the hand-back one microtask so
+// StrictMode's rehearsal cleanup restores nothing (see focusRestore in
+// workbench-ui). Let the real close's restore run.
+async function flushRestore(): Promise<void> {
+  await act(async () => {})
+}
+
 describe('NotificationsCenter focus restore', () => {
-  it('returns focus to the pre-open element after the center closes (StrictMode)', () => {
+  it('returns focus to the pre-open element after the center closes (StrictMode)', async () => {
     const outside = document.createElement('button')
     outside.textContent = 'outside'
     document.body.appendChild(outside)
@@ -65,11 +72,12 @@ describe('NotificationsCenter focus restore', () => {
     expect(document.activeElement).toBe(screen.getByTestId('notifications-center'))
 
     act(() => centerVisible.set(false, undefined))
+    await flushRestore()
     expect(screen.queryByTestId('notifications-center')).toBeNull()
     expect(document.activeElement).toBe(outside)
   })
 
-  it('leaves focus alone when the user moved it outside the center before closing', () => {
+  it('leaves focus alone when the user moved it outside the center before closing', async () => {
     const first = document.createElement('button')
     const second = document.createElement('button')
     document.body.append(first, second)
@@ -83,10 +91,11 @@ describe('NotificationsCenter focus restore', () => {
 
     second.focus()
     act(() => centerVisible.set(false, undefined))
+    await flushRestore()
     expect(document.activeElement).toBe(second)
   })
 
-  it('does not restore a target that was removed from the DOM', () => {
+  it('does not restore a target that was removed from the DOM', async () => {
     const outside = document.createElement('button')
     document.body.appendChild(outside)
     outside.focus()
@@ -97,6 +106,7 @@ describe('NotificationsCenter focus restore', () => {
     act(() => centerVisible.set(true, undefined))
     outside.remove()
     act(() => centerVisible.set(false, undefined))
+    await flushRestore()
     expect(document.activeElement).toBe(document.body)
   })
 })

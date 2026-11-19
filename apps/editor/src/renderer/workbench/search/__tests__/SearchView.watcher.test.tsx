@@ -125,7 +125,13 @@ function renderWithServices(search: FakeTextSearch) {
     _serviceBrand: undefined,
     onDidChangeFiles: ((listener: (e: readonly IFileChangeEvent[]) => unknown) => {
       watcherSubscriptions++
-      return watcherEmitter.event(listener)
+      const subscription = watcherEmitter.event(listener)
+      return {
+        dispose: () => {
+          watcherSubscriptions--
+          subscription.dispose()
+        },
+      }
     }) as typeof watcherEmitter.event,
     watch: async () => {},
     unwatch: async () => {},
@@ -154,7 +160,10 @@ function renderWithServices(search: FakeTextSearch) {
     watcherEmitter,
     workspaceEmitter,
     workspace,
-    get watcherSubscriptionCount() {
+    /** Subscriptions still live — subscribe minus dispose, so StrictMode's
+     *  rehearsal (which subscribes, disposes and subscribes again) reads as the
+     *  one subscription the view actually keeps, not as two subscribe calls. */
+    get activeWatcherSubscriptions() {
       return watcherSubscriptions
     },
     rendered: render(
@@ -278,10 +287,21 @@ describe('SearchView watcher + workspace', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300)
     })
-    expect(ctx.watcherSubscriptionCount).toBe(1)
+    expect(ctx.activeWatcherSubscriptions).toBe(1)
     act(() => {
       ctx.watcherEmitter.fire([{ type: 'modified', resource: URI.file('/ws/a.ts') }])
     })
     expect(screen.queryByTestId('search-stale')).toBeTruthy()
+  })
+
+  it('disposes its watcher subscription on unmount', async () => {
+    const search = new FakeTextSearch()
+    const ctx = renderWithServices(search)
+    await runQuery(search)
+    expect(ctx.activeWatcherSubscriptions).toBe(1)
+
+    ctx.rendered.unmount()
+
+    expect(ctx.activeWatcherSubscriptions).toBe(0)
   })
 })

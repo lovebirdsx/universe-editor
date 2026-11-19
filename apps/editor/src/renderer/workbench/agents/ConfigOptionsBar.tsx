@@ -45,10 +45,14 @@ import {
 } from '@universe-editor/platform'
 import {
   AnchoredSurface,
+  captureFocus,
   findRowElement,
+  focusElement,
   isHTMLElementLike,
+  restoreFocus,
   useCtrlNavigationLayer,
   useOverlayListNavigation,
+  type FocusSnapshot,
   type IOverlayListNavigation,
 } from '@universe-editor/workbench-ui'
 import { useObservable, useOptionalService, useService } from '../useService.js'
@@ -171,7 +175,7 @@ export function ConfigOptionsBar({
   // Where the caret was when the surface that is up right now opened. A commit
   // hands it back there — Alt+<digit> out of the prompt must not strand the user
   // in the bar.
-  const openerRef = useRef<HTMLElement | null>(null)
+  const openerRef = useRef<FocusSnapshot | null>(null)
 
   /**
    * Remember the opening position, before the surface mounts and takes the
@@ -184,18 +188,18 @@ export function ConfigOptionsBar({
     const active = doc.activeElement
     if (!isHTMLElementLike(active)) return
     if (active.closest('[data-floating-ui-portal]') !== null) return
-    openerRef.current = active
+    openerRef.current = captureFocus(doc)
   }, [])
 
   /**
    * Hand the caret back to what `captureOpener` recorded, or run `fallback` —
-   * the trigger, which is what every close handed to before. A node that left
-   * the document, `<body>` ("nothing is focused"), or one whose focus() is
-   * silently refused (an inert row) can take nothing: a caret left on a row as
-   * it unmounts drops onto `<body>`, where no later stroke has an owner.
+   * the trigger, which is what every close handed to before. `restoreFocus`
+   * covers the two ways the opener can no longer take it: it left the document,
+   * or its `focus()` is silently refused (an inert row). With no opener at all
+   * (the open started on `<body>`), the fallback runs directly.
    */
   const restoreOpener = useCallback((fallback: () => void): void => {
-    const opener = openerRef.current
+    const snapshot = openerRef.current
     openerRef.current = null
     // Deferred to a microtask. A mouse pick runs on the item's own mousedown,
     // and that same press keeps bubbling out through every overlay container on
@@ -204,18 +208,16 @@ export function ConfigOptionsBar({
     // that focus, dropping the caret on <body>. One microtask later the press
     // has finished and the caret is ours to place.
     queueMicrotask(() => {
-      const doc = opener?.ownerDocument
-      if (
-        opener !== null &&
-        doc !== undefined &&
-        opener.isConnected &&
-        opener !== doc.body &&
-        opener !== doc.documentElement
-      ) {
-        opener.focus({ preventScroll: true })
-        if (doc.activeElement === opener) return
+      if (snapshot === null) {
+        fallback()
+        return
       }
-      fallback()
+      restoreFocus(snapshot, {
+        fallback: () => {
+          fallback()
+          return true
+        },
+      })
     })
   }, [])
 
@@ -226,7 +228,7 @@ export function ConfigOptionsBar({
   const focusEntryTrigger = useCallback(
     (key: string | null) => {
       if (key === null) return
-      entryElFor(key)?.querySelector('button')?.focus()
+      focusElement(entryElFor(key)?.querySelector('button'))
     },
     [entryElFor],
   )
@@ -537,6 +539,17 @@ export function categoryIcon(category: SessionConfigOption['category']) {
 }
 
 /**
+ * Vim's `surface.escape` path skips AnchoredSurface's own window-capture
+ * handler, so hosts reproduce its two-step behaviour: let the content peel one
+ * level (focus the trigger) and dismiss only when it declined to keep the
+ * surface open. Shared by every picker's escape wiring so the semantic cannot
+ * drift between them.
+ */
+export function runSurfaceEscape(onEscape: () => boolean, onDismiss: () => void): void {
+  if (!onEscape()) onDismiss()
+}
+
+/**
  * Shared trigger skeleton: icon + value + chevron. Opening is delegated to the
  * bar so every entry — inline or overflowed — goes through one code path.
  */
@@ -769,12 +782,7 @@ function ConfigOptionPopover({
         optionNotes={optionNotes}
         onCommit={onCommit}
         onAltDigit={onAltDigit}
-        onEscape={() => {
-          // Vim's surface.escape path skips AnchoredSurface's own handler, so
-          // reproduce its two-step behaviour: peel (focus the trigger) then
-          // dismiss when the content declined to keep the surface open.
-          if (!onEscape()) onDismiss()
-        }}
+        onEscape={() => runSurfaceEscape(onEscape, onDismiss)}
       />
     </AnchoredSurface>
   )

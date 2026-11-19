@@ -7,7 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render } from '@testing-library/react'
+import { act, render } from '@testing-library/react'
 import {
   CommandsRegistry,
   ICommandService,
@@ -181,9 +181,12 @@ describe('GitGraphEditor SCM repo sync', () => {
     // The bug: the sync effect calls onSelectRepo → load(), which clears the
     // selection. After the fix it stays put because the SCM repo already matches.
     expect(gitGraphViewState.selection).toEqual([HASH])
-    // And no second setRepo beyond the initial repo restore is issued.
+    // And the SCM sync must not retarget the graph to another repo. (The number
+    // of initial-restore commands is not the invariant: StrictMode rehearses the
+    // mount effect, so it can legitimately run twice.)
     const setRepoCalls = executeCommand.mock.calls.filter((c) => c[0] === GitGraphCommands.setRepo)
-    expect(setRepoCalls.length).toBeLessThanOrEqual(1)
+    expect(setRepoCalls.some((c) => c[1] === repoB.root)).toBe(false)
+    expect(gitGraphViewState.selectedRepo).toBe(repoA.root)
   })
 
   it('syncs to the SCM-selected repo when it differs from the graph repo', async () => {
@@ -200,23 +203,27 @@ describe('GitGraphEditor SCM repo sync', () => {
     expect(setRepoCalls.some((c) => c[1] === repoB.root)).toBe(true)
   })
 
-  it('does not double-load on first open when SCM selects the default (first) repo', async () => {
+  it('does not double-load on first open when SCM restores the default (first) repo', async () => {
     // First open: nothing cached, graph selectedRepo is null (extension default =
     // the first discovered repo). The SCM view then restores its persisted repo
     // pointing at that same default. The graph must not reload a second time.
     gitGraphViewState.repos = [repoA, repoB]
-    scmViewState.setSelectedRepo(repoA.root)
 
     const { executeCommand } = renderEditor()
     await flush()
+    const getCommits = (): unknown[] =>
+      executeCommand.mock.calls.filter((c) => c[0] === GitGraphCommands.getCommits)
+    const loadsBeforeRestore = getCommits().length
+    expect(loadsBeforeRestore).toBeGreaterThan(0)
 
-    const getCommitsCalls = executeCommand.mock.calls.filter(
-      (c) => c[0] === GitGraphCommands.getCommits,
-    )
-    expect(getCommitsCalls.length).toBe(1)
+    // SCM restores its persisted selection after the graph has already loaded.
+    act(() => scmViewState.setSelectedRepo(repoA.root))
+    await flush()
+
+    expect(getCommits()).toHaveLength(loadsBeforeRestore)
     // The graph adopts the default repo as its selection without re-targeting it.
     expect(gitGraphViewState.selectedRepo).toBe(repoA.root)
     const setRepoCalls = executeCommand.mock.calls.filter((c) => c[0] === GitGraphCommands.setRepo)
-    expect(setRepoCalls.length).toBe(0)
+    expect(setRepoCalls).toHaveLength(0)
   })
 })

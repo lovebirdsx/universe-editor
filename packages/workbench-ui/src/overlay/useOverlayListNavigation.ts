@@ -19,6 +19,13 @@
  *  onKeyDown never sees it. Hosts wire `onEscape` to AnchoredSurface's `onEscape`
  *  instead, where returning true peels one level and keeps the surface open.
  *
+ *  Focus hand-back on close is deliberately the HOST's job, not this hook's:
+ *  there is no single restoration target (a picker returns to its opener, an
+ *  Escape peels to its trigger, the overflow panel's body returns to its row).
+ *  Use `focusRestore` from this package — `useFocusRestore` for a visible
+ *  boolean, `captureFocus` + `restoreFocus` for an imperative opener snapshot,
+ *  and `focusElement` when a trigger must take the caret immediately.
+ *
  *  The Ctrl movement aliases (Ctrl+J/K = down/up, Ctrl+H/L = left/right — the
  *  vim strokes every context menu already answers) are claimed by
  *  `ctrlNavigationRegistry`, for the same reason menus use it: they *are*

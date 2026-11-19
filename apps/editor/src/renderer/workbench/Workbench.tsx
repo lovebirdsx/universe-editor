@@ -36,6 +36,7 @@ import type { RendererDialogService } from '../services/dialog/RendererDialogSer
 import { NotificationsToast } from './notification/NotificationsToast.js'
 import { NotificationsCenter } from './notification/NotificationsCenter.js'
 import { ProgressDialogHost } from './progress/ProgressDialogHost.js'
+import { FocusRestoreFallbackProvider } from './focus/FocusRestoreFallback.js'
 
 interface WorkbenchProps {
   instantiation: InstantiationService
@@ -145,9 +146,11 @@ export function Workbench({ instantiation, lifecycle }: WorkbenchProps) {
           owner-document provider defaults every overlay to the main document;
           each auxiliary portal re-provides its own document below. */}
       <OwnerDocumentProvider targetDocument={document}>
-        <DragSessionProvider>
-          <WorkbenchShell />
-        </DragSessionProvider>
+        <FocusRestoreFallbackProvider>
+          <DragSessionProvider>
+            <WorkbenchShell />
+          </DragSessionProvider>
+        </FocusRestoreFallbackProvider>
       </OwnerDocumentProvider>
     </ServicesContext.Provider>
   )

@@ -156,14 +156,16 @@ describe('AiFeatureModelsPanel', () => {
     renderPanel(aiModel)
     await flushEffects()
     expect(valueOf('Chat').textContent).toContain('Not set')
-    expect(aiModel.getModels).toHaveBeenCalledTimes(1)
+    const enumerationsAfterMount = aiModel.getModels.mock.calls.length
+    expect(enumerationsAfterMount).toBeGreaterThan(0)
 
     aiModel.active = { chat: ACME_MODEL.id }
     aiModel.fireActiveModelChanged()
     await flushEffects()
 
     expect(valueOf('Chat').textContent).toContain('Qwen3 Coder')
-    expect(aiModel.getModels).toHaveBeenCalledTimes(2)
+    // One reload per event — the mount pass count itself is StrictMode's business.
+    expect(aiModel.getModels).toHaveBeenCalledTimes(enumerationsAfterMount + 1)
   })
 
   it('a stale getModels result does not overwrite a newer reload', async () => {
@@ -179,20 +181,21 @@ describe('AiFeatureModelsPanel', () => {
 
     renderPanel(aiModel)
     await flushEffects()
-    expect(gates).toHaveLength(1)
+    const mountEnumerations = gates.length
+    expect(mountEnumerations).toBeGreaterThan(0)
 
     aiModel.fireModelsChanged()
     await flushEffects()
-    expect(gates).toHaveLength(2)
+    expect(gates).toHaveLength(mountEnumerations + 1)
 
     // The newer enumeration resolves first and resolves the model…
-    gates[1]?.([ACME_MODEL])
+    gates[gates.length - 1]?.([ACME_MODEL])
     await flushEffects()
     expect(valueOf('Chat').textContent).toContain('Qwen3 Coder')
 
-    // …then the stale mount enumeration answers empty; it must not win, or the
-    // row would regress to the degraded "Unavailable" rendering.
-    gates[0]?.([])
+    // …then the older enumerations answer empty; they must not win, or the row
+    // would regress to the degraded "Unavailable" rendering.
+    for (const stale of gates.slice(0, -1)) stale([])
     await flushEffects()
     expect(valueOf('Chat').textContent).toContain('Qwen3 Coder')
     expect(valueOf('Chat').textContent).not.toContain('Unavailable')

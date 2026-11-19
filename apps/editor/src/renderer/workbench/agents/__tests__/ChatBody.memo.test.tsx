@@ -246,11 +246,12 @@ describe('ChatBody — TimelineSlot memoization', () => {
     const { session, timeline } = makeSession('s1', [...head, tailV1])
     renderChat(session)
 
-    // Every slot rendered exactly once on mount.
-    expect(renderCounts.get('msg-a')).toBe(1)
-    expect(renderCounts.get('msg-b')).toBe(1)
-    expect(renderCounts.get('msg-c')).toBe(1)
-    expect(renderCounts.get('tail-v1')).toBe(1)
+    // Every slot rendered on mount (StrictMode double-renders in dev, so the
+    // absolute count varies; only the delta below is stable).
+    for (const key of ['msg-a', 'msg-b', 'msg-c', 'tail-v1']) {
+      expect(renderCounts.get(key) ?? 0).toBeGreaterThanOrEqual(1)
+    }
+    const beforeUpdate = new Map(renderCounts)
 
     // Streaming chunk: only the tail item gets a new object reference; the head
     // slots keep their identity (mirrors acpSession's _upsert*InTimeline slice).
@@ -259,12 +260,14 @@ describe('ChatBody — TimelineSlot memoization', () => {
       timeline.set([...head, tailV2], undefined)
     })
 
-    // Head slots were skipped by React.memo — counts unchanged.
-    expect(renderCounts.get('msg-a')).toBe(1)
-    expect(renderCounts.get('msg-b')).toBe(1)
-    expect(renderCounts.get('msg-c')).toBe(1)
+    // Head slots were skipped by React.memo — no additional renders.
+    for (const key of ['msg-a', 'msg-b', 'msg-c']) {
+      expect(renderCounts.get(key)).toBe(beforeUpdate.get(key))
+    }
     // Only the tail re-rendered.
-    expect(renderCounts.get('tail-v2')).toBe(1)
+    expect((renderCounts.get('tail-v2') ?? 0) - (beforeUpdate.get('tail-v2') ?? 0)).toBeGreaterThan(
+      0,
+    )
   })
 })
 

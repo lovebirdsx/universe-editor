@@ -2,7 +2,6 @@ import { configDefaults, defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { strictModeExcludedTests } from './src/shared/testing/vitestStrictModeExclusions.js'
 
 const editorPkg = JSON.parse(
   readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf-8'),
@@ -22,10 +21,7 @@ const hoverDelegateFactoryStub = fileURLToPath(
 const hoverStub = fileURLToPath(new URL('./test-stubs/monaco-hover.ts', import.meta.url))
 
 // StrictMode (dev-only double-invoked effects) is on by default for renderer DOM
-// tests, mirroring the root StrictMode in src/renderer/main.tsx. Files that still
-// need the no-StrictMode `renderer-dom-legacy` project live in
-// src/shared/testing/vitestStrictModeExclusions.ts, one reason per entry. That
-// list may only shrink — see strictModeExclusions.test.ts.
+// tests, mirroring the root StrictMode in src/renderer/main.tsx.
 
 // renderer 测试中真正依赖 DOM/Monaco 的 .test.ts。其余 .test.ts 跑在更快的
 // renderer-node（纯 node、无 react 插件、无 Monaco 预热）。新增同类文件若漏加，
@@ -134,18 +130,7 @@ export default defineConfig({
           name: 'renderer-dom',
           environment: 'happy-dom',
           include: rendererDomInclude,
-          exclude: [...configDefaults.exclude, ...strictModeExcludedTests],
           setupFiles: ['./vitest.renderer-setup.ts', './vitest.renderer-strict-setup.ts'],
-        },
-      },
-      {
-        plugins: [react()],
-        ...monacoAlias,
-        test: {
-          name: 'renderer-dom-legacy',
-          environment: 'happy-dom',
-          include: strictModeExcludedTests,
-          setupFiles: ['./vitest.renderer-setup.ts'],
         },
       },
     ],

@@ -12,7 +12,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
-import { useEffect, type ComponentType } from 'react'
+import { useEffect, useRef, type ComponentType } from 'react'
 import {
   ContextKeyService,
   EditorRegistry,
@@ -53,15 +53,20 @@ function renderWithServices(node: React.ReactNode) {
   return render(<ServicesContext.Provider value={inst}>{node}</ServicesContext.Provider>)
 }
 
-// Records, per input id, how many times the graph component mounted.
-const mountsByInputId = new Map<string, number>()
+// Records, per input id, the component instances that really mounted. A Set of
+// instance tokens keeps StrictMode's setup→cleanup→setup rehearsal from counting
+// as a second mount: the rehearsal reuses the same instance.
+const mountedInstancesByInputId = new Map<string, Set<object>>()
 
 function ProbeGraph({ input }: { input: IEditorInput }) {
   const id = input.id
+  const instance = useRef<object>({})
   // Empty deps: runs on a real mount only, not on a prop swap of a reused
   // instance — exactly the distinction the fix is about.
   useEffect(() => {
-    mountsByInputId.set(id, (mountsByInputId.get(id) ?? 0) + 1)
+    const instances = mountedInstancesByInputId.get(id) ?? new Set<object>()
+    instances.add(instance.current)
+    mountedInstancesByInputId.set(id, instances)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   return <div data-testid="probe-graph">{id}</div>
@@ -73,7 +78,7 @@ const componentMap = new Map<string, ComponentType<{ input: IEditorInput }>>([
 
 afterEach(() => {
   cleanup()
-  mountsByInputId.clear()
+  mountedInstancesByInputId.clear()
 })
 
 describe('EditorGroupView — scoped Perforce Graph tabs in one group', () => {
@@ -102,7 +107,7 @@ describe('EditorGroupView — scoped Perforce Graph tabs in one group', () => {
         resolveComponent={((k: string) => (componentMap as Map<string, unknown>).get(k)) as never}
       />,
     )
-    expect(mountsByInputId.get(a.id)).toBe(1)
+    expect(mountedInstancesByInputId.get(a.id)?.size).toBe(1)
 
     // Second "View File History", this time on b.ts: a new tab that takes over
     // the slot while a.ts stays open.
@@ -111,7 +116,8 @@ describe('EditorGroupView — scoped Perforce Graph tabs in one group', () => {
     })
 
     // Without a per-input React key the instance is reused and B never mounts,
-    // so it would render A's state under B's tab.
-    expect(mountsByInputId.get(b.id)).toBe(1)
+    // so it would render A's state under B's tab. A fresh instance is exactly
+    // one entry for B (the StrictMode rehearsal reuses the same one).
+    expect(mountedInstancesByInputId.get(b.id)?.size).toBe(1)
   })
 })

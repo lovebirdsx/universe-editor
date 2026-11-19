@@ -184,10 +184,13 @@ describe('TriggerReportEditor', () => {
       runDir: 'X:/r',
       modifiedAt: Date.now(),
     })
+    // StrictMode replays the mount effect, so the absolute count is not one per
+    // mount; the refresh itself must add exactly one read.
+    const before = harness.readRunReport.mock.calls.length
     fireEvent.click(screen.getByTestId('trigger-report-refresh'))
 
     await screen.findByTestId('trigger-report-markdown')
-    expect(harness.readRunReport).toHaveBeenCalledTimes(2)
+    expect(harness.readRunReport).toHaveBeenCalledTimes(before + 1)
   })
 
   it('refreshes automatically when the matching run ends', async () => {
@@ -200,6 +203,7 @@ describe('TriggerReportEditor', () => {
       runDir: 'X:/r',
       modifiedAt: Date.now(),
     })
+    const before = harness.readRunReport.mock.calls.length
     act(() => {
       harness.endEmitter.fire({
         runId: 'run-1',
@@ -209,7 +213,7 @@ describe('TriggerReportEditor', () => {
     })
 
     await screen.findByTestId('trigger-report-markdown')
-    expect(harness.readRunReport).toHaveBeenCalledTimes(2)
+    expect(harness.readRunReport).toHaveBeenCalledTimes(before + 1)
   })
 
   it('passes the session host authority and uses the runDir URI as the markdown base', async () => {

@@ -134,7 +134,9 @@ describe('FocusScopeOverlay', () => {
         isConnected: true,
         focus: vi.fn(),
       }
-      Object.defineProperty(doc, 'activeElement', { value: outside, configurable: true })
+      // Focus drops to <body> once the overlay unmounts, as in a real window.
+      let active: unknown = outside
+      Object.defineProperty(doc, 'activeElement', { get: () => active, configurable: true })
 
       const { unmount } = render(
         <FocusScopeOverlay visible targetDocument={doc} shouldRestoreFocus={() => true}>
@@ -143,6 +145,7 @@ describe('FocusScopeOverlay', () => {
       )
 
       unmount()
+      active = doc.body
       await flushRestore()
       expect(outside.focus).toHaveBeenCalledTimes(1)
     })
