@@ -20,7 +20,7 @@ import {
   type IRemoteConnectionResponse,
 } from '@universe-editor/platform'
 import { connectNodeSocket, NodeSocket } from '@universe-editor/node-services'
-import { RemoteExtensionHostTunnel } from '../remoteExtensionHostTunnel.js'
+import { RemoteExtensionHostTunnel, SEND_WINDOW_BYTES } from '../remoteExtensionHostTunnel.js'
 
 describe('RemoteExtensionHostTunnel', () => {
   it('disposes its socket synchronously on dispose (no leak)', async () => {
@@ -133,6 +133,62 @@ describe('RemoteExtensionHostTunnel', () => {
       const report = tracker.computeLeakingDisposables()
       setDisposableTracker(null)
       expect(report).toBeUndefined()
+    }
+  })
+})
+
+describe('RemoteExtensionHostTunnel send window', () => {
+  it('holds the window shut while the daemon has not acked, and rejects after dispose', async () => {
+    let server: Server | undefined
+    const serverSockets: NodeSocket[] = []
+    try {
+      // The fake daemon answers the handshake and then never acks: unacked bytes only grow.
+      server = createServer((raw) => {
+        const socket = new NodeSocket(raw)
+        serverSockets.push(socket)
+        void readFirstControlFrame(socket, 10_000).then(
+          () =>
+            writeControlFrame(
+              socket,
+              encodeControlJson({ type: 'ok' } satisfies IRemoteConnectionResponse),
+            ),
+          () => socket.dispose(),
+        )
+      })
+      await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+      const port = (server.address() as AddressInfo).port
+      const tunnel = new RemoteExtensionHostTunnel({
+        authority: 'host',
+        connectSocket: () => connectNodeSocket(port, '127.0.0.1'),
+        buildRequest: () => ({
+          token: 'test-token',
+          connectionType: RemoteConnectionType.ExtensionHost,
+          authority: 'host',
+          reconnectionToken: 'test-reconnection-token',
+          isReconnection: false,
+        }),
+        logger: markAsSingleton(new NullLogger()),
+        label: 'test tunnel',
+      })
+      await tunnel.open()
+
+      await tunnel.whenSendWindowOpen()
+      tunnel.send(new Uint8Array(SEND_WINDOW_BYTES))
+      let settled: 'open' | 'rejected' | undefined
+      const wait = tunnel.whenSendWindowOpen().then(
+        () => (settled = 'open'),
+        () => (settled = 'rejected'),
+      )
+      await new Promise((r) => setTimeout(r, 50))
+      expect(settled).toBeUndefined()
+
+      tunnel.dispose()
+      await wait
+      expect(settled).toBe('rejected')
+      await expect(tunnel.whenSendWindowOpen()).rejects.toThrow(/closed/)
+    } finally {
+      for (const s of serverSockets) s.dispose()
+      server?.close()
     }
   })
 })

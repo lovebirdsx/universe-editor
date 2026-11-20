@@ -3,11 +3,12 @@
  *
  *  Seeds the legacy single-blob `acp.sessionChanges` (several sessions, each with a
  *  large baseline) before launch, then proves:
- *    - main imports it into per-session shard files and removes only the legacy key;
- *    - an edit to one session rewrites only that session's shard — the other
+ *    - main imports it into per-session v2 directories (`index.json` + `files/` +
+ *      `baselines/`) and removes only the legacy key;
+ *    - an edit to one session rewrites only that session's directory — the other
  *      sessions' files are byte-identical, so the whole history never crosses IPC;
  *    - the outbound encode for that write stays far below the 4MiB large-frame line
- *      and is attributed to the sessionChangesStore.write channel;
+ *      and is attributed to the sessionChangesStore.writeEntries channel;
  *    - rewind preview still reads the persisted batches;
  *    - a restart loads the same shards with the edit still present and without
  *      re-running the legacy import.
@@ -15,7 +16,7 @@
 
 import { test, expect } from '@playwright/test'
 import { createHash } from 'node:crypto'
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
@@ -30,8 +31,9 @@ const LARGE_BASELINE = 'x'.repeat(800_000)
 const SESSION_COUNT = 8
 const FOUR_MIB = 4 * 1024 * 1024
 
-const shardName = (sessionId: string): string =>
-  `${createHash('sha256').update(sessionId).digest('hex').slice(0, 32)}.json`
+const hashKey = (value: string): string =>
+  createHash('sha256').update(value).digest('hex').slice(0, 32)
+const sessionHash = hashKey
 
 interface SeededSession {
   readonly sessionId: string
@@ -114,20 +116,86 @@ async function launch(userDataDir: string) {
   }
 }
 
-const SHARD_FILE = /^[0-9a-f]{32}\.json$/
+const SESSION_DIR = /^[0-9a-f]{32}$/
+const V1_SHARD_FILE = /^[0-9a-f]{32}\.json$/
 
-function shardFiles(userDataDir: string): string[] {
-  const dir = join(userDataDir, 'session-changes', 'global', 'sessions')
-  return readdirSync(dir).filter((name) => SHARD_FILE.test(name))
+function sessionsRoot(userDataDir: string): string {
+  return join(userDataDir, 'session-changes', 'global', 'sessions')
+}
+
+function sessionDirs(userDataDir: string): string[] {
+  return readdirSync(sessionsRoot(userDataDir)).filter((name) => SESSION_DIR.test(name))
+}
+
+function v1ShardFiles(userDataDir: string): string[] {
+  return readdirSync(sessionsRoot(userDataDir)).filter((name) => V1_SHARD_FILE.test(name))
+}
+
+// createStorage rotates the previous file to `.bak` on every overwrite; those are
+// crash-recovery copies, not session content.
+const STORAGE_SIDECAR = /\.(bak|tmp|synctmp)$/
+
+/** Every file below `root`, keyed by `<sessionHash>/<relative path>`. */
+function collectTexts(root: string, prefix = ''): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+    const full = join(root, entry.name)
+    if (entry.isDirectory()) {
+      for (const [name, text] of collectTexts(full, relative)) out.set(name, text)
+    } else if (!STORAGE_SIDECAR.test(entry.name)) {
+      out.set(relative, readFileSync(full, 'utf8'))
+    }
+  }
+  return out
 }
 
 function shardTexts(userDataDir: string): Map<string, string> {
-  const dir = join(userDataDir, 'session-changes', 'global', 'sessions')
-  const out = new Map<string, string>()
-  for (const name of shardFiles(userDataDir)) {
-    out.set(name, readFileSync(join(dir, name), 'utf8'))
+  return collectTexts(sessionsRoot(userDataDir))
+}
+
+function sessionOf(relativePath: string): string {
+  return relativePath.split('/')[0]!
+}
+
+interface StoredIndexEntry {
+  readonly key: string
+  readonly gen: string
+  readonly baseline?: 'text' | 'null'
+  readonly baselineGen?: string
+}
+
+/**
+ * Bodies the committed index does not reference. Generation-named bodies are only
+ * safe if the next commit GCs the abandoned generation, so a leftover here means
+ * the store can grow without bound.
+ */
+function orphanBodies(userDataDir: string): string[] {
+  const orphans: string[] = []
+  for (const dir of sessionDirs(userDataDir)) {
+    const sessionDir = join(sessionsRoot(userDataDir), dir)
+    const raw = JSON.parse(readFileSync(join(sessionDir, 'index.json'), 'utf8')) as {
+      data: { files: StoredIndexEntry[] }
+    }
+    const referenced = new Set(
+      raw.data.files.map((file) => `${hashKey(file.key)}.${file.gen}.json`),
+    )
+    const referencedBaselines = new Set(
+      raw.data.files
+        .filter((file) => file.baseline === 'text')
+        .map((file) => `${hashKey(file.key)}.${file.baselineGen}.json`),
+    )
+    for (const name of readdirSync(join(sessionDir, 'files'))) {
+      if (!referenced.has(name)) orphans.push(`${dir}/files/${name}`)
+    }
+    const baselinesDir = join(sessionDir, 'baselines')
+    if (existsSync(baselinesDir)) {
+      for (const name of readdirSync(baselinesDir)) {
+        if (!referencedBaselines.has(name)) orphans.push(`${dir}/baselines/${name}`)
+      }
+    }
   }
-  return out
+  return orphans
 }
 
 function readState(userDataDir: string): Record<string, unknown> {
@@ -179,13 +247,17 @@ test.describe('@p1 acp session change shards', () => {
       const rewind = await first.page.evaluate(() => window.__E2E__!.sessionChangesRead('rewind-1'))
       expect(rewind.files[0]?.batchCount).toBe(2)
 
-      // Main removed only the legacy key; the other seeded keys survived and one
-      // shard file exists per session (no whole-history blob left behind).
+      // Main removed only the legacy key; the other seeded keys survived and every
+      // session was rewritten into a v2 directory (no whole-history blob left behind).
+      await first.page.evaluate(() => window.__E2E__!.sessionChangesFlush())
       await expect
         .poll(() => 'acp.sessionChanges' in readState(userDataDir), { timeout: 20_000 })
         .toBe(false)
       expect(readState(userDataDir)['welcome.agentOnboarding.seen']).toBe(true)
-      expect(shardFiles(userDataDir)).toHaveLength(SESSION_COUNT)
+      await expect
+        .poll(() => sessionDirs(userDataDir).length, { timeout: 20_000 })
+        .toBe(SESSION_COUNT)
+      expect(v1ShardFiles(userDataDir)).toEqual([])
 
       // Preview rewind from the persisted batches (reads disk, writes nothing).
       const impact = await first.page.evaluate(() =>
@@ -216,14 +288,35 @@ test.describe('@p1 acp session change shards', () => {
       // Cumulative per-target totals are never evicted, unlike the bounded `recent`
       // ring: a slow main-process shard write cannot age the observation out before
       // this snapshot is taken.
-      const writeCount = stats.countByTarget['request:sessionChangesStore:write'] ?? 0
+      const writeCount = stats.countByTarget['request:sessionChangesStore:writeEntries'] ?? 0
       expect(writeCount, `ipc encode stats: ${JSON.stringify(stats)}`).toBeGreaterThanOrEqual(1)
+      // The index is the commit point, so it must cross the wire too.
+      expect(
+        stats.countByTarget['request:sessionChangesStore:commitIndex'] ?? 0,
+      ).toBeGreaterThanOrEqual(1)
 
-      // Only the edited session's shard changed; the other seven are byte-identical.
+      // Only the edited session's directory changed; the other seven are
+      // byte-identical (body filenames carry a generation, so the edited
+      // session's file set necessarily changes too).
       const after = shardTexts(userDataDir)
-      expect(after.size).toBe(before.size)
-      const changed = [...after.keys()].filter((name) => after.get(name) !== before.get(name))
-      expect(changed).toEqual([shardName('legacy-0')])
+      const editedSession = sessionHash('legacy-0')
+      const beforeOthers = new Map(
+        [...before].filter(([name]) => sessionOf(name) !== editedSession),
+      )
+      const afterOthers = new Map([...after].filter(([name]) => sessionOf(name) !== editedSession))
+      expect([...afterOthers.keys()].sort(), 'other session file set').toEqual(
+        [...beforeOthers.keys()].sort(),
+      )
+      for (const [name, text] of afterOthers) {
+        expect(text, `other session file ${name} must be byte-identical`).toBe(
+          beforeOthers.get(name),
+        )
+      }
+      expect(
+        [...after].filter(([name]) => sessionOf(name) === editedSession),
+        'the edited session directory changed',
+      ).not.toEqual([...before].filter(([name]) => sessionOf(name) === editedSession))
+      expect(orphanBodies(userDataDir), 'orphaned bodies are GCed by the commit').toEqual([])
       const edited = await first.page.evaluate(() => window.__E2E__!.sessionChangesRead('legacy-0'))
       expect(edited.files[0]?.batchCount).toBe(1)
       expect(edited.files[0]?.hasBaseline).toBe(true)
@@ -256,7 +349,8 @@ test.describe('@p1 acp session change shards', () => {
         window.__E2E__!.sessionChangesRead('rewind-1'),
       )
       expect(rewindAgain.files[0]?.batchCount).toBe(2)
-      expect(shardFiles(userDataDir)).toHaveLength(SESSION_COUNT)
+      expect(sessionDirs(userDataDir)).toHaveLength(SESSION_COUNT)
+      expect(v1ShardFiles(userDataDir)).toEqual([])
     } finally {
       await closeApp(first.app)
     }

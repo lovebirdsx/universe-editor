@@ -40,9 +40,13 @@ class FakeTunnel implements IRemoteExtensionHostTunnel {
 
   readonly sent: Uint8Array[] = []
   disposed = false
+  sendWindow: Promise<void> = Promise.resolve()
 
   send(data: Uint8Array): void {
     this.sent.push(data)
+  }
+  whenSendWindowOpen(): Promise<void> {
+    return this.sendWindow
   }
   fireData(data: string): void {
     this._onData.fire(new TextEncoder().encode(data))
@@ -195,6 +199,38 @@ describe('RemoteExtensionHostService', () => {
     const { handle } = await svc.start({ authority: 'host' })
     tunnels[0]!.fireClose()
     expect(exits).toEqual([{ handle, code: null, signal: null, reason: 'connection-lost' }])
+  })
+
+  it('holds writeStdin until the tunnel send window reopens (backpressure)', async () => {
+    const made = makeConnectionService()
+    connService = made.connService
+    tunnels = made.tunnels
+    svc = new RemoteExtensionHostService(connService)
+    const { handle } = await svc.start({ authority: 'host' })
+    const tunnel = tunnels[0]!
+    let open!: () => void
+    tunnel.sendWindow = new Promise<void>((r) => (open = r))
+
+    let settled = false
+    const write = svc.writeStdin(handle, 'big\n').then(() => (settled = true))
+    await Promise.resolve()
+    expect(tunnel.sent.map(decode)).toEqual(['big\n'])
+    expect(settled).toBe(false)
+
+    open()
+    await write
+    expect(settled).toBe(true)
+  })
+
+  it('rejects a held writeStdin when the tunnel dies', async () => {
+    const made = makeConnectionService()
+    connService = made.connService
+    tunnels = made.tunnels
+    svc = new RemoteExtensionHostService(connService)
+    const { handle } = await svc.start({ authority: 'host' })
+    tunnels[0]!.sendWindow = Promise.reject(new Error('PersistentProtocol disposed'))
+
+    await expect(svc.writeStdin(handle, 'x')).rejects.toThrow(/disposed/)
   })
 
   it('rejects writeStdin for an unknown handle', async () => {

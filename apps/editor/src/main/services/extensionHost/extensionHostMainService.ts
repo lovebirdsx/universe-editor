@@ -35,6 +35,7 @@ import { buildChildEnv } from '../process/env.js'
 import { decodeDiagnostic } from '../process/decode.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import { processLifecycle } from '../process/processLifecycle.js'
+import { WindowHandleScope } from '../process/windowHandleScope.js'
 import {
   CHILD_PROCESS_EXITED_CODE,
   CHILD_STDIN_NOT_WRITABLE_CODE,
@@ -550,12 +551,13 @@ export function createWindowScopedExtensionHost(
   host: ExtensionHostMainService,
   windowId: number,
 ): IExtensionHostService {
+  const scope = new WindowHandleScope()
   return {
     _serviceBrand: undefined,
-    onStdout: host.onStdout,
-    onStderr: host.onStderr,
-    onExit: host.onExit,
-    start: (spec) => host.startForWindow(spec, windowId),
+    onStdout: scope.filter(host.onStdout),
+    onStderr: scope.filter(host.onStderr),
+    onExit: scope.filterExit(host.onExit),
+    start: (spec) => scope.track(host.startForWindow(spec, windowId)),
     writeStdin: (handle, data) => host.writeStdin(handle, data),
     stop: (handle) => host.stop(handle),
     stopAll: () => host.stopAll(),

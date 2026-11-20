@@ -42,6 +42,7 @@ import type {
 } from '@universe-editor/platform'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import { processLifecycle } from '../process/processLifecycle.js'
+import { WindowHandleScope } from '../process/windowHandleScope.js'
 import { resolveFromRepo } from '../../repoPaths.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 
@@ -239,12 +240,13 @@ export function createWindowScopedAcpHost(
   host: AcpHostMainService,
   windowId: number,
 ): IAcpHostService {
+  const scope = new WindowHandleScope()
   return {
     _serviceBrand: undefined,
-    onStdout: host.onStdout,
-    onStderr: host.onStderr,
-    onExit: host.onExit,
-    start: (spec) => host.startForWindow(spec, windowId),
+    onStdout: scope.filter(host.onStdout),
+    onStderr: scope.filter(host.onStderr),
+    onExit: scope.filterExit(host.onExit),
+    start: (spec) => scope.track(host.startForWindow(spec, windowId)),
     writeStdin: (handle, data) => host.writeStdin(handle, data),
     stop: (handle) => host.stop(handle),
     probe: (command) => host.probe(command),

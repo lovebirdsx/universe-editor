@@ -253,16 +253,18 @@ export class ManagedChildProcess extends Disposable implements StoppableProcess 
   }
 
   /** Settle every in-flight write the stream error may have swallowed. */
-  private _failPendingWrites(): void {
+  private _failPendingWrites(error?: Error): void {
     if (this._pendingWrites.size === 0) return
     const reason = this._stdinError?.code ?? this._stdinError?.message ?? 'unknown'
-    const error = childProcessError(
-      `ManagedChildProcess(${this._label}): stdin write failed (${reason})`,
-      CHILD_STDIN_NOT_WRITABLE_CODE,
-    )
+    const failure =
+      error ??
+      childProcessError(
+        `ManagedChildProcess(${this._label}): stdin write failed (${reason})`,
+        CHILD_STDIN_NOT_WRITABLE_CODE,
+      )
     const pending = [...this._pendingWrites]
     this._pendingWrites.clear()
-    for (const reject of pending) reject(error)
+    for (const reject of pending) reject(failure)
   }
 
   private readonly _onChildError = (err: Error): void =>
@@ -285,7 +287,9 @@ export class ManagedChildProcess extends Disposable implements StoppableProcess 
   }
 
   writeStdin(data: string): Promise<void> {
-    if (this._exited) {
+    // dispose() detaches the exit/error listeners, so a write parked on 'drain'
+    // after it could never be settled by them.
+    if (this._exited || this._disposed) {
       return Promise.reject(
         childProcessError(
           `ManagedChildProcess(${this._label}): process has exited`,
@@ -315,34 +319,72 @@ export class ManagedChildProcess extends Disposable implements StoppableProcess 
       )
     }
     return new Promise<void>((resolve, reject) => {
+      // A write only settles once BOTH the callback and (when the pipe reported
+      // backpressure) 'drain' have run: the callback means the data was handed
+      // to the kernel, while 'drain' means the pipe can take more. Resolving on
+      // the callback alone lets a serialized writer (the RPC write queue) outrun
+      // the pipe and pile frames up in memory.
+      let callbackDone = false
+      let drained = false
+      let settled = false
+
+      const cleanup = (): void => {
+        this._pendingWrites.delete(onStreamError)
+        stdin.off('drain', onDrain)
+      }
+      const settle = (err?: Error): void => {
+        if (settled) return
+        if (err) {
+          settled = true
+          cleanup()
+          reject(err)
+          return
+        }
+        if (!callbackDone || !drained) return
+        settled = true
+        cleanup()
+        resolve()
+      }
       // Registered so a failure delivered only as a stream 'error' still settles this
       // promise; the callback below deregisters it either way.
-      const onStreamError = (err: Error): void => reject(err)
-      this._pendingWrites.add(onStreamError)
-      const settle = (): void => {
-        this._pendingWrites.delete(onStreamError)
+      const onStreamError = (err: Error): void => settle(err)
+      const onDrain = (): void => {
+        drained = true
+        settle()
       }
+
+      this._pendingWrites.add(onStreamError)
+      let needsDrain: boolean
       try {
-        stdin.write(data, 'utf8', (err) => {
-          settle()
-          // Normalized to the documented "child can no longer accept input" code so
-          // callers have one branch to write; the errno stays in the message. The
-          // callback is not a reliable error channel on its own (Node may deliver the
-          // failure only as a stream 'error'), which is why _onStdinError exists.
+        needsDrain = !stdin.write(data, 'utf8', (err) => {
           if (err) {
-            reject(
+            // Normalized to the documented "child can no longer accept input" code so
+            // callers have one branch to write; the errno stays in the message. The
+            // callback is not a reliable error channel on its own (Node may deliver the
+            // failure only as a stream 'error'), which is why _onStdinError exists.
+            settle(
               childProcessError(
                 `ManagedChildProcess(${this._label}): stdin write failed (${(err as NodeJS.ErrnoException).code ?? err.message})`,
                 CHILD_STDIN_NOT_WRITABLE_CODE,
               ),
             )
-          } else resolve()
+            return
+          }
+          callbackDone = true
+          settle()
         })
       } catch (err) {
         // A write into an already-closing stream can still throw synchronously; the
         // promise settles by itself, but the rejecter must not be left behind.
-        settle()
+        cleanup()
         throw err
+      }
+      if (needsDrain) {
+        // A synchronous callback may already have settled a failed write.
+        if (!settled) stdin.once('drain', onDrain)
+      } else {
+        drained = true
+        settle()
       }
     })
   }
@@ -471,6 +513,14 @@ export class ManagedChildProcess extends Disposable implements StoppableProcess 
     }
     this._clearStopTimer()
     this._lease?.dispose()
+    // A write still waiting for its callback / 'drain' can never complete once the
+    // child is gone; settle it (and drop its drain listener) instead of hanging.
+    this._failPendingWrites(
+      childProcessError(
+        `ManagedChildProcess(${this._label}): process exited before stdin write completed`,
+        CHILD_PROCESS_EXITED_CODE,
+      ),
+    )
     const exit: ManagedExit = partial.error
       ? { ...partial, forced: this._forced, error: partial.error }
       : { ...partial, forced: this._forced }
@@ -515,6 +565,12 @@ export class ManagedChildProcess extends Disposable implements StoppableProcess 
       this._shutdownMark?.(`kill.end:${this._label}`)
     }
     this._lease?.dispose()
+    this._failPendingWrites(
+      childProcessError(
+        `ManagedChildProcess(${this._label}): disposed before stdin write completed`,
+        CHILD_PROCESS_EXITED_CODE,
+      ),
+    )
     super.dispose()
   }
 }

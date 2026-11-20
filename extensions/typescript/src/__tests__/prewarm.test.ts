@@ -2,7 +2,7 @@
  *  Tests for the TypeScript plugin's tsconfig-driven prewarm helpers:
  *  - resolvePrewarmTargets: single tsconfig auto-warms, multi + no config warms
  *    nothing, explicit config warms the listed (existing) tsconfigs;
- *  - enumerateTsconfigs: finds tsconfig*.json, skips heavy dirs;
+ *  - enumerateTsconfigs: one bounded findFiles search, skips heavy dirs;
  *  - findSeedFile: picks a real source file, skipping loose *.config.* files that
  *    would land tsserver in a symbol-less inferred project (the original bug).
  *--------------------------------------------------------------------------------------------*/
@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest'
 import { FileType } from '@universe-editor/extension-api'
 import { enumerateTsconfigs, findSeedFile, resolvePrewarmTargets } from '../extension.js'
+import type { FindTsconfigFiles } from '../extension.js'
 
 /** Build an in-memory `readDir` over a `{ absolutePath: [name, FileType][] }` tree. */
 function makeReadDir(tree: Record<string, Array<[string, FileType]>>) {
@@ -50,27 +51,34 @@ describe('resolvePrewarmTargets', () => {
 })
 
 describe('enumerateTsconfigs', () => {
-  it('finds tsconfig*.json and skips heavy dirs', async () => {
-    const readDir = makeReadDir({
-      '/w': [
-        ['tsconfig.json', F],
-        ['node_modules', D],
-        ['packages', D],
-        ['eslint.config.js', F],
-      ],
-      '/w/node_modules': [['tsconfig.json', F]], // must be skipped
-      '/w/packages': [['app', D]],
-      '/w/packages/app': [
-        ['tsconfig.json', F],
-        ['tsconfig.node.json', F],
-      ],
-    })
-    const found = await enumerateTsconfigs('/w', readDir)
-    expect(found.sort()).toEqual([
+  it('runs one bounded search that excludes heavy dirs, keeping only tsconfig*.json', async () => {
+    const calls: Array<[string, string, number]> = []
+    const find: FindTsconfigFiles = (include, exclude, maxResults) => {
+      calls.push([include, exclude, maxResults])
+      return Promise.resolve([
+        'packages/app/tsconfig.node.json',
+        'tsconfig.json',
+        'packages/app/tsconfig.json',
+        'packages/app/tsconfigish.json',
+      ])
+    }
+    const found = await enumerateTsconfigs(find)
+    expect(found).toEqual([
+      'tsconfig.json',
       'packages/app/tsconfig.json',
       'packages/app/tsconfig.node.json',
-      'tsconfig.json',
     ])
+    expect(calls).toHaveLength(1)
+    const [include, exclude] = calls[0]!
+    expect(include).toBe('**/tsconfig*.json')
+    for (const dir of ['node_modules', '.git', 'dist', 'out', 'build', '.next']) {
+      expect(exclude).toContain(dir)
+    }
+  })
+
+  it('returns no tsconfigs when the search fails', async () => {
+    const find: FindTsconfigFiles = () => Promise.reject(new Error('no workspace'))
+    expect(await enumerateTsconfigs(find)).toEqual([])
   })
 })
 

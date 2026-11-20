@@ -45,7 +45,6 @@ import {
 } from '@universe-editor/platform'
 import {
   ExtHostChannels,
-  StdioFramingProtocol,
   type IExtHostCommands,
   type IExtHostDocuments,
   type IExtHostEditor,
@@ -71,6 +70,7 @@ import type { IExcludeService } from '../exclude/ExcludeService.js'
 import type { IOutOfWorkspaceWatchService } from '../files/outOfWorkspaceWatchService.js'
 import { slowPhaseInstrument, formatBytes } from '../performance/perfPhases.js'
 import { MainThreadCommands, type CommandOwnershipLedger } from './MainThreadCommands.js'
+import { RpcWritePipeline } from './rpcWritePipeline.js'
 import { MainThreadAi } from './MainThreadAi.js'
 import { MainThreadEditor } from './MainThreadEditor.js'
 import { MainThreadExtensions } from './MainThreadExtensions.js'
@@ -148,6 +148,9 @@ export interface HostConnectionDeps {
   readonly onActivationError: (error: IExtensionActivationErrorDto) => void
   /** The host surfaced an unhandled rejection — surface it (dev notification + e2e gate). */
   readonly onUnhandledRejection: (report: IExtensionUnhandledRejectionDto) => void
+  /** The RPC transport failed (queue overflow / write failure); the host is being
+   *  stopped and its exit must be handled as a crash, not a clean shutdown. */
+  readonly onTransportFatal: () => void
   /** The host surfaced a process-level unexpected error — land it in errors.jsonl. */
   readonly onUnexpectedError: (error: SerializedError) => void
 }
@@ -196,16 +199,32 @@ export class HostConnection extends Disposable {
       Event.filter(deps.host.onStdout, (c) => c.handle === handle),
       (c) => c.data,
     )
-    const protocol = store.add(
-      new StdioFramingProtocol({
-        write: (frame) => {
-          void deps.host.writeStdin(handle, frame).catch((err: unknown) => {
-            deps.logger.warn(`writeStdin failed (${kind}): ${(err as Error).message}`)
+    // Backpressure + bounded memory on the renderer→host direction. The queue
+    // serializes writeStdin (one call in flight) and, on overflow / write
+    // failure, marks the connection dead and stops the host; the service treats
+    // that exit as a crash so the usual backoff restart + notification apply.
+    const pipeline = store.add(
+      new RpcWritePipeline({
+        kind,
+        handle,
+        onData,
+        writeStdin: (h, data) => deps.host.writeStdin(h, data),
+        logger: deps.logger,
+        onFatal: (reason) => {
+          if (this._dead) return
+          this.markDead()
+          deps.onTransportFatal()
+          void deps.host.stop(handle).catch((err: unknown) => {
+            deps.logger.warn(
+              `extension host stop after ${reason} failed (${kind}, handle=${handle}): ${
+                (err as Error).message
+              }`,
+            )
           })
         },
-        onData,
       }),
     )
+    const protocol = pipeline.protocol
 
     // Decode each frame ONCE and route by type: language-service responses for a
     // large file are multi-MB frames, and a second parse (client + server each

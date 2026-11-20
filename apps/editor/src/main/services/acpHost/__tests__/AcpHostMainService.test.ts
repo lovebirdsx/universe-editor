@@ -828,3 +828,48 @@ describe('AcpHostMainService — window-scoped reclaim', () => {
     expect(processLifecycle.snapshot().some((e) => e.owner === 'window:1')).toBe(false)
   })
 })
+
+describe('AcpHostMainService — window-scoped stdio routing', () => {
+  let svc: AcpHostMainService | undefined
+
+  afterEach(() => {
+    svc?.dispose()
+    svc = undefined
+  })
+
+  it('delivers an agent’s stdio and exit only to the window that started it', async () => {
+    const procA = new FakeProc(9501)
+    const procB = new FakeProc(9502)
+    const realSvc = new AcpHostMainService(
+      fakeSpawnerWith([procA, procB]),
+      undefined,
+      undefined,
+      leakSafeLoggerService(),
+    )
+    svc = realSvc
+    const win1 = createWindowScopedAcpHost(realSvc, 1)
+    const win2 = createWindowScopedAcpHost(realSvc, 2)
+    const seen1: string[] = []
+    const seen2: string[] = []
+    const subs = [
+      win1.onStdout((c) => seen1.push(`out:${c.data}`)),
+      win1.onStderr((c) => seen1.push(`err:${c.data}`)),
+      win1.onExit((e) => seen1.push(`exit:${e.handle}`)),
+      win2.onStdout((c) => seen2.push(`out:${c.data}`)),
+      win2.onStderr((c) => seen2.push(`err:${c.data}`)),
+      win2.onExit((e) => seen2.push(`exit:${e.handle}`)),
+    ]
+
+    const { handle: a } = await win1.start({ command: 'a', args: [] })
+    const { handle: b } = await win2.start({ command: 'b', args: [] })
+    procA.stdout.emit('data', Buffer.from('a1'))
+    procB.stdout.emit('data', Buffer.from('b1'))
+    procA.stderr.emit('data', Buffer.from('ea'))
+    procA.emitExit(0, null)
+    procB.emitExit(0, null)
+
+    expect(seen1).toEqual(['out:a1', 'err:ea', `exit:${a}`])
+    expect(seen2).toEqual(['out:b1', `exit:${b}`])
+    for (const s of subs) s.dispose()
+  })
+})

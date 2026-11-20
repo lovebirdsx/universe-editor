@@ -26,6 +26,7 @@ import {
   createRemoteURITransformer,
 } from '@universe-editor/platform'
 import {
+  DEFAULT_MAX_PENDING_FRAME_BYTES,
   ExtHostChannels,
   StdioFramingProtocol,
   type IExtHostChat,
@@ -123,7 +124,18 @@ const transport: StdioTransport = {
   onData: onData.event,
 }
 
-const protocol = new StdioFramingProtocol(transport)
+const protocol = new StdioFramingProtocol(transport, {
+  maxPendingFrameBytes: DEFAULT_MAX_PENDING_FRAME_BYTES,
+  // A peer that never terminates a frame would otherwise buffer without bound.
+  // This is unrecoverable (the stream is desynchronized), so surface it and
+  // exit — main persists stderr and the renderer's crash-restart takes over.
+  onOverflow: ({ pendingBytes, limit }) => {
+    console.error(
+      `[ext-host] inbound frame exceeded ${limit} bytes (${pendingBytes} pending) — exiting`,
+    )
+    process.exit(1)
+  },
+})
 // In a remote host the renderer addresses resources by `remote-ssh://<authority>/…`
 // while extensions must see `file:` URIs with the remote host's real paths — so the
 // host transforms URIs inside its channel codec (VSCode's --transformURIs). The

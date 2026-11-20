@@ -137,7 +137,9 @@ export class RemoteExtensionHostService extends Disposable implements IExtension
       return Promise.reject(new Error(`ExtensionHost: unknown or exited handle ${handle}`))
     }
     entry.tunnel.send(new TextEncoder().encode(data))
-    return Promise.resolve()
+    // Settling on the daemon's ack window (not on send) is what lets the renderer's write queue
+    // feel a slow link; resolving at once would let it pile up unbounded in PersistentProtocol.
+    return entry.tunnel.whenSendWindowOpen()
   }
 
   stop(handle: string): Promise<void> {

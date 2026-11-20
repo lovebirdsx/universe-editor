@@ -139,6 +139,12 @@ describe('ManagedChildProcess', () => {
     await expect(managed.writeStdin('data')).rejects.toThrow(/has exited/)
   })
 
+  it('writeStdin rejects after dispose instead of parking on drain', async () => {
+    const managed = new ManagedChildProcess(child.asChild())
+    managed.dispose()
+    await expect(managed.writeStdin('data')).rejects.toThrow(/has exited/)
+  })
+
   it('writeStdin rejects when stdin is not writable', async () => {
     const managed = new ManagedChildProcess(child.asChild())
     child.stdin.writable = false
@@ -241,6 +247,100 @@ describe('ManagedChildProcess', () => {
       // try to settle a write that is long gone.
       child.stdin.emit('error', epipe())
       managed.dispose()
+    })
+  })
+
+  describe('stdin write backpressure', () => {
+    const epipe = (): NodeJS.ErrnoException =>
+      Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
+
+    /** Make `write` report backpressure and hand the test the callback. */
+    const blockWrite = (): ((err?: Error | null) => void) => {
+      let writeCb: ((err?: Error | null) => void) | undefined
+      child.stdin.write = (_data: string, _enc: string, cb: (err?: Error | null) => void) => {
+        writeCb = cb
+        return false
+      }
+      return (err) => {
+        expect(writeCb).toBeTypeOf('function')
+        writeCb!(err)
+      }
+    }
+
+    it('waits for drain when stdin.write reports backpressure', async () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      const completeWrite = blockWrite()
+
+      let resolved = false
+      const pending = managed.writeStdin('data').then(() => {
+        resolved = true
+      })
+
+      completeWrite(null)
+      await Promise.resolve()
+      expect(resolved).toBe(false)
+      expect(child.stdin.listenerCount('drain')).toBe(1)
+
+      child.stdin.emit('drain')
+      await expect(pending).resolves.toBeUndefined()
+      expect(resolved).toBe(true)
+      expect(child.stdin.listenerCount('drain')).toBe(0)
+      managed.dispose()
+    })
+
+    it('resolves once both drain and the write callback have run, in either order', async () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      const completeWrite = blockWrite()
+
+      let resolved = false
+      const pending = managed.writeStdin('data').then(() => {
+        resolved = true
+      })
+
+      child.stdin.emit('drain')
+      await Promise.resolve()
+      expect(resolved).toBe(false)
+
+      completeWrite(null)
+      await expect(pending).resolves.toBeUndefined()
+      managed.dispose()
+    })
+
+    it('cleans up the drain listener when the write fails via a stream error', async () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      blockWrite()
+
+      const pending = managed.writeStdin('data')
+      expect(child.stdin.listenerCount('drain')).toBe(1)
+
+      child.stdin.emit('error', epipe())
+      await expect(pending).rejects.toMatchObject({ code: 'CHILD_STDIN_NOT_WRITABLE' })
+      expect(child.stdin.listenerCount('drain')).toBe(0)
+      managed.dispose()
+    })
+
+    it('settles a pending write when the child exits before drain', async () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      blockWrite()
+
+      const pending = managed.writeStdin('data')
+      expect(child.stdin.listenerCount('drain')).toBe(1)
+
+      child.emit('exit', 0, null)
+      await expect(pending).rejects.toMatchObject({ code: 'CHILD_PROCESS_EXITED' })
+      expect(child.stdin.listenerCount('drain')).toBe(0)
+    })
+
+    it('settles a pending write on dispose', async () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      blockWrite()
+
+      const pending = managed.writeStdin('data')
+      expect(child.stdin.listenerCount('drain')).toBe(1)
+
+      managed.dispose()
+      await expect(pending).rejects.toMatchObject({ code: 'CHILD_PROCESS_EXITED' })
+      expect(child.stdin.listenerCount('drain')).toBe(0)
     })
   })
 

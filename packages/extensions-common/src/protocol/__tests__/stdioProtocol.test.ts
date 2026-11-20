@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { Emitter } from '@universe-editor/platform'
-import { StdioFramingProtocol, type StdioTransport } from '../stdioProtocol.js'
+import {
+  DEFAULT_MAX_PENDING_FRAME_BYTES,
+  StdioFramingProtocol,
+  type StdioTransport,
+} from '../stdioProtocol.js'
 
 /** A loopback transport whose `onData` can be driven directly, capturing writes. */
 class FakeTransport implements StdioTransport {
@@ -101,5 +105,57 @@ describe('StdioFramingProtocol', () => {
 
     a.dispose()
     b.dispose()
+  })
+
+  describe('pending-frame cap', () => {
+    it('defaults to 64 MiB', () => {
+      expect(DEFAULT_MAX_PENDING_FRAME_BYTES).toBe(64 * 1024 * 1024)
+    })
+
+    it('fires the overflow callback once when a partial frame crosses the cap', () => {
+      const t = new FakeTransport()
+      const overflows: Array<{ pendingBytes: number; limit: number }> = []
+      const p = new StdioFramingProtocol(t, {
+        maxPendingFrameBytes: 10,
+        onOverflow: (info) => overflows.push(info),
+      })
+      const got: string[] = []
+      p.onMessage((m) => got.push(dec(m)))
+
+      t.feed('ok\n')
+      t.feed('12345')
+      t.feed('6789')
+      expect(got).toEqual(['ok'])
+      expect(overflows).toEqual([])
+
+      // 10 accumulated bytes is at the cap, not over it.
+      t.feed('0')
+      expect(overflows).toEqual([])
+      t.feed('1')
+      expect(overflows).toEqual([{ pendingBytes: 11, limit: 10 }])
+
+      // The stream is desynchronized: the partial frame is gone and later
+      // complete frames are not delivered either.
+      t.feed('tail\ncomplete\n')
+      expect(got).toEqual(['ok'])
+      expect(overflows).toHaveLength(1)
+      p.dispose()
+    })
+
+    it('does not count a completed frame against the partial-frame cap', () => {
+      const t = new FakeTransport()
+      const overflows: unknown[] = []
+      const p = new StdioFramingProtocol(t, {
+        maxPendingFrameBytes: 4,
+        onOverflow: (info) => overflows.push(info),
+      })
+      const got: string[] = []
+      p.onMessage((m) => got.push(dec(m)))
+
+      t.feed('0123456789\n')
+      expect(got).toEqual(['0123456789'])
+      expect(overflows).toEqual([])
+      p.dispose()
+    })
   })
 })

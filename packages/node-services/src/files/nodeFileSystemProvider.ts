@@ -46,6 +46,12 @@ const DEFAULT_MAX_BINARY_BYTES = 1024 * 1024 * 1024
 /** Window over which an identical (op, path, code) read failure logs at most
  *  once. See {@link NodeFileSystemProvider._logReadFailure}. */
 const READ_FAILURE_LOG_WINDOW_MS = 60_000
+const MAX_SLOW_LIST_LOG_KEYS = 1024
+
+/** A directory read whose fs work blocks this long is logged so a renderer-side
+ *  `slow directory` warn (wall clock around the IPC round trip) can be split
+ *  into fs cost versus event-loop / IPC scheduling. */
+const SLOW_LIST_FS_MS = 200
 
 export interface NodeFileSystemProviderOptions {
   /** Moves a native path to the OS trash. Absent → `useTrash` fails loud. */
@@ -65,6 +71,7 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
   private readonly _maxBinaryBytes: number
   private readonly _loggedFailuresThisWindow = new Set<string>()
   private _failureLogWindowStart = 0
+  private readonly _slowListLoggedAt = new Map<string, number>()
   private _suppressedFailureLogs = 0
 
   constructor(options: NodeFileSystemProviderOptions = {}) {
@@ -88,6 +95,17 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
       `File too large to read: ${uri.fsPath} is ${(s.size / 1024 / 1024).toFixed(1)}MB (limit ${(maxBytes / 1024 / 1024).toFixed(0)}MB)`,
       'FileTooLarge',
     )
+  }
+
+  /** Once per path per window: a slow network share re-listed on every explorer
+   *  refresh would otherwise flood the main log the same way read failures did. */
+  private _shouldLogSlowList(fsPath: string): boolean {
+    const now = Date.now()
+    const last = this._slowListLoggedAt.get(fsPath)
+    if (last !== undefined && now - last < READ_FAILURE_LOG_WINDOW_MS) return false
+    if (this._slowListLoggedAt.size >= MAX_SLOW_LIST_LOG_KEYS) this._slowListLoggedAt.clear()
+    this._slowListLoggedAt.set(fsPath, now)
+    return true
   }
 
   /** ENOENT is a normal "not there" answer callers handle (e.g. probing an
@@ -265,6 +283,7 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
   }
 
   async list(uri: URI): Promise<IDirectoryEntry[]> {
+    const startedAt = performance.now()
     try {
       const dirents = await fs.readdir(uri.fsPath, { withFileTypes: true })
       const entries = await Promise.all(
@@ -293,7 +312,14 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
           }
         }),
       )
-      this._logger.debug(`list ${uri.fsPath} entries=${entries.length}`)
+      const fsMs = performance.now() - startedAt
+      if (fsMs >= SLOW_LIST_FS_MS && this._shouldLogSlowList(uri.fsPath)) {
+        this._logger.warn(
+          `slow fs list ${fsMs.toFixed(1)}ms entries=${entries.length} ${uri.fsPath}`,
+        )
+      } else {
+        this._logger.debug(`list ${uri.fsPath} entries=${entries.length}`)
+      }
       return entries
     } catch (err) {
       const mapped = mapError(err, 'list failed')

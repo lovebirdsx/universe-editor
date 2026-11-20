@@ -438,6 +438,11 @@ if (e2eEnabled) {
   app.commandLine.appendSwitch('disable-background-timer-throttling')
   app.commandLine.appendSwitch('disable-renderer-backgrounding')
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+  // E2E 不测渲染性能，而 GPU 进程在无 GPU 的 runner / 虚拟机上会反复崩溃：
+  // 崩溃被记成 error 日志 → ErrorLogAutoRevealContribution 自动打开 Output 面板
+  // 并抢走焦点，让正在驱动焦点的无关用例随机失败（smoke.viewSizes 键盘缩放）。
+  // 软件合成本来就是 Linux CI（Xvfb）的渲染路径，e2e 结果因此跨平台一致。
+  app.disableHardwareAcceleration()
 }
 
 /** Write to a stdio stream and wait for the bytes to flush before exiting. */

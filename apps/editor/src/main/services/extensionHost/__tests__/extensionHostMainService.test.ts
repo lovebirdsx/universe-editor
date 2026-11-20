@@ -365,3 +365,64 @@ describe('ExtensionHostMainService — window-scoped reclaim', () => {
     expect(remote.stops).toEqual([])
   })
 })
+
+describe('ExtensionHostMainService — window-scoped stdio routing', () => {
+  let svc: ExtensionHostMainService | undefined
+
+  afterEach(() => {
+    svc?.dispose()
+    svc = undefined
+  })
+
+  function makeTwoWindowService(procs: FakeProc[]): ExtensionHostMainService {
+    let i = 0
+    return new ExtensionHostMainService(
+      () => procs[i++] as unknown as ChildProcessWithoutNullStreams,
+      () => '/fake/entry.js',
+      () => '/fake/builtin',
+      () => '/fake/user',
+      () => ({ kind: 'tsls', cli: '/fake/cli.mjs', tsserver: '/fake/tsserver.js', version: '0' }),
+      () => [],
+      () => ({ port: undefined, brk: undefined }),
+      leakSafeLoggerService(),
+    )
+  }
+
+  function leakSafeLoggerService(): ConstructorParameters<typeof ExtensionHostMainService>[7] {
+    const logger = { debug() {}, info() {}, warn() {}, error() {}, dispose() {} }
+    return { createLogger: () => markAsSingleton(logger) } as unknown as ConstructorParameters<
+      typeof ExtensionHostMainService
+    >[7]
+  }
+
+  it('delivers a host’s stdio and exit only to the window that started it', async () => {
+    const procA = new FakeProc(9401)
+    const procB = new FakeProc(9402)
+    const realSvc = makeTwoWindowService([procA, procB])
+    svc = realSvc
+    const win1 = createWindowScopedExtensionHost(realSvc, 1)
+    const win2 = createWindowScopedExtensionHost(realSvc, 2)
+    const seen1: string[] = []
+    const seen2: string[] = []
+    const subs = [
+      win1.onStdout((c) => seen1.push(`out:${c.data}`)),
+      win1.onStderr((c) => seen1.push(`err:${c.data}`)),
+      win1.onExit((e) => seen1.push(`exit:${e.handle}`)),
+      win2.onStdout((c) => seen2.push(`out:${c.data}`)),
+      win2.onStderr((c) => seen2.push(`err:${c.data}`)),
+      win2.onExit((e) => seen2.push(`exit:${e.handle}`)),
+    ]
+
+    const { handle: a } = await win1.start()
+    const { handle: b } = await win2.start()
+    procA.stdout.emit('data', Buffer.from('a1'))
+    procB.stdout.emit('data', Buffer.from('b1'))
+    procA.emitStderr('[info] ea\n')
+    procA.emitExit(0, null)
+    procB.emitExit(0, null)
+
+    expect(seen1).toEqual(['out:a1', 'err:[info] ea\n', `exit:${a}`])
+    expect(seen2).toEqual(['out:b1', `exit:${b}`])
+    for (const s of subs) s.dispose()
+  })
+})

@@ -10,6 +10,7 @@
 export * from '@universe-editor/extension-manifest'
 export * from './expectedCommandFailure.js'
 export * from './rpc.js'
+export * from './boundedWriteQueue.js'
 export * from './stdioProtocol.js'
 export * from './bytes.js'
 export * from './webviewProtocol.js'

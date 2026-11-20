@@ -61,6 +61,8 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
 const PREWARM_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.next'])
 /** Bound the tsconfig / seed search so a huge tree can't stall prewarm. */
 const PREWARM_MAX_DIRS = 400
+/** Bound on tsconfigs collected for project attribution and prewarm targeting. */
+const PREWARM_MAX_TSCONFIGS = 1000
 /** Seed selection skips loose config files (eslint.config.js, vite.config.ts, …):
  *  they usually live outside any tsconfig's include, so tsserver builds an
  *  inferred project for them whose navto can't see the real workspace symbols. */
@@ -353,7 +355,10 @@ export function activate(context: ExtensionContext): void {
         return []
       }
     }
-    const allTsconfigs = await enumerateTsconfigs(root, readDir)
+    const allTsconfigs = await enumerateTsconfigs(async (include, exclude, maxResults) => {
+      const found = await workspace.findFiles(include, exclude, maxResults)
+      return found.map((uri) => workspace.asRelativePath(uri, false).replace(/\\/g, '/'))
+    })
     client.setProjects(allTsconfigs.map((rel) => `${root}/${rel}`))
     await prewarm(client, logger, allTsconfigs, readDir)
   })()
@@ -437,29 +442,31 @@ export function resolvePrewarmTargets(
   return chosen
 }
 
-/** Breadth-first enumeration of every `tsconfig*.json` under `root`, returning
- *  workspace-relative POSIX paths. Skips heavy dirs and is bounded so a large
- *  tree can't stall startup. */
-export async function enumerateTsconfigs(root: string, readDir: ReadDir): Promise<string[]> {
-  const found: string[] = []
-  const queue: string[] = [root]
-  let visited = 0
-  while (queue.length > 0 && visited < PREWARM_MAX_DIRS) {
-    const dir = queue.shift() as string
-    visited++
-    const entries = await readDir(dir)
-    for (const [name, type] of entries) {
-      const full = `${dir}/${name}`
-      if (type === FileType.File) {
-        if (/^tsconfig(\..+)?\.json$/i.test(name)) {
-          found.push(relative(root, full))
-        }
-      } else if (type === FileType.Directory && !PREWARM_SKIP_DIRS.has(name)) {
-        queue.push(full)
-      }
-    }
+/** Workspace-relative POSIX paths matching `include`, minus `exclude` (a findFiles adapter). */
+export type FindTsconfigFiles = (
+  include: string,
+  exclude: string,
+  maxResults: number,
+) => Promise<string[]>
+
+/** Every `tsconfig*.json` in the workspace, shallowest first. One pruned search rather than a
+ *  per-directory readDirectory walk: N windows each walking 400 dirs over RPC at startup queued
+ *  enough main-process IPC to stall explorer reads by hundreds of ms. */
+export async function enumerateTsconfigs(find: FindTsconfigFiles): Promise<string[]> {
+  let paths: string[]
+  try {
+    paths = await find(
+      '**/tsconfig*.json',
+      `**/{${[...PREWARM_SKIP_DIRS].join(',')}}/**`,
+      PREWARM_MAX_TSCONFIGS,
+    )
+  } catch {
+    return []
   }
-  return found
+  const depth = (p: string): number => p.split('/').length
+  return paths
+    .filter((p) => /^tsconfig(\..+)?\.json$/i.test(p.slice(p.lastIndexOf('/') + 1)))
+    .sort((a, b) => depth(a) - depth(b) || (a < b ? -1 : a > b ? 1 : 0))
 }
 
 /** Breadth-first hunt for the first real TS/JS source file under `startDir` (an
@@ -489,12 +496,6 @@ export async function findSeedFile(
     queue.push(...subdirs)
   }
   return undefined
-}
-
-/** Workspace-relative POSIX path of `full` under `root`. */
-function relative(root: string, full: string): string {
-  const prefix = `${root}/`
-  return full.startsWith(prefix) ? full.slice(prefix.length) : full
 }
 
 /** Lowercased extension incl. the dot, or '' when none. */

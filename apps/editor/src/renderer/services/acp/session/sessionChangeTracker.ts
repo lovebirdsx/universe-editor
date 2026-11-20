@@ -44,7 +44,15 @@ import { IMemoryPressureService } from '../../memory/memoryPressureService.js'
 import { MemoryPressureLevel } from '../../memory/memoryPressureLevels.js'
 import { reconstructBaseline, type DiffBatch, type DiffHunk } from './sessionDiffReconstruct.js'
 import {
+  SESSION_CHANGES_BASELINE_CHUNK_CHARS,
+  SESSION_CHANGES_ENTRY_GROUP_BYTES,
+  SESSION_CHANGES_MAX_ENTRIES_PER_CALL,
+  SESSION_CHANGES_MAX_INDEX_ENTRIES,
   ISessionChangesStoreService,
+  type SessionChangesBucketInfo,
+  type SessionChangesEntryRef,
+  type SessionChangesEntryWrite,
+  type SessionChangesIndexEntry,
   type SessionChangesShardMeta,
 } from '../../../../shared/ipc/sessionChangesStoreService.js'
 
@@ -315,11 +323,34 @@ interface PersistedShard {
 
 /** One session's pending store write. `rev` gates clearing on completion: a
  *  newer mutation replaces the revision, so an older completion cannot drop the
- *  newer state. `payload` is present only for a write retired with an old
- *  bucket, where the in-memory state it came from is already gone. */
+ *  newer state. `files` is present only for a write retired with an old bucket,
+ *  where the in-memory state it came from is already gone. */
 interface DirtyWrite {
   readonly rev: number
-  readonly payload?: PersistedShard
+  readonly files?: Map<string, FileRecord>
+}
+
+/** What was last known to be on disk for one file, keyed by path comparison key. */
+interface PersistedFileState {
+  readonly rev: number
+  /** Baseline reference (not just equality) so an unchanged pinned baseline is
+   *  never re-sent; `undefined` = no baseline, `null` = created. */
+  readonly baseline: string | null | undefined
+  /** Generation of the committed body; an unchanged file reuses it instead of
+   *  re-sending a body the index already points at. */
+  readonly gen: string
+  /** Generation of the committed baseline; present exactly when `baseline` is text. */
+  readonly baselineGen?: string
+}
+
+/** Seed for the persisted cache, installed only when a load is accepted. */
+interface PendingCacheSeed {
+  readonly label: string
+  readonly fingerprint: string
+  /** `hadErrors` (from the load that produced the seed) blocks same-bucket reuse:
+   *  a session skipped by a failed read must be retried, not frozen out. */
+  readonly sessions: Map<string, Map<string, PersistedFileState>>
+  readonly hadErrors: boolean
 }
 
 /** Canonicalize a file path for display (separators only — casing is preserved;
@@ -350,6 +381,69 @@ function changeBytes(change: SessionFileChange): number {
       : change.baseline.length + change.current.length
   return texts * 2
 }
+
+/** A manifest fingerprint: any window's write bumps a session's version (or
+ *  changes its byte count), so an unchanged fingerprint means the in-memory
+ *  state is still a faithful copy of the bucket. JSON of tuples, not string
+ *  concatenation, so ids/versions containing separators cannot collide. */
+function fingerprintOf(metas: readonly SessionChangesShardMeta[]): string {
+  return JSON.stringify(metas.map((m) => [m.sessionId, m.version, m.bytes]))
+}
+
+function indexEntryOf(
+  key: string,
+  rec: FileRecord,
+  gen: string,
+  baselineGen: string | undefined,
+): SessionChangesIndexEntry {
+  return {
+    key,
+    path: rec.path,
+    batchCount: rec.batchCount,
+    origin: rec.origin,
+    gen,
+    ...(rec.baseline !== undefined
+      ? { baseline: rec.baseline === null ? ('null' as const) : ('text' as const) }
+      : {}),
+    ...(baselineGen !== undefined ? { baselineGen } : {}),
+    ...(rec.baselineSource !== undefined ? { baselineSource: rec.baselineSource } : {}),
+    ...(rec.created ? { created: true } : {}),
+    ...(rec.ignored ? { ignored: true } : {}),
+  }
+}
+
+/** Group entries so one IPC call stays near `limit` serialized bytes and never
+ *  exceeds `maxCount` entries. A single entry larger than the byte limit is
+ *  sent alone (batches are already budgeted). */
+function groupByJsonSize<T>(items: readonly T[], limit: number, maxCount: number): T[][] {
+  const groups: T[][] = []
+  let current: T[] = []
+  let size = 0
+  for (const item of items) {
+    const bytes = jsonSize(item)
+    if (current.length > 0 && (size + bytes > limit || current.length >= maxCount)) {
+      groups.push(current)
+      current = []
+      size = 0
+    }
+    current.push(item)
+    size += bytes
+  }
+  if (current.length > 0) groups.push(current)
+  return groups
+}
+
+function splitBaseline(text: string): string[] {
+  if (text.length <= SESSION_CHANGES_BASELINE_CHUNK_CHARS) return [text]
+  const chunks: string[] = []
+  for (let i = 0; i < text.length; i += SESSION_CHANGES_BASELINE_CHUNK_CHARS) {
+    chunks.push(text.slice(i, i + SESSION_CHANGES_BASELINE_CHUNK_CHARS))
+  }
+  return chunks
+}
+
+/** How many file keys one `readEntries` call may ask for. */
+const SESSION_CHANGES_ENTRY_READ_BATCH = 16
 
 /** Strip the two full texts from a row, keeping it visible as a known-changed
  *  but non-comparable entry. Same shape `_buildChange` produces for a file too
@@ -395,6 +489,33 @@ export class SessionChangeTrackerService
    *  workspace's bucket. */
   private _bucket: string | undefined
 
+  /** Diagnostic label of the bound bucket (stable across handle churn). */
+  private _bucketLabel: string | undefined
+
+  /**
+   * What is known to be persisted, keyed by bucket label → session → file key.
+   * The v2 write path sends only files whose revision moved and only baselines
+   * whose reference changed, so this cache is what keeps a pinned multi-MB
+   * baseline off the wire on every subsequent edit. It is updated only after a
+   * session's index commit succeeds; a failed write leaves the session dirty and
+   * the cache untouched.
+   */
+  private readonly _persisted = new Map<string, Map<string, Map<string, PersistedFileState>>>()
+
+  /** Seed for {@link _persisted} from a load that has not been accepted yet. */
+  private _pendingCacheSeed: PendingCacheSeed | undefined
+
+  /** State + manifest fingerprint of the last accepted load, for same-bucket reuse. */
+  private _lastLoad:
+    | {
+        readonly label: string
+        readonly fingerprint: string
+        readonly state: TrackerState
+        /** A session was skipped because its read failed; reuse must retry it. */
+        readonly hadErrors: boolean
+      }
+    | undefined
+
   /** Sessions whose latest snapshot still has to reach the store. */
   private readonly _dirtyWrites = new Map<string, DirtyWrite>()
 
@@ -407,13 +528,31 @@ export class SessionChangeTrackerService
   private _dirtyRev = 0
 
   /**
+   * Monotonic revision assigned to every file record as it is created or
+   * mutated. Persistence compares snapshot revisions for equality, so these must
+   * be unique across loads: a reloaded record must never reuse a revision the
+   * previous load's cache still holds (that would silently skip its write).
+   */
+  private _revSeq = 0
+
+  /** Random prefix for body generations. Unique per instance (and thus across
+   *  restarts), so a new window can never reuse a generation a committed index
+   *  still points at; the counter alone would collide after a restart. */
+  private readonly _genPrefix = globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 8)
+  private _genSeq = 0
+
+  /**
    * Writes that belonged to a bucket the window switched away from. They are
    * retried against their own handle; they must never be replayed through the
    * newly bound bucket.
    */
   private readonly _retiredBuckets = new Map<
     string,
-    { writes: Map<string, DirtyWrite>; removals: Map<string, number> }
+    {
+      readonly label: string | undefined
+      writes: Map<string, DirtyWrite>
+      removals: Map<string, number>
+    }
   >()
 
   /** Set when a shard could not be read/parsed: the session is skipped, never
@@ -451,6 +590,10 @@ export class SessionChangeTrackerService
   maxCurrentBytes = MAX_CURRENT_BYTES
   maxLiveChangeBytes = MAX_LIVE_CHANGE_BYTES
   maxLiveChangeTotalBytes = MAX_LIVE_CHANGE_TOTAL_BYTES
+  /** Per-session index entry cap — overridable in tests. */
+  maxIndexEntries = SESSION_CHANGES_MAX_INDEX_ENTRIES
+  /** Serialized-byte budget for one entry group — overridable in tests. */
+  maxEntryGroupBytes = SESSION_CHANGES_ENTRY_GROUP_BYTES
 
   constructor(
     @IStorageService storage: IStorageService,
@@ -535,14 +678,6 @@ export class SessionChangeTrackerService
     }
   }
 
-  private _serializeSession(sessionId: string, files: Map<string, FileRecord>): PersistedShard {
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      sessionId,
-      files: [...files.values()].map((rec) => this._serializeFile(rec)),
-    }
-  }
-
   protected _serialize(state: TrackerState): PersistedShape {
     return {
       schemaVersion: SCHEMA_VERSION,
@@ -556,21 +691,26 @@ export class SessionChangeTrackerService
   // -- sharded persistence hooks --------------------------------------
 
   /**
-   * Load one session shard at a time from the bucket the store binds now.
+   * Load one session at a time from the bucket the store binds now.
    *
    * A read/parse failure is reported and the session is skipped — it is NOT
    * removed from the bucket and NOT treated as an empty session. Only sessions
    * this pass parsed successfully can be pruned by the size budgets.
+   *
+   * Same-bucket reloads (workspace scope events for the workspace we already
+   * loaded) compare the manifest fingerprint instead of re-reading every shard:
+   * the manifest version is bumped by any write, including another window's, so
+   * an unchanged fingerprint means the in-memory state is still current.
    */
   protected override async _loadFromStorage(
-    scope: StorageScope,
+    _scope: StorageScope,
   ): Promise<TrackerState | undefined> {
     const pending = { dirty: [] as string[], removed: [] as string[], pruned: false }
     this._pendingLoadMutations = pending
-    let bucket: string
+    this._pendingCacheSeed = undefined
+    let opened: SessionChangesBucketInfo
     try {
-      const opened = await this._changesStore.openBucket()
-      bucket = opened.handle
+      opened = await this._changesStore.openBucket()
       if (opened.importWarning !== undefined) {
         this._logger.warn(
           `session changes bucket ${opened.label}: ${opened.importWarning}; legacy data kept`,
@@ -582,54 +722,107 @@ export class SessionChangeTrackerService
       this._logger.warn(`failed to open session changes bucket: ${(err as Error).message}`)
       return undefined
     }
-    this._bucket = bucket
+    // A different bucket invalidates what we knew was persisted for the old one.
+    if (this._bucketLabel !== undefined && this._bucketLabel !== opened.label) {
+      this._persisted.delete(this._bucketLabel)
+      this._lastLoad = undefined
+    }
+    this._bucket = opened.handle
+    this._bucketLabel = opened.label
     this._loadHadErrors = false
 
     let metas: readonly SessionChangesShardMeta[]
     try {
-      metas = await this._changesStore.list(bucket)
+      metas = await this._changesStore.list(opened.handle)
     } catch (err) {
       this._logger.warn(`failed to list session change shards: ${(err as Error).message}`)
       this._loadHadErrors = true
       return undefined
     }
 
+    const fingerprint = fingerprintOf(metas)
+    const last = this._lastLoad
+    // A manifest without versions is the degraded `_scanShards` fallback: byte
+    // counts alone cannot prove another window did not rewrite a session, so
+    // never reuse state in that case.
+    const versioned = metas.every((meta) => typeof meta.version === 'number')
+    if (
+      versioned &&
+      last !== undefined &&
+      last.label === opened.label &&
+      last.fingerprint === fingerprint &&
+      // A session skipped by a failed read is absent from the cached state; reusing
+      // it would freeze that session out until some window happens to write.
+      !last.hadErrors
+    ) {
+      // The swap reset `_sessionBytes` via `_onStateReplaced(empty)`; the reused
+      // state is unchanged, so rebuild the per-session accounting from its records
+      // or the budgets, LRU eviction and `retainedBytes()` stay zeroed forever.
+      for (const [sessionId, files] of last.state) {
+        let bytes = 0
+        for (const rec of files.values()) bytes += recordBytes(rec)
+        this._sessionBytes.set(sessionId, bytes)
+      }
+      // Nothing was written since the state was loaded — reuse it. An empty seed
+      // still refreshes the fingerprint recorded for the next reload.
+      this._pendingCacheSeed = {
+        label: opened.label,
+        fingerprint,
+        sessions: new Map(),
+        hadErrors: false,
+      }
+      return last.state
+    }
+
+    // A full re-read makes the previous cache meaningless. Parsed records get
+    // fresh revisions, but sessions left out of the seed (merged pre-load edits,
+    // slimmed shards) must not inherit an old cache entry either.
+    this._persisted.delete(opened.label)
     this._sessionBytes.clear()
     const state: TrackerState = new Map()
+    const seed = new Map<string, Map<string, PersistedFileState>>()
     let total = 0
     let pruned = false
     for (const meta of metas) {
-      const read = await this._changesStore.read(bucket, meta.sessionId)
-      if (read.status !== 'ok') {
-        // Missing or unreadable: leave whatever is on disk alone. It stays
-        // invisible for this run rather than being deleted as "empty".
+      let read:
+        | {
+            files: Map<string, FileRecord>
+            bytes: number
+            v1: boolean
+            seed: Map<string, PersistedFileState>
+          }
+        | undefined
+      try {
+        read = await this._readSession(opened.handle, meta.sessionId)
+      } catch (err) {
         this._loadHadErrors = true
         this._logger.warn(
-          `skipping session change shard ${meta.sessionId}: ${
-            read.status === 'missing' ? 'missing file' : read.error
-          }`,
+          `skipping session change shard ${meta.sessionId}: ${(err as Error).message}`,
         )
         continue
       }
-      const parsed = this._parseShard(read.payload, meta.sessionId)
-      if (parsed === undefined) {
+      if (read === undefined) {
+        // Missing or unreadable: leave whatever is on disk alone. It stays
+        // invisible for this run rather than being deleted as "empty".
         this._loadHadErrors = true
-        this._logger.warn(`skipping session change shard ${meta.sessionId}: unrecognized payload`)
+        this._logger.warn(`skipping session change shard ${meta.sessionId}: unreadable`)
         continue
       }
-      const shrunk = this._shrinkSession(meta.sessionId, parsed.files, parsed.bytes)
+      const shrunk = this._shrinkSession(meta.sessionId, read.files, read.bytes)
       if (shrunk === 'drop') {
         pruned = true
         pending.removed.push(meta.sessionId)
         continue
       }
-      if (shrunk.slimmed) {
-        // The session body was slimmed in memory; the shard on disk still holds
-        // the dropped batches. `_state` has not been published yet, so this
+      if (shrunk.slimmed || read.v1) {
+        // The shard on disk still holds the dropped batches (or is still the
+        // legacy single blob). `_state` has not been published yet, so this
         // cannot use `_markDirty`'s published-state guard — but without a dirty
         // entry the follow-up write drains nothing and the old body survives.
         pruned = true
         pending.dirty.push(meta.sessionId)
+      } else {
+        seed.set(meta.sessionId, read.seed)
       }
       state.set(meta.sessionId, shrunk.files)
       this._sessionBytes.set(meta.sessionId, shrunk.bytes)
@@ -645,38 +838,155 @@ export class SessionChangeTrackerService
         'pruned session changes to fit the size budgets; slimmed shards will be written',
       )
     }
-    void scope
+    this._pendingCacheSeed = {
+      label: opened.label,
+      fingerprint,
+      sessions: seed,
+      hadErrors: this._loadHadErrors,
+    }
     return state
+  }
+
+  /** Read one session as either a v2 index + bodies or a legacy v1 payload. */
+  private async _readSession(
+    bucket: string,
+    sessionId: string,
+  ): Promise<
+    | {
+        files: Map<string, FileRecord>
+        bytes: number
+        v1: boolean
+        /** Committed generations per key; empty for v1 (nothing to reuse). */
+        seed: Map<string, PersistedFileState>
+      }
+    | undefined
+  > {
+    const read = await this._changesStore.read(bucket, sessionId)
+    if (read.status === 'missing') return undefined
+    if (read.status === 'error') {
+      this._logger.warn(`session change shard ${sessionId} is unreadable: ${read.error}`)
+      return undefined
+    }
+    if (read.format === 'v1') {
+      const parsed = this._parseShard(read.payload, sessionId)
+      return parsed === undefined
+        ? undefined
+        : { ...parsed, v1: true, seed: new Map<string, PersistedFileState>() }
+    }
+
+    const batches = new Map<string, readonly unknown[]>()
+    const refs: SessionChangesEntryRef[] = read.files.map((file) => ({
+      key: file.key,
+      gen: file.gen,
+    }))
+    for (let i = 0; i < refs.length; i += SESSION_CHANGES_ENTRY_READ_BATCH) {
+      const chunk = refs.slice(i, i + SESSION_CHANGES_ENTRY_READ_BATCH)
+      const entries = await this._changesStore.readEntries(bucket, sessionId, chunk)
+      if (entries.status !== 'ok') {
+        this._logger.warn(
+          `session change shard ${sessionId} has unreadable entries: ${
+            entries.status === 'missing' ? 'missing file' : entries.error
+          }`,
+        )
+        return undefined
+      }
+      for (const entry of entries.entries) batches.set(entry.key, entry.batches)
+    }
+
+    const persisted: PersistedFile[] = []
+    for (const meta of read.files) {
+      let baseline: string | null | undefined
+      if (meta.baseline === 'text') {
+        baseline = await this._readBaseline(bucket, sessionId, meta.key, meta.baselineGen!)
+        if (baseline === undefined) return undefined
+      } else if (meta.baseline === 'null') {
+        baseline = null
+      }
+      persisted.push({
+        path: meta.path,
+        batches: (batches.get(meta.key) ?? []) as DiffBatch[],
+        batchCount: meta.batchCount,
+        origin: meta.origin,
+        ...(baseline !== undefined ? { baseline } : {}),
+        ...(meta.baselineSource !== undefined ? { baselineSource: meta.baselineSource } : {}),
+        ...(meta.created ? { created: true } : {}),
+        ...(meta.ignored ? { ignored: true } : {}),
+      })
+    }
+    const parsed = this._parseSession({ sessionId, files: persisted })
+    if (parsed === undefined) return undefined
+    const seed = new Map<string, PersistedFileState>()
+    for (const meta of read.files) {
+      const rec = parsed.files.get(meta.key)
+      if (rec === undefined) continue
+      seed.set(meta.key, {
+        rev: rec.rev,
+        baseline: rec.baseline,
+        gen: meta.gen,
+        ...(meta.baselineGen !== undefined ? { baselineGen: meta.baselineGen } : {}),
+      })
+    }
+    return { files: parsed.files, bytes: parsed.bytes, v1: false, seed }
+  }
+
+  /** Read a pinned baseline chunk by chunk so no single inbound frame is large. */
+  private async _readBaseline(
+    bucket: string,
+    sessionId: string,
+    key: string,
+    gen: string,
+  ): Promise<string | undefined> {
+    const first = await this._changesStore.readBaseline(bucket, sessionId, key, gen, 0)
+    if (first.status !== 'ok') {
+      this._logger.warn(
+        `session change baseline ${sessionId}/${key} is unreadable: ${
+          first.status === 'missing' ? 'missing file' : first.error
+        }`,
+      )
+      return undefined
+    }
+    if (first.count <= 1) return first.text
+    const parts = [first.text]
+    for (let i = 1; i < first.count; i++) {
+      const chunk = await this._changesStore.readBaseline(bucket, sessionId, key, gen, i)
+      if (chunk.status !== 'ok') {
+        this._logger.warn(`session change baseline ${sessionId}/${key} chunk ${i} is unreadable`)
+        return undefined
+      }
+      parts.push(chunk.text)
+    }
+    return parts.join('')
   }
 
   protected override async _persistToStorage(): Promise<void> {
     // Retired buckets first: they belong to a workspace the window already left
     // and must never be replayed through the current handle.
     await this._drainRetiredBuckets()
-    if (this._bucket !== undefined) await this._drainBucket(this._bucket)
+    if (this._bucket !== undefined) await this._drainBucket(this._bucket, this._bucketLabel)
   }
 
   protected override async _onBeforeScopeChange(): Promise<void> {
     const bucket = this._bucket
+    const label = this._bucketLabel
     if (bucket !== undefined) {
-      await this._drainBucket(bucket)
+      await this._drainBucket(bucket, label)
       if (this._dirtyWrites.size > 0 || this._dirtyRemovals.size > 0) {
-        // The old write failed. Snapshot its payload and pin it to the old
-        // handle so the next scope's writes cannot carry it into the new bucket.
+        // The old write failed. Snapshot the records (Map references, not a
+        // serialization) and pin them to the old handle so the next scope's
+        // writes cannot carry them into the new bucket. A handle reused after
+        // switching back may already be retired; merge by revision so the
+        // older snapshot's writes are not dropped.
         const writes = new Map<string, DirtyWrite>()
         for (const [sessionId, entry] of this._dirtyWrites) {
-          const files = this._state.get(sessionId)
-          writes.set(sessionId, {
-            rev: entry.rev,
-            ...(files !== undefined
-              ? { payload: entry.payload ?? this._serializeSession(sessionId, files) }
-              : {}),
-          })
+          const files = this._combineFiles(entry.files, this._state.get(sessionId))
+          writes.set(sessionId, { rev: entry.rev, ...(files !== undefined ? { files } : {}) })
         }
-        this._retiredBuckets.set(bucket, {
-          writes,
-          removals: new Map(this._dirtyRemovals),
-        })
+        let retired = this._retiredBuckets.get(bucket)
+        if (retired === undefined) {
+          retired = { label, writes: new Map(), removals: new Map() }
+          this._retiredBuckets.set(bucket, retired)
+        }
+        this._mergeDirty(retired.writes, retired.removals, writes, this._dirtyRemovals)
       } else {
         // Everything landed; nothing needs this handle anymore, so let main
         // evict the bucket's cached bodies instead of keeping every visited
@@ -716,6 +1026,25 @@ export class SessionChangeTrackerService
       for (const sessionId of pending.removed) this._markRemoved(sessionId)
       if (pending.pruned) this._prunedOnLoad = true
     }
+    // Seed the incremental-write cache only after the load is accepted. Sessions
+    // that were merged with pre-load edits (or pruned) are left out so their
+    // next write re-sends every entry instead of trusting a stale cache.
+    const seed = this._pendingCacheSeed
+    this._pendingCacheSeed = undefined
+    if (seed !== undefined) {
+      const bySession = this._persistedFor(seed.label)
+      for (const [sessionId, files] of seed.sessions) {
+        if (current.has(sessionId)) continue
+        if (pending?.removed.includes(sessionId) === true) continue
+        bySession.set(sessionId, files)
+      }
+      this._lastLoad = {
+        label: seed.label,
+        fingerprint: seed.fingerprint,
+        state: loaded,
+        hadErrors: seed.hadErrors,
+      }
+    }
     if (current.size === 0) return loaded
     for (const [sessionId, incoming] of current) {
       const existing = loaded.get(sessionId)
@@ -747,7 +1076,7 @@ export class SessionChangeTrackerService
               prev.batchCount++
             }
           }
-          prev.rev++
+          prev.rev = ++this._revSeq
           delete prev.lastBuilt
         }
         // The in-memory session is the most recently active one.
@@ -785,13 +1114,19 @@ export class SessionChangeTrackerService
     for (const f of session.files) {
       if (!f || typeof f !== 'object') continue
       const pf = f as PersistedFile
+      // A corrupt shard must cost its bad entries, not the whole bucket load.
+      // `path` is used as a map key, and `baseline` flows into diff texts.
+      if (typeof pf.path !== 'string' || pf.path.length === 0) continue
+      if (pf.baseline !== undefined && pf.baseline !== null && typeof pf.baseline !== 'string') {
+        continue
+      }
       const batches = Array.isArray(pf.batches) ? [...pf.batches] : []
       const rec: FileRecord = {
         path: pf.path,
         batches,
         batchCount: typeof pf.batchCount === 'number' ? pf.batchCount : batches.length,
         origin: pf.origin === 'watched' ? 'watched' : 'agent',
-        rev: 0,
+        rev: ++this._revSeq,
         ...(pf.baseline !== undefined ? { baseline: pf.baseline } : {}),
         ...(pf.baselineSource === 'reported' || pf.baselineSource === 'git'
           ? { baselineSource: pf.baselineSource }
@@ -1092,6 +1427,7 @@ export class SessionChangeTrackerService
     if (!this._state.delete(sessionId)) return
     this._sessionBytes.delete(sessionId)
     this._liveChangeBytes.delete(sessionId)
+    this._dropSessionCache(this._bucketLabel, sessionId)
     this._markRemoved(sessionId)
     this._scheduleWrite()
     this._observables.get(sessionId)?.set([], undefined)
@@ -1175,8 +1511,8 @@ export class SessionChangeTrackerService
     this._dirtyRemovals.set(sessionId, this._dirtyRev)
   }
 
-  private async _drainBucket(bucket: string): Promise<void> {
-    await this._drainEntries(bucket, this._dirtyWrites, this._dirtyRemovals)
+  private async _drainBucket(bucket: string, label: string | undefined): Promise<void> {
+    await this._drainEntries(bucket, label, this._dirtyWrites, this._dirtyRemovals)
   }
 
   /**
@@ -1187,6 +1523,7 @@ export class SessionChangeTrackerService
    */
   private async _drainEntries(
     bucket: string,
+    label: string | undefined,
     writes: Map<string, DirtyWrite>,
     removals: Map<string, number>,
   ): Promise<void> {
@@ -1201,41 +1538,254 @@ export class SessionChangeTrackerService
         continue
       }
       if (removals.get(sessionId) === rev) removals.delete(sessionId)
+      this._dropSessionCache(label, sessionId)
       await this.yieldBetweenPersists()
     }
     for (const [sessionId, entry] of [...writes]) {
       // Superseded by a newer mutation while this drain was running.
       if (writes.get(sessionId) !== entry) continue
-      const files = this._state.get(sessionId)
-      const payload =
-        entry.payload ??
-        (files === undefined ? undefined : this._serializeSession(sessionId, files))
-      if (payload === undefined) continue
-      let ok = false
-      try {
-        const result = await this._changesStore.write(bucket, sessionId, payload)
-        ok = result.ok
-        if (!result.ok) {
-          this._logger.warn(`failed to persist session change shard ${sessionId}: ${result.error}`)
-        }
-      } catch (err) {
-        this._logger.warn(
-          `failed to persist session change shard ${sessionId}: ${(err as Error).message}`,
-        )
-      }
+      // A retired snapshot may carry files the reloaded live state no longer
+      // has; the live record wins where both exist.
+      const files = this._combineFiles(entry.files, this._state.get(sessionId))
+      if (files === undefined) continue
+      const ok = await this._writeSession(bucket, label, sessionId, files)
       if (ok && writes.get(sessionId) === entry) writes.delete(sessionId)
       await this.yieldBetweenPersists()
     }
   }
 
-  private async _drainRetiredBuckets(): Promise<void> {
-    for (const [bucket, entries] of [...this._retiredBuckets]) {
-      await this._drainEntries(bucket, entries.writes, entries.removals)
-      if (entries.writes.size === 0 && entries.removals.size === 0) {
-        this._retiredBuckets.delete(bucket)
-        await this._closeBucket(bucket)
+  /** A fresh body generation: instance-random prefix + monotonic base36 counter. */
+  private _nextGen(): string {
+    return `${this._genPrefix}${(++this._genSeq).toString(36)}`
+  }
+
+  /**
+   * Write one session: only the entries whose revision moved, only baselines
+   * whose reference changed, then the index. The cache is updated only after
+   * the commit succeeds, so a failed write is retried in full next time.
+   */
+  private async _writeSession(
+    bucket: string,
+    label: string | undefined,
+    sessionId: string,
+    files: Map<string, FileRecord>,
+  ): Promise<boolean> {
+    const cache = label !== undefined ? this._persisted.get(label)?.get(sessionId) : undefined
+    // The index is one IPC frame. Above the shared cap, drop the first-touched
+    // files (map insertion order — records are appended on first sight and never
+    // reordered) instead of sending a write main would reject forever. A session
+    // with six figures of changed files is already far outside any useful rewind
+    // history.
+    if (files.size > this.maxIndexEntries) {
+      let drop = files.size - this.maxIndexEntries
+      this._logger.warn(
+        `dropping ${drop} first-touched tracked file(s) for session ${sessionId} — index limit ${this.maxIndexEntries}`,
+      )
+      for (const key of files.keys()) {
+        if (drop <= 0) break
+        files.delete(key)
+        drop--
+      }
+      // The dropped records were counted in `_sessionBytes`; leaving them there
+      // would keep the global budget over-reporting (and evicting live sessions).
+      // A retired snapshot is not the live map and has no such account.
+      if (this._state.get(sessionId) === files) {
+        let bytes = 0
+        for (const rec of files.values()) bytes += recordBytes(rec)
+        this._sessionBytes.set(sessionId, bytes)
+      }
+      this._requestRecompute(sessionId)
+    }
+    const index: SessionChangesIndexEntry[] = []
+    const changed: SessionChangesEntryWrite[] = []
+    const baselines: Array<{ readonly key: string; readonly gen: string; readonly text: string }> =
+      []
+    // Snapshot exactly what this write sends. A `record()` landing while a
+    // sub-call is on the wire bumps `rev`; the cache must then not be seeded
+    // with the newer record, or the follow-up write would believe it is persisted.
+    const snapshot = new Map<string, PersistedFileState>()
+    for (const [key, rec] of files) {
+      const cached = cache?.get(key)
+      const bodyChanged = cached === undefined || cached.rev !== rec.rev
+      const gen = bodyChanged ? this._nextGen() : cached.gen
+      const baselineChanged =
+        typeof rec.baseline === 'string' &&
+        (cached === undefined ||
+          cached.baseline !== rec.baseline ||
+          cached.baselineGen === undefined)
+      const baselineGen =
+        typeof rec.baseline === 'string'
+          ? baselineChanged
+            ? this._nextGen()
+            : cached!.baselineGen!
+          : undefined
+      snapshot.set(key, {
+        rev: rec.rev,
+        baseline: rec.baseline,
+        gen,
+        ...(baselineGen !== undefined ? { baselineGen } : {}),
+      })
+      index.push(indexEntryOf(key, rec, gen, baselineGen))
+      if (bodyChanged) {
+        changed.push({ key, gen, batches: rec.batches })
+      }
+      if (baselineChanged) {
+        baselines.push({ key, gen: baselineGen!, text: rec.baseline as string })
       }
     }
+
+    for (const group of groupByJsonSize(
+      changed,
+      this.maxEntryGroupBytes,
+      SESSION_CHANGES_MAX_ENTRIES_PER_CALL,
+    )) {
+      try {
+        const result = await this._changesStore.writeEntries(bucket, sessionId, group)
+        if (!result.ok) {
+          this._logger.warn(
+            `failed to persist session change entries ${sessionId}: ${result.error}`,
+          )
+          return false
+        }
+      } catch (err) {
+        this._logger.warn(
+          `failed to persist session change entries ${sessionId}: ${(err as Error).message}`,
+        )
+        return false
+      }
+    }
+
+    for (const baseline of baselines) {
+      const chunks = splitBaseline(baseline.text)
+      for (let i = 0; i < chunks.length; i++) {
+        try {
+          const result = await this._changesStore.writeBaseline(
+            bucket,
+            sessionId,
+            baseline.key,
+            baseline.gen,
+            {
+              index: i,
+              count: chunks.length,
+              text: chunks[i]!,
+            },
+          )
+          if (!result.ok) {
+            this._logger.warn(
+              `failed to persist session change baseline ${sessionId}/${baseline.key}: ${result.error}`,
+            )
+            return false
+          }
+        } catch (err) {
+          this._logger.warn(
+            `failed to persist session change baseline ${sessionId}/${baseline.key}: ${(err as Error).message}`,
+          )
+          return false
+        }
+      }
+    }
+
+    try {
+      const result = await this._changesStore.commitIndex(bucket, sessionId, index)
+      if (!result.ok) {
+        this._logger.warn(`failed to commit session change index ${sessionId}: ${result.error}`)
+        return false
+      }
+    } catch (err) {
+      this._logger.warn(
+        `failed to commit session change index ${sessionId}: ${(err as Error).message}`,
+      )
+      return false
+    }
+
+    if (label !== undefined) {
+      let stillCurrent = files.size === snapshot.size
+      if (stillCurrent) {
+        for (const [key, written] of snapshot) {
+          const rec = files.get(key)
+          if (rec === undefined || rec.rev !== written.rev || rec.baseline !== written.baseline) {
+            stillCurrent = false
+            break
+          }
+        }
+      }
+      // A record landed while this write was on the wire: leave the cache
+      // untouched so the follow-up write re-sends the superseded entries.
+      if (stillCurrent) this._persistedFor(label).set(sessionId, snapshot)
+    }
+    return true
+  }
+
+  private _persistedFor(label: string): Map<string, Map<string, PersistedFileState>> {
+    let bySession = this._persisted.get(label)
+    if (!bySession) {
+      bySession = new Map()
+      this._persisted.set(label, bySession)
+    }
+    return bySession
+  }
+
+  private _dropSessionCache(label: string | undefined, sessionId: string): void {
+    if (label === undefined) return
+    this._persisted.get(label)?.delete(sessionId)
+  }
+
+  private async _drainRetiredBuckets(): Promise<void> {
+    for (const [bucket, entries] of [...this._retiredBuckets]) {
+      await this._drainEntries(bucket, entries.label, entries.writes, entries.removals)
+      if (entries.writes.size > 0 || entries.removals.size > 0) {
+        // Still failing; if this handle is also the bucket we are writing
+        // through now, the next pass must retry these through it rather than
+        // keep a retired copy that can never drain.
+        if (bucket === this._bucket) {
+          this._retiredBuckets.delete(bucket)
+          this._mergeDirty(this._dirtyWrites, this._dirtyRemovals, entries.writes, entries.removals)
+        }
+        continue
+      }
+      this._retiredBuckets.delete(bucket)
+      // Re-opening the workspace reuses its handle. Closing it here would drop
+      // the handle the tracker is actively writing through.
+      if (bucket !== this._bucket) await this._closeBucket(bucket)
+    }
+  }
+
+  /** Rev-aware merge of a retired snapshot into another dirty map pair. */
+  private _mergeDirty(
+    targetWrites: Map<string, DirtyWrite>,
+    targetRemovals: Map<string, number>,
+    writes: ReadonlyMap<string, DirtyWrite>,
+    removals: ReadonlyMap<string, number>,
+  ): void {
+    for (const [sessionId, rev] of removals) {
+      const write = targetWrites.get(sessionId)
+      if (write !== undefined && write.rev <= rev) targetWrites.delete(sessionId)
+      const current = targetRemovals.get(sessionId)
+      if (current === undefined || rev > current) targetRemovals.set(sessionId, rev)
+    }
+    for (const [sessionId, entry] of writes) {
+      const removal = targetRemovals.get(sessionId)
+      if (removal !== undefined && removal > entry.rev) continue
+      if (removal !== undefined) targetRemovals.delete(sessionId)
+      const current = targetWrites.get(sessionId)
+      // A retired snapshot and the live state can each hold files the other
+      // does not (the snapshot predates this bucket's reload); the newer side
+      // wins per path, never the whole map.
+      const files = this._combineFiles(current?.files, entry.files)
+      const rev = Math.max(entry.rev, current?.rev ?? -1)
+      targetWrites.set(sessionId, { rev, ...(files !== undefined ? { files } : {}) })
+    }
+  }
+
+  private _combineFiles(
+    older: Map<string, FileRecord> | undefined,
+    newer: Map<string, FileRecord> | undefined,
+  ): Map<string, FileRecord> | undefined {
+    if (older === undefined) return newer
+    if (newer === undefined || newer === older) return older
+    const merged = new Map(older)
+    for (const [key, rec] of newer) merged.set(key, rec)
+    return merged
   }
 
   /** Best-effort: the store releases the bucket's cached bodies on last close. */
@@ -1267,6 +1817,7 @@ export class SessionChangeTrackerService
       this._state.delete(oldest)
       this._sessionBytes.delete(oldest)
       this._liveChangeBytes.delete(oldest)
+      this._dropSessionCache(this._bucketLabel, oldest)
       this._markRemoved(oldest)
       this._observables.get(oldest)?.set([], undefined)
     }
@@ -1465,7 +2016,7 @@ export class SessionChangeTrackerService
 
   /** Force the next build of this record's row from scratch. */
   private _invalidateBuilt(rec: FileRecord): void {
-    rec.rev++
+    rec.rev = ++this._revSeq
     delete rec.lastBuilt
   }
 

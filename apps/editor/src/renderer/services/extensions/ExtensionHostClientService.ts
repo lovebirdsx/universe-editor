@@ -197,6 +197,8 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   private readonly _unhandledRejections: string[] = []
   /** Handles we asked to stop (planned restarts) — their exit must not trigger crash handling. */
   private readonly _stopping = new Set<string>()
+  /** Handles whose RPC transport failed; their (clean) exit is still a crash. */
+  private readonly _transportFailed = new Set<string>()
   private readonly _restartState: RestartState = { windowStart: 0, count: 0 }
   /** Signature of the disabled set the host was last launched with, to skip no-op restarts. */
   private _launchedDisabledIds = ''
@@ -401,6 +403,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       onActivationError: (error) => this._onActivationErrorReported(error),
       onUnhandledRejection: (report) => this._onUnhandledRejectionReported(report),
       onUnexpectedError: (error) => this._onUnexpectedErrorReported(error),
+      onTransportFatal: () => this._transportFailed.add(handle),
     }
 
     const connection = this._register(
@@ -611,14 +614,21 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   // --- Lifecycle: crash detection + restart -------------------------------
 
   private _onHostExit(evt: ExtHostExitEvent): void {
+    // Clear the bookkeeping before the early return: `_doRestart` stops the host
+    // fire-and-forget from `_onHostExit`'s perspective and tears the connection
+    // down, so the exit event can land after `_byHandle` no longer has the handle.
+    // Leaving these behind leaks the handle (and would swallow a later crash if
+    // the OS reuses it).
+    const planned = this._stopping.delete(evt.handle)
+    const transportFailed = this._transportFailed.delete(evt.handle)
     const conn = this._byHandle.get(evt.handle)
     if (!conn) return
     this._teardownConnection(conn)
 
-    const planned = this._stopping.delete(evt.handle)
     // A remote tunnel closed by main (daemon generation change) has no exit
     // code, so the null code must not be read as a clean exit.
-    const abnormal = evt.reason === 'connection-lost' || (evt.code !== 0 && evt.code !== null)
+    const abnormal =
+      transportFailed || evt.reason === 'connection-lost' || (evt.code !== 0 && evt.code !== null)
     this._logger.warn(
       `extension host exited handle=${evt.handle} code=${evt.code} signal=${evt.signal}` +
         (evt.error ? ` error=${evt.error}` : '') +

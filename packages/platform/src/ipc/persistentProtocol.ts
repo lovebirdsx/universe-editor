@@ -87,6 +87,12 @@ export class PersistentProtocol implements IMessagePassingProtocol {
   private _didSendDisconnect = false
 
   private _outgoingUnackMsg: ProtocolMessage[] = []
+  private _outgoingUnackBytes = 0
+  private _unackWaiters: Array<{
+    limit: number
+    resolve: () => void
+    reject: (err: Error) => void
+  }> = []
   private _outgoingMsgId = 0
 
   private _incomingMsgId = 0
@@ -142,11 +148,18 @@ export class PersistentProtocol implements IMessagePassingProtocol {
   }
 
   public getUnacknowledgedBytes(): number {
-    let total = 0
-    for (const msg of this._outgoingUnackMsg) {
-      total += msg.data.byteLength
-    }
-    return total
+    return this._outgoingUnackBytes
+  }
+
+  /**
+   * Resolves once fewer than `limit` sent bytes await the peer's ack — the only backpressure a
+   * reliable, replaying protocol can offer, since the socket accepting a write proves nothing
+   * about delivery. Rejects if the protocol is disposed first.
+   */
+  public whenUnacknowledgedBelow(limit: number): Promise<void> {
+    if (this._isDisposed) return Promise.reject(new Error('PersistentProtocol disposed'))
+    if (this._outgoingUnackBytes < limit) return Promise.resolve()
+    return new Promise((resolve, reject) => this._unackWaiters.push({ limit, resolve, reject }))
   }
 
   public send(data: Uint8Array): void {
@@ -154,6 +167,7 @@ export class PersistentProtocol implements IMessagePassingProtocol {
     this._incomingAckId = this._incomingMsgId
     const msg = new ProtocolMessage(ProtocolMessageType.Regular, myId, this._incomingAckId, data)
     this._outgoingUnackMsg.push(msg)
+    this._outgoingUnackBytes += data.byteLength
     if (!this._isReconnecting) {
       this._socketWriter.write(msg)
     }
@@ -220,6 +234,10 @@ export class PersistentProtocol implements IMessagePassingProtocol {
       this._keepAliveInterval = null
     }
 
+    const waiters = this._unackWaiters
+    this._unackWaiters = []
+    for (const w of waiters) w.reject(new Error('PersistentProtocol disposed'))
+
     this._onDidDispose.fire()
     this._socketDisposables.dispose()
     this._onControlMessage.dispose()
@@ -273,10 +291,18 @@ export class PersistentProtocol implements IMessagePassingProtocol {
       const first = this._outgoingUnackMsg[0]
       if (first && first.id <= ack) {
         this._outgoingUnackMsg.shift()
+        this._outgoingUnackBytes -= first.data.byteLength
       } else {
         break
       }
     }
+    if (this._unackWaiters.length === 0) return
+    const still: typeof this._unackWaiters = []
+    for (const w of this._unackWaiters) {
+      if (this._outgoingUnackBytes < w.limit) w.resolve()
+      else still.push(w)
+    }
+    this._unackWaiters = still
   }
 
   private _sendAckCheck(): void {

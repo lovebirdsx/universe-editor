@@ -24,6 +24,11 @@ import { performClientHandshake, type RemoteHandshakeError } from './remoteHands
 
 export interface IRemoteExtensionHostTunnel {
   send(data: Uint8Array): void
+  /**
+   * Resolves once the bytes still awaiting the daemon's ack fall under the send window, so a
+   * caller can stop producing while the link (or a reconnect) lags; rejects once the tunnel dies.
+   */
+  whenSendWindowOpen(): Promise<void>
   readonly onData: Event<Uint8Array>
   readonly onExit: Event<{ code: number | null }>
   readonly onDidClose: Event<void>
@@ -37,6 +42,9 @@ export interface IRemoteExtensionHostTunnel {
   dropSocketForTesting(): void
   dispose(): void
 }
+
+/** Unacked bytes past which writers wait; well under the server's 64MiB disconnect budget. */
+export const SEND_WINDOW_BYTES = 8 * 1024 * 1024
 
 const RECONNECT_BACKOFF_MS = [250, 500, 1000, 2000, 2000] as const
 
@@ -109,6 +117,13 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
 
   send(data: Uint8Array): void {
     this._protocol?.send(data)
+  }
+
+  whenSendWindowOpen(): Promise<void> {
+    if (!this._protocol || this._disposed) {
+      return Promise.reject(new Error(`${this._opts.label}: closed`))
+    }
+    return this._protocol.whenUnacknowledgedBelow(SEND_WINDOW_BYTES)
   }
 
   closeForConnectionLoss(): void {

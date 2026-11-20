@@ -4,8 +4,8 @@
  *  rejected with FileTooLarge before the buffer is ever allocated.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { promises as fs, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 import { FileSystemError, URI } from '@universe-editor/platform'
 import { NodeFileSystemProvider } from '../nodeFileSystemProvider.js'
@@ -189,5 +189,80 @@ describe('NodeFileSystemProvider read-failure log throttling', () => {
     }
     expect(warn).toHaveLength(0)
     expect(debug.filter((l) => l.includes('code=ENOENT'))).toHaveLength(3)
+  })
+})
+
+describe('NodeFileSystemProvider slow list attribution', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = mkTempDir('universe-editor-nfsp-slow-list-')
+    await fs.writeFile(join(dir, 'a.txt'), 'a', 'utf8')
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    removeDirWithRetry(dir)
+  })
+
+  /** A warn here is the main-side fs half of the renderer's `slow directory`
+   *  warning, whose wall clock also covers IPC and event-loop scheduling. */
+  function makeLogger(): { warn: string[]; debug: string[]; logger: never } {
+    const warn: string[] = []
+    const debug: string[] = []
+    return {
+      warn,
+      debug,
+      logger: {
+        trace: () => {},
+        debug: (m: string) => debug.push(m),
+        info: () => {},
+        warn: (m: string) => warn.push(m),
+        error: () => {},
+      } as never,
+    }
+  }
+
+  /** Stretch `readdir` past the threshold; a slow disk is not reproducible in a unit test. */
+  function delayReaddir(ms: number): void {
+    const realReaddir = fs.readdir.bind(fs) as (
+      path: string,
+      options: { withFileTypes: true },
+    ) => Promise<Dirent[]>
+    vi.spyOn(fs, 'readdir').mockImplementation((async (
+      path: string,
+      options: { withFileTypes: true },
+    ) => {
+      await new Promise((resolve) => setTimeout(resolve, ms))
+      return realReaddir(path, options)
+    }) as unknown as typeof fs.readdir)
+  }
+
+  it('warns with the fs elapsed time and entry count past the threshold', async () => {
+    delayReaddir(260)
+    const { warn, debug, logger } = makeLogger()
+    const provider = new NodeFileSystemProvider({ logger })
+    const entries = await provider.list(URI.file(dir))
+    expect(entries.map((e) => e.name)).toEqual(['a.txt'])
+    expect(warn).toHaveLength(1)
+    expect(warn[0]).toMatch(/^slow fs list \d+\.\d+ms entries=1 /)
+    expect(debug).toHaveLength(0)
+  })
+
+  it('warns about the same slow directory once per window', async () => {
+    delayReaddir(210)
+    const { warn, logger } = makeLogger()
+    const provider = new NodeFileSystemProvider({ logger })
+    await provider.list(URI.file(dir))
+    await provider.list(URI.file(dir))
+    expect(warn).toHaveLength(1)
+  })
+
+  it('keeps a normal directory read on the debug channel', async () => {
+    const { warn, debug, logger } = makeLogger()
+    const provider = new NodeFileSystemProvider({ logger })
+    await provider.list(URI.file(dir))
+    expect(warn).toHaveLength(0)
+    expect(debug).toHaveLength(1)
   })
 })

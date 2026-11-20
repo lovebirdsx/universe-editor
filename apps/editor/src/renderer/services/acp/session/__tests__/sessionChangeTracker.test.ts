@@ -25,6 +25,13 @@ import {
 import { SessionChangeTrackerService } from '../sessionChangeTracker.js'
 import type { SessionFileChange } from '../sessionChangeTracker.js'
 import type { DiffHunk } from '../sessionDiffReconstruct.js'
+import {
+  SESSION_CHANGES_BASELINE_CHUNK_CHARS,
+  SESSION_CHANGES_MAX_ENTRIES_PER_CALL,
+  type SessionChangesEntryRef,
+  type SessionChangesEntryWrite,
+  type SessionChangesIndexEntry,
+} from '../../../../../shared/ipc/sessionChangesStoreService.js'
 import { MemoryPressureService } from '../../../memory/memoryPressureService.js'
 import { MemoryPressureLevel } from '../../../memory/memoryPressureLevels.js'
 import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
@@ -72,30 +79,86 @@ class FakeWorkspaceService implements IWorkspaceService {
   async removeRecent(): Promise<void> {}
 }
 
+interface StoredV1 {
+  readonly kind: 'v1'
+  readonly payload: unknown
+}
+
+interface StoredV2 {
+  readonly kind: 'v2'
+  index: SessionChangesIndexEntry[]
+  files: Map<string, { readonly gen: string; readonly batches: readonly unknown[] }>
+  baselines: Map<string, { readonly gen: string; readonly text: string }>
+}
+
+type StoredSession = StoredV1 | StoredV2
+
 /**
- * In-memory stand-in for the main-process shard store. One `bucket` per scope
- * key (`w1`, `w2`, …), with a handle pinning the bucket it was opened on so a
- * workspace-switch test can prove a tail write stays on the old one.
+ * In-memory stand-in for the main-process v2 session store. One `bucket` per
+ * scope key (`w1`, `w2`, …), with a handle pinning the bucket it was opened on
+ * so a workspace-switch test can prove a tail write stays on the old one.
  */
 class FakeSessionChangesStore {
   declare readonly _serviceBrand: undefined
   scopeKey = 'w1'
   private handleCounter = 0
   readonly handles = new Map<string, string>()
-  readonly buckets = new Map<string, { order: string[]; shards: Map<string, unknown> }>()
-  readonly writes: { handle: string; scopeKey: string; sessionId: string; payload: unknown }[] = []
+  readonly buckets = new Map<
+    string,
+    {
+      order: string[]
+      sessions: Map<string, StoredSession>
+      versions: Map<string, number>
+    }
+  >()
+  /** `writeEntries` calls, in order. */
+  readonly writes: {
+    handle: string
+    scopeKey: string
+    sessionId: string
+    entries: readonly SessionChangesEntryWrite[]
+  }[] = []
+  readonly baselineWrites: {
+    handle: string
+    scopeKey: string
+    sessionId: string
+    key: string
+    text: string
+  }[] = []
+  readonly commits: {
+    handle: string
+    scopeKey: string
+    sessionId: string
+    files: readonly SessionChangesIndexEntry[]
+  }[] = []
   readonly removals: { handle: string; scopeKey: string; sessionId: string }[] = []
   readonly closedHandles: string[] = []
   /** When set, every write behaves as a rejected IPC call. */
   failWrites = false
-  /** When set, writes park until release. */
+  /** When set, `read` throws for these sessions (corrupt shard simulation). */
+  readonly throwOnRead = new Set<string>()
+  /** When set, `openBucket` reuses the still-open handle for the same scope. */
+  reuseHandles = false
+  /** When set, `list` omits the manifest version (degraded `_scanShards`). */
+  versionless = false
+  /** Number of `read` (index/v1) calls, for the same-bucket reload assertions. */
+  readCalls = 0
+  /** When set, the next write op parks until release. */
   private _writeGate: DeferredPromise<void> | undefined
   private _writeEntered: DeferredPromise<void> | undefined
+  /** When set, the next `list` call parks until release. */
+  private _listGate: DeferredPromise<void> | undefined
+  private _listEntered: DeferredPromise<void> | undefined
+  private readonly _baselineAssemblies = new Map<string, string[]>()
 
-  private _bucket(key: string): { order: string[]; shards: Map<string, unknown> } {
+  private _bucket(key: string): {
+    order: string[]
+    sessions: Map<string, StoredSession>
+    versions: Map<string, number>
+  } {
     let bucket = this.buckets.get(key)
     if (!bucket) {
-      bucket = { order: [], shards: new Map() }
+      bucket = { order: [], sessions: new Map(), versions: new Map() }
       this.buckets.set(key, bucket)
     }
     return bucket
@@ -103,7 +166,7 @@ class FakeSessionChangesStore {
 
   seed(scopeKey: string, sessionId: string, payload: unknown): void {
     const bucket = this._bucket(scopeKey)
-    bucket.shards.set(sessionId, payload)
+    bucket.sessions.set(sessionId, { kind: 'v1', payload })
     bucket.order.push(sessionId)
   }
 
@@ -111,21 +174,92 @@ class FakeSessionChangesStore {
     return [...this._bucket(scopeKey).order]
   }
 
-  holdNextWrite(): { entered: Promise<void>; release: () => void } {
-    this._writeGate = new DeferredPromise<void>()
-    this._writeEntered = new DeferredPromise<void>()
+  /** Materialize a session as `{ files: [{ path, batches }] }` for assertions. */
+  shard(
+    sessionId: string,
+    scopeKey = this.scopeKey,
+  ): { files: { path: string; batches: readonly unknown[] }[] } | undefined {
+    const stored = this._bucket(scopeKey).sessions.get(sessionId)
+    if (stored === undefined) return undefined
+    if (stored.kind === 'v1') {
+      const payload = stored.payload as { files?: { path: string; batches?: unknown[] }[] }
+      return {
+        files: (payload.files ?? []).map((file) => ({
+          path: file.path,
+          batches: file.batches ?? [],
+        })),
+      }
+    }
     return {
-      entered: this._writeEntered.p,
+      files: stored.index.map((entry) => ({
+        path: entry.path,
+        batches: stored.files.get(entry.key)?.batches ?? [],
+      })),
+    }
+  }
+
+  holdNextWrite(): { entered: Promise<void>; release: () => void } {
+    const gate = new DeferredPromise<void>()
+    const entered = new DeferredPromise<void>()
+    this._writeGate = gate
+    this._writeEntered = entered
+    return {
+      entered: entered.p,
       release: () => {
-        this._writeGate?.complete(undefined)
-        this._writeGate = undefined
+        gate.complete(undefined)
+        if (this._writeGate === gate) this._writeGate = undefined
       },
     }
+  }
+
+  /** Park the next `list` call so a reload can be held mid-load. */
+  holdNextList(): { entered: Promise<void>; release: () => void } {
+    const gate = new DeferredPromise<void>()
+    const entered = new DeferredPromise<void>()
+    this._listGate = gate
+    this._listEntered = entered
+    return {
+      entered: entered.p,
+      release: () => {
+        gate.complete(undefined)
+        if (this._listGate === gate) this._listGate = undefined
+      },
+    }
+  }
+
+  private async _enterWrite(): Promise<boolean> {
+    const gate = this._writeGate
+    if (gate !== undefined) {
+      this._writeGate = undefined
+      this._writeEntered?.complete(undefined)
+      await gate.p
+    }
+    return !this.failWrites
+  }
+
+  private _v2(scopeKey: string, sessionId: string): StoredV2 {
+    const bucket = this._bucket(scopeKey)
+    const existing = bucket.sessions.get(sessionId)
+    if (existing?.kind === 'v2') return existing
+    const next: StoredV2 = {
+      kind: 'v2',
+      index: [],
+      files: new Map(),
+      baselines: new Map(),
+    }
+    bucket.sessions.set(sessionId, next)
+    if (!bucket.order.includes(sessionId)) bucket.order.push(sessionId)
+    return next
   }
 
   async openBucket() {
     const key = this.scopeKey
     this._bucket(key)
+    if (this.reuseHandles) {
+      for (const [handle, scope] of this.handles) {
+        if (scope === key) return { handle, scope: StorageScope.WORKSPACE, label: key }
+      }
+    }
     const handle = `h${++this.handleCounter}`
     this.handles.set(handle, key)
     return { handle, scope: StorageScope.WORKSPACE, label: key }
@@ -138,31 +272,137 @@ class FakeSessionChangesStore {
   }
 
   async list(handle: string) {
+    const gate = this._listGate
+    if (gate !== undefined) {
+      this._listGate = undefined
+      this._listEntered?.complete(undefined)
+      await gate.p
+    }
     const bucket = this._bucket(this._key(handle))
     return bucket.order.map((sessionId) => ({
       sessionId,
-      bytes: JSON.stringify(bucket.shards.get(sessionId))?.length ?? 0,
+      bytes: JSON.stringify(bucket.sessions.get(sessionId))?.length ?? 0,
+      ...(this.versionless ? {} : { version: bucket.versions.get(sessionId) ?? 0 }),
     }))
   }
 
   async read(handle: string, sessionId: string) {
+    this.readCalls++
+    if (this.throwOnRead.has(sessionId)) throw new Error('simulated read failure')
     const bucket = this._bucket(this._key(handle))
-    if (!bucket.shards.has(sessionId)) return { status: 'missing' as const }
-    return { status: 'ok' as const, payload: bucket.shards.get(sessionId) }
+    const stored = bucket.sessions.get(sessionId)
+    if (stored === undefined) return { status: 'missing' as const }
+    if (stored.kind === 'v1') {
+      return { status: 'ok' as const, format: 'v1' as const, payload: stored.payload }
+    }
+    return {
+      status: 'ok' as const,
+      format: 'v2' as const,
+      schemaVersion: 2,
+      files: stored.index,
+    }
   }
 
-  async write(handle: string, sessionId: string, payload: unknown) {
-    const scopeKey = this._key(handle)
-    this.writes.push({ handle, scopeKey, sessionId, payload })
-    if (this._writeGate) {
-      this._writeEntered?.complete(undefined)
-      await this._writeGate.p
+  async readEntries(handle: string, sessionId: string, refs: readonly SessionChangesEntryRef[]) {
+    const bucket = this._bucket(this._key(handle))
+    const stored = bucket.sessions.get(sessionId)
+    if (stored === undefined || stored.kind !== 'v2') {
+      return { status: 'missing' as const }
     }
-    if (this.failWrites) return { ok: false as const, error: 'ipc down' }
+    const entries = []
+    for (const ref of refs) {
+      const body = stored.files.get(ref.key)
+      if (body === undefined || body.gen !== ref.gen) {
+        return { status: 'error' as const, error: `missing entry ${ref.key}` }
+      }
+      entries.push({ key: ref.key, batches: body.batches })
+    }
+    return { status: 'ok' as const, entries }
+  }
+
+  async readBaseline(
+    handle: string,
+    sessionId: string,
+    key: string,
+    gen: string,
+    chunkIndex: number,
+  ) {
+    const bucket = this._bucket(this._key(handle))
+    const stored = bucket.sessions.get(sessionId)
+    if (stored === undefined || stored.kind !== 'v2') return { status: 'missing' as const }
+    const storedBaseline = stored.baselines.get(key)
+    if (storedBaseline === undefined || storedBaseline.gen !== gen) {
+      return { status: 'missing' as const }
+    }
+    const text = storedBaseline.text
+    const count = Math.max(1, Math.ceil(text.length / SESSION_CHANGES_BASELINE_CHUNK_CHARS))
+    return {
+      status: 'ok' as const,
+      index: chunkIndex,
+      count,
+      text: text.slice(
+        chunkIndex * SESSION_CHANGES_BASELINE_CHUNK_CHARS,
+        (chunkIndex + 1) * SESSION_CHANGES_BASELINE_CHUNK_CHARS,
+      ),
+    }
+  }
+
+  async writeEntries(
+    handle: string,
+    sessionId: string,
+    entries: readonly SessionChangesEntryWrite[],
+  ) {
+    const scopeKey = this._key(handle)
+    this.writes.push({ handle, scopeKey, sessionId, entries })
+    if (!(await this._enterWrite())) return { ok: false as const, error: 'ipc down' }
+    const stored = this._v2(scopeKey, sessionId)
+    for (const entry of entries) {
+      stored.files.set(entry.key, { gen: entry.gen, batches: entry.batches })
+    }
+    return { ok: true as const }
+  }
+
+  async writeBaseline(
+    handle: string,
+    sessionId: string,
+    key: string,
+    gen: string,
+    chunk: { index: number; count: number; text: string },
+  ) {
+    const scopeKey = this._key(handle)
+    this.baselineWrites.push({ handle, scopeKey, sessionId, key, text: chunk.text })
+    if (!(await this._enterWrite())) return { ok: false as const, error: 'ipc down' }
+    const id = `${sessionId}/${key}/${gen}`
+    const stored = this._v2(scopeKey, sessionId)
+    if (chunk.index === 0) this._baselineAssemblies.set(id, [])
+    const parts = this._baselineAssemblies.get(id)
+    if (parts === undefined) return { ok: false as const, error: 'discarded' }
+    parts[chunk.index] = chunk.text
+    if (chunk.index === chunk.count - 1) {
+      stored.baselines.set(key, { gen, text: parts.join('') })
+      this._baselineAssemblies.delete(id)
+    }
+    return { ok: true as const }
+  }
+
+  async commitIndex(handle: string, sessionId: string, files: readonly SessionChangesIndexEntry[]) {
+    const scopeKey = this._key(handle)
+    this.commits.push({ handle, scopeKey, sessionId, files })
+    if (!(await this._enterWrite())) return { ok: false as const, error: 'ipc down' }
     const bucket = this._bucket(scopeKey)
-    bucket.shards.set(sessionId, payload)
-    bucket.order = bucket.order.filter((id) => id !== sessionId)
-    bucket.order.push(sessionId)
+    const stored = this._v2(scopeKey, sessionId)
+    stored.index = [...files]
+    const referenced = new Set(files.map((file) => file.key))
+    for (const key of [...stored.files.keys()]) {
+      if (!referenced.has(key)) stored.files.delete(key)
+    }
+    const baselineKeys = new Set(
+      files.filter((file) => file.baseline === 'text').map((file) => file.key),
+    )
+    for (const key of [...stored.baselines.keys()]) {
+      if (!baselineKeys.has(key)) stored.baselines.delete(key)
+    }
+    bucket.versions.set(sessionId, (bucket.versions.get(sessionId) ?? 0) + 1)
     return { ok: true as const }
   }
 
@@ -170,7 +410,8 @@ class FakeSessionChangesStore {
     const scopeKey = this._key(handle)
     this.removals.push({ handle, scopeKey, sessionId })
     const bucket = this._bucket(scopeKey)
-    bucket.shards.delete(sessionId)
+    bucket.sessions.delete(sessionId)
+    bucket.versions.delete(sessionId)
     bucket.order = bucket.order.filter((id) => id !== sessionId)
   }
 
@@ -745,10 +986,7 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
     // Pruning on load must reach disk: the slimmed shard is not just an
     // in-memory view, or a restart reloads the same over-budget batches.
     expect(store.writes.map((w) => w.sessionId)).toEqual(['bulky'])
-    const persisted = store.buckets.get('w1')?.shards.get('bulky') as {
-      files: { batches: unknown[] }[]
-    }
-    expect(persisted.files[0]?.batches).toEqual([])
+    expect(store.shard('bulky', 'w1')?.files[0]?.batches).toEqual([])
   })
 
   it('keeps an unknown-schema shard untouched instead of deleting it', async () => {
@@ -1857,10 +2095,8 @@ describe('SessionChangeTrackerService — sharded persistence', () => {
     store: FakeSessionChangesStore,
     sessionId: string,
     scopeKey = store.scopeKey,
-  ): { files: { path: string; batches: unknown[] }[] } | undefined {
-    return store.buckets.get(scopeKey)?.shards.get(sessionId) as
-      | { files: { path: string; batches: unknown[] }[] }
-      | undefined
+  ): { files: { path: string; batches: readonly unknown[] }[] } | undefined {
+    return store.shard(sessionId, scopeKey)
   }
 
   function makeTracker(overrides: {
@@ -1904,6 +2140,11 @@ describe('SessionChangeTrackerService — sharded persistence', () => {
     store.seed('w1', 'hot', shardOf('hot', []))
     const { svc, files } = makeTracker({ store })
     await svc.initialize()
+    // The seeded v1 shards are rewritten as v2 on first flush; start from a
+    // clean slate so the assertion is about the steady-state incremental write.
+    await svc.flush()
+    store.writes.length = 0
+    store.commits.length = 0
 
     files.set('/work/hot.ts', 'b')
     svc.record('hot', '/work/hot.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
@@ -1912,8 +2153,11 @@ describe('SessionChangeTrackerService — sharded persistence', () => {
     expect(store.writes).toHaveLength(1)
     const write = store.writes[0]!
     expect(write.sessionId).toBe('hot')
-    expect(JSON.stringify(write.payload)).not.toContain('cold-only-baseline')
-    expect(JSON.stringify(write.payload)).toContain('/work/hot.ts')
+    expect(JSON.stringify(write.entries)).not.toContain('cold-only-baseline')
+    expect(JSON.stringify(write.entries)).toContain('/work/hot.ts')
+    // Only the edited file and the index are sent — never the cold session.
+    expect(store.commits).toHaveLength(1)
+    expect(store.commits[0]!.sessionId).toBe('hot')
     svc.dispose()
   })
 
@@ -2067,7 +2311,7 @@ describe('SessionChangeTrackerService — sharded persistence', () => {
     await svc.flush()
 
     expect(store.writes.every((w) => w.scopeKey === 'w1')).toBe(true)
-    expect(store.buckets.get('w2')?.shards.size ?? 0).toBe(0)
+    expect(store.buckets.get('w2')?.sessions.size ?? 0).toBe(0)
     expect(svc.hasEntry('old', '/work/a.ts')).toBe(false)
     svc.dispose()
   })
@@ -2099,6 +2343,541 @@ describe('SessionChangeTrackerService — sharded persistence', () => {
     expect(shardIn(store, 'old', 'w1')?.files[0]?.batches).toHaveLength(1)
     expect(store.writes.filter((w) => w.scopeKey === 'w2')).toHaveLength(0)
     expect(svc.hasEntry('old', '/work/a.ts')).toBe(false)
+    svc.dispose()
+  })
+})
+
+describe('SessionChangeTrackerService — incremental v2 persistence', () => {
+  function makeTracker(overrides: { store?: FakeSessionChangesStore; storage?: FakeStorage }): {
+    svc: SessionChangeTrackerService
+    files: FakeFileService
+    storage: FakeStorage
+    store: FakeSessionChangesStore
+  } {
+    const storage = overrides.storage ?? new FakeStorage()
+    const store = overrides.store ?? new FakeSessionChangesStore()
+    const files = new FakeFileService()
+    const svc = new SessionChangeTrackerService(
+      storage,
+      new FakeWorkspaceService(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+      files,
+      new UriIdentityService('linux'),
+      makePressure(),
+      store,
+    )
+    svc.recomputeThrottleMs = 0
+    svc.yieldBetweenPersists = async () => {}
+    return { svc, files, storage, store }
+  }
+
+  function shardOf(sessionId: string, files: readonly unknown[]): unknown {
+    return { schemaVersion: 3, sessionId, files }
+  }
+
+  function persistedFile(path: string, baseline: string): unknown {
+    return { path, batches: [], batchCount: 0, origin: 'agent', baseline }
+  }
+
+  it('sends only the changed entry and the index after a baseline is pinned', async () => {
+    const store = new FakeSessionChangesStore()
+    const { svc, files } = makeTracker({ store })
+    await svc.initialize()
+
+    const baseline = 'x'.repeat(1_500_000)
+    for (let f = 0; f < 3; f++) files.set(`/work/f${f}.ts`, `content-${f}`)
+    for (let f = 0; f < 3; f++) {
+      svc.record('s1', `/work/f${f}.ts`, `tc-pin-${f}`, [createHunk(['x'])], { baseline })
+      for (let i = 0; i < 100; i++) {
+        svc.record('s1', `/work/f${f}.ts`, `tc-${f}-${i}`, [createHunk([`edit${i}`])])
+      }
+    }
+    await svc.flush()
+    expect(store.baselineWrites.length).toBeGreaterThan(0)
+
+    store.writes.length = 0
+    store.baselineWrites.length = 0
+    store.commits.length = 0
+
+    const start = performance.now()
+    svc.record('s1', '/work/f0.ts', 'tc-final', [createHunk(['final edit'])])
+    await svc.flush()
+    const elapsed = performance.now() - start
+
+    expect(store.baselineWrites).toHaveLength(0)
+    expect(store.writes).toHaveLength(1)
+    expect(store.writes[0]!.entries.map((entry) => entry.key)).toEqual(['/work/f0.ts'])
+    expect(store.commits).toHaveLength(1)
+
+    // P1-b: every frame of this steady-state write stays far below the 1MiB line.
+    const payloads = [
+      ...store.writes.map((write) => JSON.stringify(write.entries)),
+      ...store.baselineWrites.map((write) => JSON.stringify(write)),
+      ...store.commits.map((commit) => JSON.stringify(commit.files)),
+    ]
+    const largest = Math.max(...payloads.map((payload) => payload.length))
+    const total = payloads.reduce((sum, payload) => sum + payload.length, 0)
+    const entry = store.writes[0]!.entries[0]!
+    const stringifyStart = performance.now()
+    JSON.stringify(entry)
+    const stringifyMs = performance.now() - stringifyStart
+    console.log(
+      `[sessionChanges v2] frames=${payloads.length} largest=${largest}B total=${total}B ` +
+        `flush=${elapsed.toFixed(2)}ms stringify=${stringifyMs.toFixed(3)}ms`,
+    )
+    expect(largest).toBeLessThan(1024 * 1024)
+    svc.dispose()
+  })
+
+  it('chunks a large baseline so no single frame exceeds 1MiB', async () => {
+    const store = new FakeSessionChangesStore()
+    const { svc, files } = makeTracker({ store })
+    await svc.initialize()
+
+    // ~4MiB of JSON-escaped baseline (each \n doubles), just under the pin cap.
+    const baseline = '\n'.repeat(2_000_000)
+    files.set('/work/big.ts', 'current')
+    svc.record('s1', '/work/big.ts', 'tc-1', [createHunk(['current'])], { baseline })
+    await svc.flush()
+
+    expect(store.baselineWrites.length).toBeGreaterThan(1)
+    for (const write of store.baselineWrites) {
+      expect(JSON.stringify(write).length).toBeLessThan(1024 * 1024)
+    }
+    expect(store.baselineWrites.map((write) => write.text).join('')).toBe(baseline)
+    svc.dispose()
+  })
+
+  it('resends the baseline after a failed write instead of trusting the cache', async () => {
+    const store = new FakeSessionChangesStore()
+    const { svc, files } = makeTracker({ store })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+
+    store.failWrites = true
+    svc.record('s1', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    await svc.flush()
+    expect(store.shard('s1')).toBeUndefined()
+
+    store.failWrites = false
+    store.writes.length = 0
+    store.baselineWrites.length = 0
+    await svc.flush()
+
+    expect(store.writes.map((write) => write.sessionId)).toEqual(['s1'])
+    expect(store.baselineWrites.map((write) => write.text).join('')).toBe('a')
+    expect(store.shard('s1')?.files[0]?.batches).toHaveLength(1)
+    svc.dispose()
+  })
+
+  it('reuses a same-bucket reload without re-reading shards, then writes incrementally', async () => {
+    const store = new FakeSessionChangesStore()
+    const storage = new FakeStorage()
+    const { svc, files } = makeTracker({ store, storage })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+    svc.record('s1', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    await svc.flush()
+
+    // Our own write bumped the manifest, so the first reload re-reads once.
+    storage.fireWorkspaceScope()
+    await (svc as unknown as { _loadChain: Promise<void> })._loadChain
+    expect(store.readCalls).toBe(1)
+
+    // A second reload with no intervening write reuses the loaded state.
+    const readsBefore = store.readCalls
+    storage.fireWorkspaceScope()
+    await (svc as unknown as { _loadChain: Promise<void> })._loadChain
+    expect(store.readCalls).toBe(readsBefore)
+    expect(svc.hasEntry('s1', '/work/a.ts')).toBe(true)
+
+    store.writes.length = 0
+    store.baselineWrites.length = 0
+    store.commits.length = 0
+    svc.record('s1', '/work/a.ts', 'tc-2', [createHunk(['c'])])
+    await svc.flush()
+
+    expect(store.writes).toHaveLength(1)
+    expect(store.writes[0]!.entries.map((entry) => entry.key)).toEqual(['/work/a.ts'])
+    expect(store.baselineWrites).toHaveLength(0)
+    expect(store.commits).toHaveLength(1)
+    svc.dispose()
+  })
+
+  it('migrates a v1 shard to v2 on the first write', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed('w1', 's1', shardOf('s1', [persistedFile('/work/a.ts', 'old')]))
+    const { svc } = makeTracker({ store })
+    await svc.initialize()
+    await svc.flush()
+
+    expect(store.buckets.get('w1')?.sessions.get('s1')?.kind).toBe('v2')
+    expect(store.shard('s1')?.files[0]?.path).toBe('/work/a.ts')
+    expect(store.commits).toHaveLength(1)
+    svc.dispose()
+  })
+
+  it('writes a session slimmed on load back as v2', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed(
+      'w1',
+      'bulky',
+      shardOf('bulky', [
+        {
+          path: '/work/h.ts',
+          baseline: 'a',
+          batches: [
+            {
+              toolCallId: 'tc-9',
+              hunks: [
+                {
+                  oldStart: 1,
+                  oldLines: 0,
+                  newStart: 1,
+                  newLines: 1,
+                  lines: [`+${'x'.repeat(1000)}`],
+                },
+              ],
+            },
+          ],
+        },
+      ]),
+    )
+    const { svc } = makeTracker({ store })
+    svc.maxSessionBytes = 512
+    await svc.initialize()
+    await svc.flush()
+
+    expect(store.buckets.get('w1')?.sessions.get('bulky')?.kind).toBe('v2')
+    expect(store.shard('bulky')?.files[0]?.batches).toEqual([])
+    svc.dispose()
+  })
+
+  it('resends a file whose revision collided with a pre-load edit', async () => {
+    const store = new FakeSessionChangesStore()
+    const storage = new FakeStorage()
+    const { svc, files } = makeTracker({ store, storage })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+    svc.record('s1', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    await svc.flush()
+    expect(store.commits).toHaveLength(1)
+
+    store.writes.length = 0
+    store.commits.length = 0
+    // The reload re-reads (our write bumped the manifest version); hold it so a
+    // record lands while the load is in flight.
+    const gate = store.holdNextList()
+    storage.fireWorkspaceScope()
+    await gate.entered
+    svc.record('s1', '/work/a.ts', 'tc-2', [createHunk(['c'])])
+    gate.release()
+    await (svc as unknown as { _loadChain: Promise<void> })._loadChain
+    await svc.flush()
+
+    expect(store.writes).toHaveLength(1)
+    expect(store.writes[0]!.entries.map((entry) => entry.key)).toEqual(['/work/a.ts'])
+    expect(store.commits).toHaveLength(1)
+    expect(store.shard('s1')?.files[0]?.batches).toHaveLength(2)
+    svc.dispose()
+  })
+
+  it('rewrites a v2 session slimmed on a same-bucket reload', async () => {
+    const store = new FakeSessionChangesStore()
+    const seedHandle = (await store.openBucket()).handle
+    await store.writeEntries(seedHandle, 'bulky', [{ key: '/work/h.ts', gen: 'b1', batches: [] }])
+    await store.commitIndex(seedHandle, 'bulky', [
+      { key: '/work/h.ts', path: '/work/h.ts', batchCount: 0, origin: 'agent', gen: 'b1' },
+    ])
+    const storage = new FakeStorage()
+    const { svc } = makeTracker({ store, storage })
+    svc.maxSessionBytes = 512
+    await svc.initialize()
+
+    // Another window records a large batch, so the reloaded session exceeds the
+    // per-session budget and is slimmed.
+    await store.writeEntries(seedHandle, 'bulky', [
+      {
+        key: '/work/h.ts',
+        gen: 'b2',
+        batches: [
+          {
+            toolCallId: 'tc-9',
+            hunks: [
+              {
+                oldStart: 1,
+                oldLines: 0,
+                newStart: 1,
+                newLines: 1,
+                lines: [`+${'x'.repeat(1000)}`],
+              },
+            ],
+          },
+        ],
+      },
+    ])
+    await store.commitIndex(seedHandle, 'bulky', [
+      { key: '/work/h.ts', path: '/work/h.ts', batchCount: 1, origin: 'agent', gen: 'b2' },
+    ])
+    store.writes.length = 0
+    store.commits.length = 0
+    storage.fireWorkspaceScope()
+    await (svc as unknown as { _loadChain: Promise<void> })._loadChain
+    await svc.flush()
+
+    expect(store.writes).toHaveLength(1)
+    expect(store.commits).toHaveLength(1)
+    expect(store.shard('bulky')?.files[0]?.batches).toEqual([])
+    svc.dispose()
+  })
+
+  it('rebuilds the per-session byte account when a same-bucket reload reuses state', async () => {
+    const store = new FakeSessionChangesStore()
+    const storage = new FakeStorage()
+    const { svc, files } = makeTracker({ store, storage })
+    await svc.initialize()
+
+    files.set('/work/a.ts', 'b')
+    svc.record('s1', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    await svc.flush()
+
+    const chain = svc as unknown as { _loadChain: Promise<void> }
+    // Our own write bumped the manifest, so this reload is a full re-read.
+    storage.fireWorkspaceScope()
+    await chain._loadChain
+    const before = svc.retainedBytes()
+    expect(before.bytes).toBeGreaterThan(0)
+
+    // The swap resets the state to empty first; the reuse branch must restore the
+    // byte account or budgets/LRU/retainedBytes() stay zeroed for good.
+    storage.fireWorkspaceScope()
+    await chain._loadChain
+    expect(svc.retainedBytes()).toEqual(before)
+    expect(svc.hasEntry('s1', '/work/a.ts')).toBe(true)
+    svc.dispose()
+  })
+
+  it('re-reads a session skipped by a transient failure on a same-bucket reload', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed('w1', 's1', shardOf('s1', [persistedFile('/work/a.ts', 'a')]))
+    const storage = new FakeStorage()
+    const { svc } = makeTracker({ store, storage })
+    store.throwOnRead.add('s1')
+    await svc.initialize()
+    expect(svc.hasEntry('s1', '/work/a.ts')).toBe(false)
+
+    store.throwOnRead.delete('s1')
+    const reads = store.readCalls
+    // The fingerprint is unchanged, but the previous load had errors: reuse would
+    // freeze the skipped session out until some window happens to write.
+    storage.fireWorkspaceScope()
+    await (svc as unknown as { _loadChain: Promise<void> })._loadChain
+    expect(store.readCalls).toBe(reads + 1)
+    expect(svc.hasEntry('s1', '/work/a.ts')).toBe(true)
+    svc.dispose()
+  })
+
+  it('recomputes the session byte account after trimming the index', async () => {
+    const store = new FakeSessionChangesStore()
+    const { svc, files } = makeTracker({ store })
+    svc.maxIndexEntries = 2
+    await svc.initialize()
+    const obs = svc.changesFor('s1')
+
+    for (let i = 0; i < 3; i++) {
+      const path = `/work/f${i}.ts`
+      files.set(path, 'y')
+      svc.record(
+        's1',
+        path,
+        `tc-${i}`,
+        [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-x', '+y'] }],
+        { baseline: 'x' },
+      )
+    }
+    await svc.flush()
+
+    const state = (
+      svc as unknown as {
+        _state: Map<string, Map<string, { baseline?: string | null; batches: readonly unknown[] }>>
+      }
+    )._state
+    const remaining = state.get('s1')!
+    const byteAccount = (svc as unknown as { _sessionBytes: Map<string, number> })._sessionBytes
+    let expected = 0
+    for (const rec of remaining.values()) {
+      expected += rec.baseline != null ? JSON.stringify(rec.baseline).length : 0
+      for (const batch of rec.batches) expected += JSON.stringify(batch).length
+    }
+    expect(remaining.size).toBe(2)
+    expect(byteAccount.get('s1')).toBe(expected)
+    // The dropped rows must leave the published list too.
+    await flush()
+    expect(obs.get()).toHaveLength(2)
+    svc.dispose()
+  })
+
+  it('splits entry writes by count as well as bytes', async () => {
+    const store = new FakeSessionChangesStore()
+    const { svc, files } = makeTracker({ store })
+    // Make the byte limit unreachable so only the count cap can split.
+    svc.maxEntryGroupBytes = Number.MAX_SAFE_INTEGER
+    await svc.initialize()
+
+    const count = SESSION_CHANGES_MAX_ENTRIES_PER_CALL + 10
+    for (let i = 0; i < count; i++) {
+      const path = `/work/f${i}.ts`
+      files.set(path, 'x')
+      svc.record('s1', path, `tc-${i}`, [createHunk([''])])
+    }
+    await svc.flush()
+
+    expect(store.writes).toHaveLength(2)
+    expect(store.writes[0]!.entries).toHaveLength(SESSION_CHANGES_MAX_ENTRIES_PER_CALL)
+    expect(store.writes[1]!.entries).toHaveLength(count - SESSION_CHANGES_MAX_ENTRIES_PER_CALL)
+    expect(store.commits).toHaveLength(1)
+    expect(store.commits[0]!.files).toHaveLength(count)
+    svc.dispose()
+  })
+
+  it('caps the index at maxIndexEntries instead of failing the write', async () => {
+    const store = new FakeSessionChangesStore()
+    const { svc, files } = makeTracker({ store })
+    svc.maxIndexEntries = 2
+    await svc.initialize()
+
+    for (let i = 0; i < 3; i++) {
+      const path = `/work/f${i}.ts`
+      files.set(path, 'x')
+      svc.record('s1', path, `tc-${i}`, [createHunk([''])])
+    }
+    await svc.flush()
+
+    expect(store.commits).toHaveLength(1)
+    expect(store.commits[0]!.files.map((file) => file.key)).toEqual(['/work/f1.ts', '/work/f2.ts'])
+    expect(store.writes.flatMap((write) => write.entries)).toHaveLength(2)
+    svc.dispose()
+  })
+
+  it('merges a second retirement of the same bucket by revision', async () => {
+    const store = new FakeSessionChangesStore()
+    store.reuseHandles = true
+    const storage = new FakeStorage()
+    const { svc, files } = makeTracker({ store, storage })
+    await svc.initialize()
+
+    files.set('/work/a.ts', 'b')
+    store.failWrites = true
+    svc.record('s1', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    await svc.flush()
+
+    const chain = svc as unknown as { _loadChain: Promise<void> }
+    store.scopeKey = 'w2'
+    storage.fireWorkspaceScope()
+    await chain._loadChain
+    store.scopeKey = 'w1'
+    storage.fireWorkspaceScope()
+    await chain._loadChain
+
+    files.set('/work/c.ts', 'd')
+    svc.record('s1', '/work/c.ts', 'tc-2', [createHunk(['d'])])
+
+    // Leave w1 again without draining: the second retirement must merge with the
+    // snapshot the first one left behind.
+    store.scopeKey = 'w2'
+    storage.fireWorkspaceScope()
+    await chain._loadChain
+
+    store.failWrites = false
+    store.writes.length = 0
+    await svc.flush()
+
+    const w1Keys = store.writes
+      .filter((write) => write.scopeKey === 'w1')
+      .flatMap((write) => write.entries.map((entry) => entry.key))
+      .sort()
+    expect(w1Keys).toEqual(['/work/a.ts', '/work/c.ts'])
+    svc.dispose()
+  })
+
+  it('drains a retired bucket that is also the current handle without closing it', async () => {
+    const store = new FakeSessionChangesStore()
+    store.reuseHandles = true
+    const storage = new FakeStorage()
+    const { svc, files } = makeTracker({ store, storage })
+    await svc.initialize()
+    const w1Handle = [...store.handles.entries()].find(([, scope]) => scope === 'w1')![0]
+
+    files.set('/work/a.ts', 'b')
+    store.failWrites = true
+    svc.record('s1', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    await svc.flush()
+
+    const chain = svc as unknown as { _loadChain: Promise<void> }
+    store.scopeKey = 'w2'
+    storage.fireWorkspaceScope()
+    await chain._loadChain
+    store.scopeKey = 'w1'
+    storage.fireWorkspaceScope()
+    await chain._loadChain
+    expect(store.handles.get(w1Handle)).toBe('w1')
+
+    store.failWrites = false
+    store.writes.length = 0
+    await svc.flush()
+
+    expect(store.closedHandles).not.toContain(w1Handle)
+    expect(store.handles.has(w1Handle)).toBe(true)
+    expect(
+      store.writes.some(
+        (write) => write.scopeKey === 'w1' && write.entries.some((e) => e.key === '/work/a.ts'),
+      ),
+    ).toBe(true)
+    svc.dispose()
+  })
+
+  it('does not reuse a same-bucket load when the manifest has no versions', async () => {
+    const store = new FakeSessionChangesStore()
+    store.versionless = true
+    store.seed('w1', 's1', shardOf('s1', [persistedFile('/work/a.ts', 'a')]))
+    const storage = new FakeStorage()
+    const { svc } = makeTracker({ store, storage })
+    await svc.initialize()
+
+    const reads = store.readCalls
+    storage.fireWorkspaceScope()
+    await (svc as unknown as { _loadChain: Promise<void> })._loadChain
+    expect(store.readCalls).toBe(reads + 1)
+    svc.dispose()
+  })
+
+  it('skips a malformed file entry instead of failing the bucket load', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed('w1', 's1', {
+      schemaVersion: 3,
+      sessionId: 's1',
+      files: [
+        { path: 42, batches: [], batchCount: 0, origin: 'agent' },
+        { path: '/work/good.ts', batches: [], batchCount: 0, origin: 'agent', baseline: null },
+      ],
+    })
+    const { svc } = makeTracker({ store })
+    await svc.initialize()
+
+    expect(svc.hasEntry('s1', '/work/good.ts')).toBe(true)
+    svc.dispose()
+  })
+
+  it('skips a session whose shard read throws', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed('w1', 'good', shardOf('good', [persistedFile('/work/g.ts', 'g')]))
+    store.seed('w1', 'bad', shardOf('bad', []))
+    store.throwOnRead.add('bad')
+    const { svc } = makeTracker({ store })
+    await svc.initialize()
+
+    expect(svc.hasEntry('good', '/work/g.ts')).toBe(true)
     svc.dispose()
   })
 })

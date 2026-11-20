@@ -222,6 +222,38 @@ describe('PersistentProtocol', () => {
     b.dispose()
   })
 
+  it('whenUnacknowledgedBelow resolves at once under the limit and after the ack drains it', async () => {
+    const { a, b } = createPair()
+    b.onMessage(() => {})
+
+    await a.whenUnacknowledgedBelow(4)
+    a.send(bytes(1, 2, 3, 4, 5))
+    expect(a.getUnacknowledgedBytes()).toBe(5)
+    let settled = false
+    const wait = a.whenUnacknowledgedBelow(4).then(() => (settled = true))
+    await flush()
+    expect(settled).toBe(false)
+
+    vi.advanceTimersByTime(ProtocolConstants.AcknowledgeTime + 100)
+    await flush()
+    await wait
+    expect(settled).toBe(true)
+    expect(a.getUnacknowledgedBytes()).toBe(0)
+
+    a.dispose()
+    b.dispose()
+  })
+
+  it('whenUnacknowledgedBelow rejects pending waiters on dispose', async () => {
+    const { a, b } = createPair()
+    a.send(bytes(1, 2, 3))
+    const wait = a.whenUnacknowledgedBelow(1)
+    a.dispose()
+    await expect(wait).rejects.toThrow(/disposed/)
+    await expect(a.whenUnacknowledgedBelow(1)).rejects.toThrow(/disposed/)
+    b.dispose()
+  })
+
   it('fires onDidClose on explicit dispose', () => {
     const { a, b } = createPair()
     let closed = 0

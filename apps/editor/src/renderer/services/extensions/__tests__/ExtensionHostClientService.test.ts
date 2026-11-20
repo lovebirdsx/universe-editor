@@ -89,6 +89,7 @@ const environmentSeeds: Record<string, unknown>[] = []
 let onUnhandledRejectionCb: ((report: unknown) => void) | undefined
 /** `deps.onUnexpectedError` captured from the most recent FakeHostConnection. */
 let onUnexpectedErrorCb: ((error: unknown) => void) | undefined
+let onTransportFatalCb: (() => void) | undefined
 /** Handle whose first `$activateByEvent` stays pending until released (or disposed). */
 let holdActivationFor: string | undefined
 /** Every FakeHostConnection built, in construction order. */
@@ -143,6 +144,7 @@ vi.mock('../HostConnection.js', () => {
       deps?: {
         onUnhandledRejection?: (report: unknown) => void
         onUnexpectedError?: (error: unknown) => void
+        onTransportFatal?: () => void
       },
     ) {
       this.kind = kind
@@ -152,6 +154,7 @@ vi.mock('../HostConnection.js', () => {
       connections.push({ workspaceRoot, authority })
       onUnhandledRejectionCb = deps?.onUnhandledRejection
       onUnexpectedErrorCb = deps?.onUnexpectedError
+      onTransportFatalCb = deps?.onTransportFatal
     }
     markDead(): void {
       this.dead = true
@@ -490,6 +493,36 @@ describe('ExtensionHostClientService', () => {
     svc.dispose()
   })
 
+  it('clears planned-stop and transport-failed bookkeeping when a stopped handle exits after teardown', async () => {
+    // `_doRestart` stops the old host and tears its connection down, but the
+    // exit event can land afterwards, when `_byHandle` no longer has the handle.
+    // The early return used to skip the Set cleanup, leaking the handle (and
+    // swallowing a later crash if the OS reuses it) forever.
+    const exit = new Emitter<ExtHostExitEvent>()
+    const host = fakeHost(exit.event)
+    const workspaceChange = new Emitter<void>()
+    const ws: WorkspaceState = { current: undefined }
+    const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, Event.None, ws)
+
+    await svc.start()
+    // The RPC transport failed, then a workspace swap planned a stop for h1.
+    onTransportFatalCb?.()
+    ws.current = { folder: { fsPath: '/new-ws' } }
+    workspaceChange.fire()
+    await vi.waitFor(() => expect(host.start).toHaveBeenCalledTimes(2))
+
+    exit.fire({ handle: 'h1', code: 0, signal: null })
+
+    const internals = svc as unknown as {
+      _stopping: Set<string>
+      _transportFailed: Set<string>
+    }
+    expect(internals._stopping.size).toBe(0)
+    expect(internals._transportFailed.size).toBe(0)
+
+    svc.dispose()
+  })
+
   it('drops chat-context providers when the old connection is torn down', async () => {
     // Host-side handles restart at 1 per host process, so a provider left over
     // from the previous connection can collide with a live one and resolve the
@@ -780,6 +813,31 @@ describe('ExtensionHostClientService remote connection loss', () => {
 
     // Base restart delay is 1s; the relaunch then re-indexes and re-runs
     // startup activation.
+    await vi.waitFor(() => expect(host.start).toHaveBeenCalledTimes(2), { timeout: 4000 })
+
+    svc.dispose()
+  })
+
+  it('treats a clean exit after an RPC transport failure as a crash and restarts', async () => {
+    const exit = new Emitter<ExtHostExitEvent>()
+    const notify = vi.fn()
+    const host = fakeHost(exit.event)
+    const svc = makeServiceWith(
+      host,
+      vi.fn(),
+      Event.None,
+      Event.None,
+      { current: undefined },
+      { notification: { notify } as unknown as INotificationService },
+    )
+
+    await svc.start()
+    // The write queue overflowed: HostConnection stops the host, which exits 0.
+    onTransportFatalCb?.()
+    exit.fire({ handle: 'h1', code: 0, signal: null })
+
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect((notify.mock.calls[0]?.[0] as { severity?: unknown }).severity).toBe(Severity.Warning)
     await vi.waitFor(() => expect(host.start).toHaveBeenCalledTimes(2), { timeout: 4000 })
 
     svc.dispose()
