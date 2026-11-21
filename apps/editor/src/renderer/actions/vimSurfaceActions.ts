@@ -123,6 +123,24 @@ export class ListPageDownAction extends VimSurfaceCommandAction {
   }
 }
 
+export class ListScrollViewportUpAction extends VimSurfaceCommandAction {
+  static readonly ID = 'list.scrollViewportUp'
+  constructor() {
+    super(options(ListScrollViewportUpAction.ID, 'Scroll View Up in List'), (actions, count) =>
+      actions.scrollViewport?.('up', count),
+    )
+  }
+}
+
+export class ListScrollViewportDownAction extends VimSurfaceCommandAction {
+  static readonly ID = 'list.scrollViewportDown'
+  constructor() {
+    super(options(ListScrollViewportDownAction.ID, 'Scroll View Down in List'), (actions, count) =>
+      actions.scrollViewport?.('down', count),
+    )
+  }
+}
+
 export class ListExpandAction extends VimSurfaceCommandAction {
   static readonly ID = 'list.expand'
   constructor() {
@@ -223,6 +241,8 @@ export const VIM_SURFACE_ACTIONS = [
   ListFocusLastAction,
   ListPageUpAction,
   ListPageDownAction,
+  ListScrollViewportUpAction,
+  ListScrollViewportDownAction,
   ListExpandAction,
   ListCollapseAction,
   ListToggleAction,

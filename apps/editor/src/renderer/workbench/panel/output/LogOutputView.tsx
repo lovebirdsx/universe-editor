@@ -15,6 +15,7 @@ import {
   localize,
   type IDisposable,
 } from '@universe-editor/platform'
+import { useVimSurface, useVimSurfaceKey } from '@universe-editor/workbench-ui'
 import type { monaco } from '../../editor/monaco/MonacoLoader.js'
 import { MonacoLoader } from '../../editor/monaco/MonacoLoader.js'
 import { createWorkbenchEditor } from '../../editor/monaco/workbenchEditorFactory.js'
@@ -22,6 +23,7 @@ import { IOutputModelService } from '../../../services/output/OutputModelService
 import { bridgeEditorFocus } from '../../../services/editor/editorFocus.js'
 import { useObservable, useOptionalService, useService } from '../../useService.js'
 import { useViewFocusable } from '../../useViewFocusable.js'
+import { createOutputVimController, type IOutputVimController } from './outputVimController.js'
 import styles from './LogOutputView.module.css'
 
 const BOTTOM_THRESHOLD_PX = 20
@@ -50,6 +52,7 @@ export function LogOutputView({
 
   const containerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+  const vimControllerRef = useRef<IOutputVimController | null>(null)
   const [editorReady, setEditorReady] = useState(false)
   const autoScrollRef = useRef(autoScroll)
   autoScrollRef.current = autoScroll
@@ -57,6 +60,23 @@ export function LogOutputView({
   // Pending one-shot "layout settled, re-reveal the tail" listener; replaced on
   // every fresh model attach and disposed with the editor so it never dangles.
   const settledRevealDisposableRef = useRef<IDisposable | null>(null)
+
+  // Read-only scrolling surface: the same Normal-mode vocabulary as a file
+  // editor, minus anything that could edit or search. The registration is read
+  // live, so the controller (created asynchronously with Monaco) can attach
+  // after mount without re-registering.
+  const vimSurfaceKey = useVimSurfaceKey('editor', viewId ?? 'output')
+  useVimSurface({
+    id: vimSurfaceKey,
+    kind: 'editor',
+    getElement: () => editorRef.current?.getContainerDomNode() ?? null,
+    focus: 'within',
+    getSurfaceKey: () => vimSurfaceKey,
+    defaultMode: 'normal',
+    actions: {
+      handleStroke: (event) => vimControllerRef.current?.handleKeyDown(event) ?? false,
+    },
+  })
 
   // The view's keyboard focus target is the Monaco editor itself (VSCode's
   // Output is a full text editor, so arrow keys / selection / Ctrl+C/F/A work
@@ -142,6 +162,11 @@ export function LogOutputView({
         MonacoLoader.getOverrideServices(),
       )
       editorRef.current = ed
+      vimControllerRef.current = createOutputVimController(ed, {
+        // Ctrl+E/Y leaves the cursor in place; without this the next append
+        // would see autoScroll still on and yank the viewport back to the tail.
+        onViewportScroll: () => outputModels.setAutoScroll(false),
+      })
       hoverGuard = MonacoLoader.trackEditorDispose(ed)
       setEditorReady(true)
     })
@@ -152,6 +177,10 @@ export function LogOutputView({
       hiddenAreasDisposableRef.current = null
       settledRevealDisposableRef.current?.dispose()
       settledRevealDisposableRef.current = null
+      // Before the editor: its focus subscriptions must not observe a
+      // half-disposed instance.
+      vimControllerRef.current?.dispose()
+      vimControllerRef.current = null
       editorRef.current?.dispose()
       editorRef.current = null
       setEditorReady(false)

@@ -722,6 +722,21 @@ describe('ChatBody — Vim list surface', () => {
     }
   })
 
+  it('scrolls the timeline with Ctrl+e/y without changing the focused card', () => {
+    const { container } = renderChat(makeSession('s-vim-scroll', items))
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:b'))
+    })
+    const scroll = scrollOf(container)
+    scroll.scrollTop = 200
+
+    act(() => activeSurface().surface.actions.scrollViewport?.('up', 2))
+    expect(scroll.scrollTop).toBe(104)
+    act(() => activeSurface().surface.actions.scrollViewport?.('down', 1))
+    expect(scroll.scrollTop).toBe(152)
+    expect(slotEl(container, 'm:b').className).toContain(focusedClass)
+  })
+
   it('is not active while focus sits outside the timeline', () => {
     const { container } = renderChat(makeSession('s-vim-out', items))
     act(() => {

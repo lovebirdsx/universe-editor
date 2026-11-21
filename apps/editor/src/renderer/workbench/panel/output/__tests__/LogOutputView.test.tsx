@@ -5,7 +5,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
+import { __resetVimSurfacesForTests, getActiveVimSurface } from '@universe-editor/workbench-ui'
 import * as monacoStub from 'monaco-editor'
 import {
   CommandsRegistry,
@@ -424,6 +425,44 @@ describe('Output editor claims the Find commands', () => {
 
     expect(_getActionRunsForTests()).toEqual(['actions.find'])
     expect(fileGetAction).not.toHaveBeenCalled()
+  })
+})
+
+describe('LogOutputView Vim surface', () => {
+  afterEach(() => {
+    cleanup()
+    __resetVimSurfacesForTests()
+  })
+
+  it('registers a scrolling editor surface under the view id', async () => {
+    const { output } = setup('workbench.view.output.main')
+    output.createChannel('main').append('one\ntwo\n')
+    await settle()
+
+    const nativeEditContext = document.querySelector('.native-edit-context') as HTMLElement
+    act(() => nativeEditContext.focus())
+
+    const active = getActiveVimSurface(document)
+    expect(active?.surfaceKey).toBe('editor:workbench.view.output.main')
+    expect(active?.surface.kind).toBe('editor')
+    expect(typeof active?.surface.actions.handleStroke).toBe('function')
+  })
+
+  it('consumes Normal-mode j through the reduced controller', async () => {
+    const { output } = setup('workbench.view.output.main')
+    output.createChannel('main').append('one\ntwo\nthree\n')
+    await settle()
+
+    const nativeEditContext = document.querySelector('.native-edit-context') as HTMLElement
+    act(() => nativeEditContext.focus())
+
+    const event = new KeyboardEvent('keydown', { key: 'j', bubbles: true, cancelable: true })
+    let handled = false
+    act(() => {
+      handled = getActiveVimSurface(document)!.surface.actions.handleStroke!(event)
+    })
+    expect(handled).toBe(true)
+    expect(event.defaultPrevented).toBe(true)
   })
 })
 

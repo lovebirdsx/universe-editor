@@ -16,6 +16,7 @@ import {
 } from '@universe-editor/platform'
 import type { IVimModeService } from '../../../services/vim/vimModeService.js'
 import type { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
+import type { monaco } from '../monaco/MonacoLoader.js'
 import { reduceVimKey } from './vimKeymap.js'
 import { clampNormalPosition, firstNonBlankColumn, resolveMotion } from './vimMotions.js'
 import { linewiseRange, resolveOperatorRange } from './vimOperators.js'
@@ -88,6 +89,12 @@ export interface IVimEditorControllerOptions {
    * working when the commands registry is not ready yet.
    */
   readonly executeCommand?: (id: string, args?: unknown) => unknown
+  /**
+   * Monaco's configured line height. Only the sticky-scroll row math needs it;
+   * call sites pass `editor.getOption(EditorOption.lineHeight)` and fakes may
+   * omit it.
+   */
+  readonly getLineHeight?: () => number
 }
 
 function readLines(model: VimTextModel): string[] {
@@ -112,6 +119,7 @@ export function createVimEditorController(
     vimModeService,
     inputMethodService,
     executeCommand: runPlatformCommand,
+    getLineHeight,
   } = options
   const resolveSurfaceKey = typeof surfaceKey === 'function' ? surfaceKey : () => surfaceKey
   // The key follows the model: until Monaco swaps models the controller is still
@@ -234,6 +242,28 @@ export function createVimEditorController(
     let count = 0
     for (const range of ranges) count += range.endLineNumber - range.startLineNumber + 1
     return Math.max(1, count)
+  }
+
+  interface StickyScrollContribution extends monaco.editor.IEditorContribution {
+    readonly stickyScrollWidgetHeight: number
+  }
+
+  /**
+   * The sticky-scroll widget is an opaque overlay at the top of the viewport;
+   * `getVisibleRanges()` still counts the lines behind it. Vim's `zt`/`H` must
+   * treat the covered rows as invisible.
+   */
+  function stickyScrollHeight(): number {
+    const contribution = editor.getContribution?.<StickyScrollContribution>(
+      'store.contrib.stickyScrollController',
+    )
+    const height = contribution?.stickyScrollWidgetHeight
+    return typeof height === 'number' && height > 0 ? height : 0
+  }
+
+  function editorLineHeight(): number {
+    const height = getLineHeight?.()
+    return typeof height === 'number' && height > 0 ? height : 20
   }
 
   function resolveVisualMotion(
@@ -905,9 +935,92 @@ export function createVimEditorController(
       searchWord(command.direction, command.count)
       return
     }
+    if (command.type === 'scroll-viewport') {
+      editor.trigger('vim', 'editorScroll', {
+        to: command.direction,
+        by: 'wrappedLine',
+        value: Math.max(1, command.count),
+        revealCursor: true,
+        select: false,
+      })
+      return
+    }
 
     const model = editor.getModel()
     if (!model) return
+
+    if (command.type === 'reveal-line') {
+      const targetLine = Math.max(
+        1,
+        Math.min(model.getLineCount(), command.line ?? primaryPosition().line),
+      )
+      if (command.at === 'center') {
+        editor.trigger('vim', 'revealLine', { lineNumber: targetLine - 1, at: 'center' })
+      } else if (command.at === 'top') {
+        // Monaco's core `revealLine` intentionally reserves cursorSurroundingLines
+        // / sticky-scroll padding for Top/Bottom, so the target would not sit
+        // flush with the content area the way Vim's zt promises. Set the offset
+        // ourselves; subtract the real sticky-widget height so the target is not
+        // hidden underneath it. Monaco clamps both ends.
+        editor.setScrollTop(
+          Math.max(0, editor.getTopForLineNumber(targetLine) - stickyScrollHeight()),
+        )
+      } else {
+        const height = editor.getLayoutInfo().height
+        editor.setScrollTop(Math.max(0, editor.getBottomForLineNumber(targetLine) - height))
+      }
+      // Vim's `[count]zt/zz/zb` also moves the cursor to that line, keeping the
+      // original column (clamped to the target line).
+      if (command.line !== null) {
+        const column = Math.min(
+          primaryPosition().column,
+          model.getLineContent(targetLine).length + 1,
+        )
+        editor.setPosition({ lineNumber: targetLine, column }, 'vim')
+      }
+      return
+    }
+    if (command.type === 'goto-viewport-line') {
+      const ranges = editor.getVisibleRanges()
+      if (ranges.length === 0) return
+      let total = 0
+      for (const range of ranges) total += range.endLineNumber - range.startLineNumber + 1
+      // Rows covered by sticky scroll are visible to Monaco's range math but not
+      // to the user; H/M start below them.
+      const hidden = Math.min(total - 1, Math.ceil(stickyScrollHeight() / editorLineHeight()))
+      const usable = Math.max(1, total - hidden)
+      // Walk the ranges so a folded hole between two ranges is never chosen.
+      const lineAtIndex = (input: number): number => {
+        let remaining = Math.max(0, Math.min(total - 1, input))
+        let fallback = 1
+        for (const range of ranges) {
+          fallback = range.endLineNumber
+          const length = range.endLineNumber - range.startLineNumber + 1
+          if (remaining < length) return range.startLineNumber + remaining
+          remaining -= length
+        }
+        return fallback
+      }
+      const steps = Math.max(1, command.count)
+      let index: number
+      if (command.at === 'top') {
+        index = hidden + steps - 1
+      } else if (command.at === 'bottom') {
+        index = total - steps
+      } else {
+        // Vim's M ignores a count: it is the middle of what is visible.
+        index = hidden + Math.floor(usable / 2)
+      }
+      const target = lineAtIndex(index)
+      // The target is already visible; setPosition directly so the reveal in the
+      // wrapper does not scroll it back to the center.
+      editor.setPosition(
+        { lineNumber: target, column: firstNonBlankColumn(model.getLineContent(target)) },
+        'vim',
+      )
+      return
+    }
+
     const from = primaryPosition()
 
     if (command.type === 'motion') {
@@ -1170,6 +1283,7 @@ export function createVimEditorController(
       count: 0,
       pendingOperator: null,
       pendingG: false,
+      pendingZ: false,
       pendingBracket: null,
       pendingIndent: null,
       countAfterOperator: false,

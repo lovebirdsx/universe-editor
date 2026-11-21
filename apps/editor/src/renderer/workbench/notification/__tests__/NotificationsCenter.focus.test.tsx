@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { INotificationService, observableValue } from '@universe-editor/platform'
+import { getActiveVimSurface } from '@universe-editor/workbench-ui'
 import { ServicesContext } from '../../useService.js'
 import { NotificationsCenter } from '../NotificationsCenter.js'
 
@@ -56,6 +57,36 @@ afterEach(() => {
 async function flushRestore(): Promise<void> {
   await act(async () => {})
 }
+
+describe('NotificationsCenter Vim scrolling', () => {
+  it('scrolls the notification list without moving the focused row', () => {
+    const { container, centerVisible, service } = makeService()
+    service.notifications.set(
+      [
+        {
+          id: 'n1',
+          severity: 'info',
+          message: 'hello',
+          sticky: false,
+          timestamp: 0,
+          read: true,
+          dismissed: false,
+        },
+      ],
+      undefined,
+    )
+    renderHost(container)
+    act(() => centerVisible.set(true, undefined))
+
+    const list = screen.getByTestId('notifications-center-list')
+    Object.defineProperty(list, 'scrollHeight', { value: 400, configurable: true })
+    Object.defineProperty(list, 'clientHeight', { value: 200, configurable: true })
+    list.scrollTop = 10
+
+    act(() => getActiveVimSurface(document)?.surface.actions.scrollViewport?.('down', 1))
+    expect(list.scrollTop).toBe(32)
+  })
+})
 
 describe('NotificationsCenter focus restore', () => {
   it('returns focus to the pre-open element after the center closes (StrictMode)', async () => {

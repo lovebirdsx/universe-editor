@@ -13,6 +13,8 @@
 import type { IVimKeymapEntry, VimSurfaceKind } from './vimTypes.js'
 
 const LIST_LIKE: readonly VimSurfaceKind[] = ['list', 'menu', 'overlay']
+/** Menus have no vertical viewport of their own, so no `Ctrl+E/Y` there. */
+const SCROLLABLE_LIST_LIKE: readonly VimSurfaceKind[] = ['list', 'overlay']
 
 export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
   // -- lists, menus, overlays -------------------------------------------------
@@ -29,6 +31,18 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
     surfaces: LIST_LIKE,
   },
   { id: 'list.pageUp', keys: ['ctrl+u'], command: 'list.pageUp', surfaces: LIST_LIKE },
+  {
+    id: 'list.scrollViewportDown',
+    keys: ['ctrl+e'],
+    command: 'list.scrollViewportDown',
+    surfaces: SCROLLABLE_LIST_LIKE,
+  },
+  {
+    id: 'list.scrollViewportUp',
+    keys: ['ctrl+y'],
+    command: 'list.scrollViewportUp',
+    surfaces: SCROLLABLE_LIST_LIKE,
+  },
   {
     id: 'list.activate.enter',
     keys: ['enter'],
@@ -227,6 +241,18 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
   {
     id: 'terminal.scrollLineUp',
     keys: ['k'],
+    command: 'workbench.action.terminal.normalScrollLineUp',
+    surfaces: ['terminal'],
+  },
+  {
+    id: 'terminal.scrollViewportDown',
+    keys: ['ctrl+e'],
+    command: 'workbench.action.terminal.normalScrollLineDown',
+    surfaces: ['terminal'],
+  },
+  {
+    id: 'terminal.scrollViewportUp',
+    keys: ['ctrl+y'],
     command: 'workbench.action.terminal.normalScrollLineUp',
     surfaces: ['terminal'],
   },

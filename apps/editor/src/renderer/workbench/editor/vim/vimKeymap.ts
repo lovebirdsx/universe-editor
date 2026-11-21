@@ -57,6 +57,7 @@ function idle(state: VimState): VimState {
     count: 0,
     pendingOperator: null,
     pendingG: false,
+    pendingZ: false,
     pendingBracket: null,
     pendingIndent: null,
     countAfterOperator: false,
@@ -79,8 +80,8 @@ function motion(state: VimState, key: VimMotion): VimKeyResult {
   return emit(state, { type: 'motion', motion: key, count: state.count })
 }
 
-/** Paging strokes the controller hands to Monaco's viewport-relative commands. */
-export function isVimPagingStroke(e: {
+/** Ctrl strokes the editor Vim core owns as viewport movement. */
+export function isVimViewportStroke(e: {
   readonly key: string
   readonly ctrlKey: boolean
   readonly altKey: boolean
@@ -92,7 +93,7 @@ export function isVimPagingStroke(e: {
   // with the workbench.
   if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey === true) return false
   const key = e.key.toLowerCase()
-  return key === 'f' || key === 'b' || key === 'd' || key === 'u'
+  return key === 'f' || key === 'b' || key === 'd' || key === 'u' || key === 'e' || key === 'y'
 }
 
 export function pagingMotion(key: string): VimMotion {
@@ -159,7 +160,7 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
 
   if (input.ctrl && !input.alt && !input.meta) {
     if (
-      isVimPagingStroke({
+      isVimViewportStroke({
         key: input.key,
         ctrlKey: true,
         altKey: false,
@@ -167,6 +168,14 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
         shiftKey: input.shift,
       })
     ) {
+      const key = input.key.toLowerCase()
+      if (key === 'e' || key === 'y') {
+        return emit(state, {
+          type: 'scroll-viewport',
+          direction: key === 'e' ? 'down' : 'up',
+          count: Math.max(1, state.count),
+        })
+      }
       return emit(state, { type: 'motion', motion: pagingMotion(input.key), count: state.count })
     }
     // Any other modified stroke aborts a pending operator/count (Vim: only a
@@ -267,6 +276,27 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
     return { state: idle(state), command: null, handled: true }
   }
 
+  if (state.pendingZ) {
+    const at = key === 'z' ? 'center' : key === 't' ? 'top' : key === 'b' ? 'bottom' : null
+    if (at !== null) {
+      return emit(state, {
+        type: 'reveal-line',
+        at,
+        // A count is a line number (`[count]zt`), not a repetition.
+        line: state.count > 0 ? state.count : null,
+      })
+    }
+    if (isFunctionKeyName(key)) return { state: idle(state), command: null, handled: false }
+    return { state: idle(state), command: null, handled: true }
+  }
+
+  if (key === 'z') {
+    if (state.pendingOperator !== null) {
+      return { state: idle(state), command: null, handled: true }
+    }
+    return { state: { ...state, pendingZ: true }, command: null, handled: true }
+  }
+
   if (key === 'g') {
     return { state: { ...state, pendingG: true }, command: null, handled: true }
   }
@@ -321,6 +351,10 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
     state.pendingOperator !== null &&
     (key === '/' || key === '?' || key === 'n' || key === 'N')
   ) {
+    return { state: idle(state), command: null, handled: true }
+  }
+
+  if (state.pendingOperator !== null && (key === 'H' || key === 'M' || key === 'L')) {
     return { state: idle(state), command: null, handled: true }
   }
 
@@ -404,6 +438,24 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
       return emit(state, { type: 'undo' })
     case 'J':
       return emit(state, { type: 'join-lines', count: Math.max(1, state.count) })
+    case 'H':
+      return emit(state, {
+        type: 'goto-viewport-line',
+        at: 'top',
+        count: Math.max(1, state.count),
+      })
+    case 'M':
+      return emit(state, {
+        type: 'goto-viewport-line',
+        at: 'middle',
+        count: Math.max(1, state.count),
+      })
+    case 'L':
+      return emit(state, {
+        type: 'goto-viewport-line',
+        at: 'bottom',
+        count: Math.max(1, state.count),
+      })
     default:
       // Unhandled function keys (F-keys, lone modifiers, media keys, IME's
       // `Process`/`Dead`) belong to the workbench and Monaco — swallowing them

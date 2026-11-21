@@ -44,6 +44,11 @@ export interface IVimSurfaceActions {
   readonly first?: (count: number) => void
   readonly last?: (count: number) => void
   readonly page?: (direction: VimPageDirection, count: number) => void
+  /**
+   * Scroll the viewport without moving the focus / selection. Lists, trees and
+   * overlays use this for `Ctrl+E` / `Ctrl+Y`.
+   */
+  readonly scrollViewport?: (direction: VimPageDirection, count: number) => void
   readonly expand?: (count: number) => void
   readonly collapse?: (count: number) => void
   readonly toggle?: (count: number) => void

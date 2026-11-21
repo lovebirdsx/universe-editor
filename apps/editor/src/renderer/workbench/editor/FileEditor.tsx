@@ -348,6 +348,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       vimModeService,
       inputMethodService: vimInputMethodService,
       executeCommand: (id, args) => commandService.executeCommand(id, args),
+      getLineHeight: () => ed.getOption(MonacoLoader.get().editor.EditorOption.lineHeight),
     })
     const vimRegistration = registerVimSurface({
       get id() {

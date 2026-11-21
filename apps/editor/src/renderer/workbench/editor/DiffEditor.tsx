@@ -258,6 +258,8 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
         contextKeyService,
         vimModeService,
         inputMethodService: vimInputMethodService,
+        getLineHeight: () =>
+          modifiedEditor.getOption(MonacoLoader.get().editor.EditorOption.lineHeight),
         ...(commandService !== undefined
           ? {
               executeCommand: (id: string, args?: unknown) =>

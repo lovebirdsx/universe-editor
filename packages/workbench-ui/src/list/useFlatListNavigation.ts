@@ -36,6 +36,7 @@ import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { LIST_PAGE_STEP, resolveIndexNavigation } from './listKeyboard.js'
+import { findScrollableElement, measureRowHeight, scrollViewportByRows } from './scrollViewport.js'
 import {
   dispatchKeyboardContextMenu,
   findRowElement,
@@ -100,6 +101,10 @@ export interface IUseFlatListNavigationOptions {
   readonly getPageSize?: (() => number) | undefined
   /** Virtualized lists: scroll a row that is outside the rendered window. */
   readonly scrollToIndex?: ((index: number) => void) | undefined
+  /** Explicit scroll container; defaults to the nearest scrollable ancestor of the container. */
+  readonly getScrollElement?: (() => HTMLElement | null) | undefined
+  /** Row height for `Ctrl+E/Y`; defaults to measuring the focused (or first) row. */
+  readonly getRowHeight?: (() => number | undefined) | undefined
   /** Row identity attribute; defaults to `data-row-key`. */
   readonly rowDataAttr?: string | undefined
   /**
@@ -274,6 +279,25 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
           pageSize,
         })
         if (next !== undefined) focusRow(next)
+      },
+      scrollViewport: (direction, count) => {
+        const {
+          count: total,
+          focusedIndex,
+          getContainer,
+          getItemKey,
+          rowDataAttr,
+          getScrollElement,
+          getRowHeight,
+        } = optionsRef.current
+        const container = getContainer()
+        const scroller = getScrollElement?.() ?? findScrollableElement(container)
+        const rowIndex = focusedIndex >= 0 && focusedIndex < total ? focusedIndex : 0
+        const row =
+          container !== null && total > 0
+            ? findRowElement(container, rowDataAttr ?? DEFAULT_ROW_ATTR, getItemKey(rowIndex))
+            : null
+        scrollViewportByRows(scroller, getRowHeight?.() ?? measureRowHeight(row), direction, count)
       },
       activate: (_count, preview) => {
         const { count: total, focusedIndex, onActivate } = optionsRef.current

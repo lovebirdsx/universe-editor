@@ -104,7 +104,7 @@ export function NotificationsCenter({
           ×
         </button>
       </div>
-      <div className={styles['list']}>
+      <div className={styles['list']} data-testid="notifications-center-list">
         {items.length === 0 ? (
           <div className={styles['empty']}>
             {localize('notification.center.empty', 'No notifications')}

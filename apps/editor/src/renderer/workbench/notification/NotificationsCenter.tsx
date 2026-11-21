@@ -17,6 +17,9 @@ import { INotificationService, type INotification } from '@universe-editor/platf
 import {
   NotificationsCenter as NotificationsCenterUI,
   OwnerDocumentProvider,
+  findScrollableElement,
+  measureRowHeight,
+  scrollViewportByRows,
   useFocusRestore,
   useVimSurface,
   useVimSurfaceKey,
@@ -108,6 +111,18 @@ function NotificationsCenterSurface({
       },
       page: (direction, step) =>
         moveBy((direction === 'down' ? 1 : -1) * NOTIFICATION_ROWS_PER_PAGE * Math.max(1, step)),
+      scrollViewport: (direction, step) => {
+        const root = doc.querySelector<HTMLElement>('[data-testid="notifications-center"]')
+        const list = doc.querySelector<HTMLElement>('[data-testid="notifications-center-list"]')
+        const row =
+          list?.querySelector<HTMLElement>('[data-testid="notification-center-item"]') ?? null
+        scrollViewportByRows(
+          findScrollableElement(list ?? root),
+          measureRowHeight(row),
+          direction,
+          step,
+        )
+      },
       activate: () => {
         const notification = ordered[activeIndex]
         if (notification === undefined) return
@@ -126,7 +141,7 @@ function NotificationsCenterSurface({
       },
       escape: () => service.toggleCenter(),
     }),
-    [activeIndex, count, moveBy, ordered, service],
+    [activeIndex, count, doc, moveBy, ordered, service],
   )
 
   useVimSurface({

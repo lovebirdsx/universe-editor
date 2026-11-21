@@ -31,8 +31,10 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | `apps/editor/src/renderer/actions/terminalNormalActions.ts` | 终端 Normal 的进入 / 退出 / 滚动 / 选择 / 复制命令 |
 | `apps/editor/src/renderer/workbench/panel/terminal/terminalNormalMode.ts` | 终端 Normal 状态机（视口滚动 + 按行选择） |
 | `apps/editor/src/renderer/services/terminal/terminalNormalModeRegistry.ts` | 当前持有焦点的终端 controller 注册表 |
-| `apps/editor/src/renderer/workbench/editor/vim/vimKeymap.ts` | 编辑器 Normal/Insert reducer：裸键、计数、待定前缀（`g` / `[` / `]` / `>` / `<`）、operator |
+| `apps/editor/src/renderer/workbench/editor/vim/vimKeymap.ts` | 编辑器 Normal/Insert reducer：裸键、计数、待定前缀（`g` / `[` / `]` / `>` / `<` / `z`）、operator、视口滚动 |
 | `apps/editor/src/renderer/workbench/editor/vim/vimEditorController.ts` | 把 reducer 的输出绑到 Monaco：动作执行、搜索、模式同步；`executeCommand` 回调仅用于 workbench 命令 |
+| `apps/editor/src/renderer/workbench/panel/output/outputVimKeymap.ts` | Output 只读编辑器的受限 reducer：仅 `j/k`、`Ctrl+E/Y/D/U/F/B`、`gg/G`，不产生任何编辑 / 搜索命令 |
+| `apps/editor/src/renderer/workbench/panel/output/outputVimController.ts` | 把受限 reducer 绑到 Output 的 Monaco 实例；只跟踪 text focus 与 blur 重置 |
 
 ## 唯一入口与分发顺序
 
@@ -96,7 +98,9 @@ useVimSurface({
 
 `registerVimSurface` 是给非 React 调用方的同义入口（如终端实例）；React 侧一律用 `useVimSurface`，它会通过 ref 读取最新注册，避免每次渲染重注册。
 
-`IVimSurfaceActions` 字段：`move(direction,count)`、`first(count)`、`last(count)`、`page(direction,count)`、`expand/collapse/toggle(count)`、`activate(count,preview)`、`contextMenu/copy/remove(c)`、`next/previous(count)`、`escape(count)`，以及编辑器专用的 `handleStroke(event)`。
+`IVimSurfaceActions` 字段：`move(direction,count)`、`first(count)`、`last(count)`、`page(direction,count)`、`scrollViewport(direction,count)`、`expand/collapse/toggle(count)`、`activate(count,preview)`、`contextMenu/copy/remove(c)`、`next/previous(count)`、`escape(count)`，以及编辑器专用的 `handleStroke(event)`。
+
+`scrollViewport` 只移动视口，不移动焦点 / 选中项（`Ctrl+E/Y`）。列表 / 树 / 浮层 / 图谱的适配器各自提供 scroller 与行高；共享实现是 workbench-ui 的 `list/scrollViewport.ts`（`findScrollableElement` 从容器向上找真正滚动的祖先，`scrollViewportByRows` 按行高改 `scrollTop`，只夹下界）。焦点容器包着 `VirtualList` 的宿主（设置页、快捷键编辑器）必须显式传 `getScrollElement`，因为 VirtualList 的 scroller 是**子孙**而不是祖先。菜单没有纵向视口，不映射 `Ctrl+E/Y`。
 
 ### 新增 surface 的步骤
 
@@ -120,7 +124,33 @@ useVimSurface({
 - `runMatches` 会先尝试带 `when` 的条目，再尝试默认条目，取第一条匹配；因此同一键的「视图专用含义」不会被注册顺序遮蔽。所有候选都不匹配时**消费但不执行**。
 - 用户 `vim.keymap` 在服务里按 `id` 覆盖内置条目、其余追加；编辑器内核的 Normal 键不受该表覆盖。
 - 编辑器专属 leader 条目（`editor.*`）带 `surfaces: ['editor']`，不会出现在列表 / 标签栏等 surface 的有效 keymap 里。
-- 编辑器内核的裸键（`g` / `[` / `]` / `>` / `<` 前缀，以及 `K`、`%`、`*`、`#`、`o`、`O`、`c` operator 等）由 `vimKeymap.ts` 的 reducer 直接产出，不进 keymap 表；因此 `vim.keymap` 只能覆盖 leader 别名。Monaco 动作走 `editor.trigger`，workbench 命令（`]c` / `[c`）走 `createVimEditorController` 的 `executeCommand` 回调（`FileEditor` / `DiffEditor` 注入 `ICommandService`）。
+- 编辑器内核的裸键（`g` / `[` / `]` / `>` / `<` / `z` 前缀，以及 `K`、`%`、`*`、`#`、`o`、`O`、`c` operator、`H/M/L` 等）由 `vimKeymap.ts` 的 reducer 直接产出，不进 keymap 表；因此 `vim.keymap` 只能覆盖 leader 别名。Monaco 动作走 `editor.trigger`，workbench 命令（`]c` / `[c`）走 `createVimEditorController` 的 `executeCommand` 回调（`FileEditor` / `DiffEditor` 注入 `ICommandService`）。
+
+### 编辑器滚动命令（`vimEditorController`）
+
+三个命令在 `VimCommand` 里是独立成员，不复用 `VimMotion`，因此 `vimMotions.ts` / `vimOperators.ts` 的穷举 switch 与 operator 语义不受影响：
+
+| 命令 | 键 | Monaco 参数 | 语义 |
+| --- | --- | --- | --- |
+| `scroll-viewport` | `Ctrl+E` / `Ctrl+Y`（可带计数） | `editorScroll`：`{ to, by: 'wrappedLine', value: count, revealCursor: true, select: false }` | 按屏幕行滚动；`wrappedLine` 对齐 Vim 的屏幕行语义，`revealCursor` 负责光标被顶出视口时跟随 |
+| `reveal-line` | `zt` / `zz` / `zb` | `center` 用 `revealLine`；`top`/`bottom` 用 `setScrollTop`（见下） | 目标行 `target` 默认光标行；**带计数时 count 是目标行号，并把光标移到该行（保持列）**；不带计数时光标不动 |
+| `goto-viewport-line` | `H` / `M` / `L`（`H`/`L` 可带计数） | 控制器内 `setPosition`，不 reveal | 从 `getVisibleRanges()` 展开可见行序列：`H = 第 count 个可见行`、`L = 倒数第 count 个`、`M = 中间一个（忽略 count，同 Vim）`；列取首个非空白字符。直接调 `editor.setPosition` 而非会 reveal 的包装，避免二次滚动 |
+
+`zt` / `zb` **不能**直接用 `revealLine` 的 `top` / `bottom`：Monaco 会在目标侧叠加 `cursorSurroundingLines` 与粘性滚动（`stickyScroll.maxLineCount`，默认 5）的 padding（`viewLines.js` 的 `_computeScrollTopToRevealRange`），目标行距边缘 5 行。改用 `setScrollTop(editor.getTopForLineNumber(target) - stickyScrollHeight)` / `setScrollTop(editor.getBottomForLineNumber(target) - editor.getLayoutInfo().height)`；`center` 不受该 padding 影响，仍走 `revealLine`（`lineNumber` 0-based）。
+
+粘性滚动默认开启（`editor.stickyScroll.enabled`），它是不透明 overlay，`getVisibleRanges()` 仍会算上被盖住的行。控制器通过 `getContribution('store.contrib.stickyScrollController').stickyScrollWidgetHeight` 取实际高度：`zt` 从 `scrollTop` 里减掉它，`H`/`M` 的可见行索引起点也跳过这些行。`H/M/L` 遍历可见 ranges 而不是直接做 `first + count` 算术，折叠造成的空洞不会成为目标行。
+
+待定 operator 时按 `H/M/L/z` 会取消 operator 并吞键（`dH`、`dz*` 等组合明确不支持）。自动换行下 `H/M/L` 与 `zt/zb` 按逻辑行近似；`Ctrl+E/Y` 用 `wrappedLine` 不受影响。
+
+### Output 面板（受限 surface）
+
+`LogOutputView` 以 `kind: 'editor'`、`defaultMode: 'normal'` 注册，surfaceKey 为 `editor:${viewId ?? 'output'}`，`actions.handleStroke` 转发给 `outputVimController`。它与文件编辑器内核刻意分开：
+
+- 只支持滚动类命令（`j/k`、`Ctrl+E/Y`、`Ctrl+D/U`、`Ctrl+F/B`、`gg/G`），不会产生编辑 / 搜索 / Insert 命令；未映射的可打印键吞掉，`Esc`、方向键、`PageUp/PageDown` 仍交给 Monaco（查找框已打开时的 `Esc` 必须能关自己）。Normal 下 `Ctrl+F` 是整页下滚，不能用来打开查找框。
+- 翻页走 Monaco `editorScroll` 的 `by: 'halfPage' | 'page'`，按**视觉行**计量；Output 强制 `wordWrap: 'on'`，若用可见逻辑行数会把一条折成 20 行的日志算成 1 行。
+- `Ctrl+E/Y` 不移动光标，因此控制器通过 `onViewportScroll` 回调让视图关闭 follow-tail（`setAutoScroll(false)`）；否则下一条日志 append 会把视口拽回底部。
+- 控制器只跟踪 `onDidFocusEditorText/onDidBlurEditorText` 与 IME 守卫，blur 时重置计数；不写 `editorTextFocus`，避免 dirty-diff / inline completion 等命令误判。
+- `Ctrl+E/Y` 与文件编辑器一样通过 window capture 的 Vim 分发消费，早于 `useGlobalKeybindingHandler` 的 document capture 安全网；后者只在 `vimNormalMode && editorTextFocus` 时兜底，Output 不满足该条件也无需满足。
 
 ## User 让行与保留集
 
@@ -176,7 +206,7 @@ KeybindingsRegistry.hasBindingAtOrAbove(
 
 - 进入：`workbench.action.terminal.enterNormalMode`，默认 `ctrl+shift+\`，`when: 'terminalFocus'`。
 - 状态：模式写进 `IVimModeService`（`terminal-normal`）；组件同步 `data-vim-normal`。
-- 操作：`j/k` 行滚动、`Ctrl+D/U` 半页、`Ctrl+F/B` 整页、`gg/G` 边界、`v` 开始按行选择（`j/k` 扩展）、`y` 复制并退出。
+- 操作：`j/k` 行滚动、`Ctrl+E/Y` 纯视口行滚动（不移动光标）、`Ctrl+D/U` 半页、`Ctrl+F/B` 整页、`gg/G` 边界、`v` 开始按行选择（`j/k` 扩展）、`y` 复制并退出。
 - 退出：`i` / `a` / `q` / `Esc`。有选区时先清除选区并保持 Normal（`i/a/q/Esc` 都走同一个 `exitNormalMode`），再按一次才回到 shell；`dispose()` / 终端销毁时强制回 `insert` 并恢复输入法。
 - 输入法：进入时按 `vim.autoSwitchInputMethod` 切英文；与恢复操作串行化，避免快速 `i` → 再进入时乱序。
 
@@ -192,7 +222,8 @@ KeybindingsRegistry.hasBindingAtOrAbove(
 | platform | `src/__tests__/command/keybindingRegistry.test.ts`（含 User 覆盖 / `hasBindingAtOrAbove`） |
 | 服务 / 分发 | `services/vim/__tests__/vimModeService.test.ts`、`workbench/vim/__tests__/vimDispatcher.test.ts` |
 | surface 适配 | `workbench/editor/__tests__/useEditorTabsVim.test.tsx`、`activitybar/__tests__/ActivityBar.vim.test.tsx`、`paneComposite/__tests__/PaneCompositeHeader.vim.test.tsx`、`preferences/__tests__/SettingsEditor.vim.test.tsx`、`gitGraph/__tests__/useGraphKeyboardNav.vim.test.tsx`、`terminal/__tests__/terminalNormalMode.test.ts` |
-| 编辑器内核 | `workbench/editor/vim/__tests__/*` |
+| 编辑器内核 | `workbench/editor/vim/__tests__/*`、`workbench/panel/output/__tests__/outputVimKeymap.test.ts` / `outputVimController.test.ts` / `LogOutputView.test.tsx` |
+| 视口滚动 | `packages/workbench-ui/src/__tests__/scrollViewport.test.ts`、`vimSurfaceAdapters.test.tsx`（Tree/FlatList/Overlay）、`gitGraph/__tests__/useGraphKeyboardNav.vim.test.tsx`、`agents/__tests__/ChatBody.test.tsx` |
 | e2e | `smoke.vimGlobal.spec.ts` / `smoke.vimPriority.spec.ts`（@p0）、`smoke.vimMode` / `smoke.vimKeymapNavigation` / `smoke.vimTabs` / `smoke.vimTerminalNormal` / `smoke.vimSettings` / `smoke.vimWebview` / `smoke.vimChat`（@p1） |
 
 e2e 通过 `window.__E2E__.runCommand('_workbench.updateConfiguration', 'vim.enabled', value)` 开关，并用 `getContextKey` / `getStatusBarEntries` / `getActiveEditorUri` 断言，不戳 Monaco 内部 DOM。

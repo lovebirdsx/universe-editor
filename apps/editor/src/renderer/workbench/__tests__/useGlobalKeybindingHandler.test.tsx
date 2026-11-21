@@ -240,6 +240,44 @@ describe('useGlobalKeybindingHandler', () => {
     expect(preventDefault).toHaveBeenCalledTimes(1)
   })
 
+  it('blocks global Ctrl+e / Ctrl+y while Vim Normal mode holds text focus', () => {
+    const { executeCommand, instantiation } = createHarness()
+    bind('ctrl+e', 'test.globalE')
+    bind('ctrl+y', 'test.globalY')
+    const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    ck.createKey('vimNormalMode', true)
+    ck.createKey('editorTextFocus', true)
+    mountHost(instantiation)
+
+    for (const key of ['e', 'y']) {
+      const { preventDefault, stopPropagation } = dispatch({ ctrlKey: true, key })
+      expect(executeCommand).not.toHaveBeenCalled()
+      // Claim the stroke so Monaco's own redo / find never sees it.
+      expect(preventDefault).toHaveBeenCalledTimes(1)
+      expect(stopPropagation).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('still executes a User binding for Ctrl+e in Vim Normal mode', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+e',
+        command: 'test.userE',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('test.userE', () => {}))
+    const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    ck.createKey('vimNormalMode', true)
+    ck.createKey('editorTextFocus', true)
+    mountHost(instantiation)
+
+    const { preventDefault } = dispatch({ ctrlKey: true, key: 'e' })
+    expect(executeCommand).toHaveBeenCalledWith('test.userE')
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+  })
+
   it('still fires when ctrl is pressed inside editable target', () => {
     const { executeCommand, instantiation } = createHarness()
     bind('ctrl+b', 'test.toggle')

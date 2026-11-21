@@ -29,7 +29,7 @@ import { formatChord } from './titlebar/keybindingFormat.js'
 import { IKeyboardDebugService } from '../services/keybinding/keyboardDebugService.js'
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 import { MonacoLoader } from './editor/monaco/MonacoLoader.js'
-import { isVimPagingStroke } from './editor/vim/vimKeymap.js'
+import { isVimViewportStroke } from './editor/vim/vimKeymap.js'
 import { recordPerfPhase } from '../services/performance/perfPhases.js'
 import {
   formatGuardStop,
@@ -342,21 +342,25 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
 
       const key = buildKeyString(e)
 
-      // Vim Normal mode claims Ctrl+F/B/D/U while a Vim-enabled editor holds
-      // text focus. The registry's window-capture listener normally consumes
-      // these first; this guard is the safety net for a controller that is
-      // disabled or unfocused mid-flight, so Find / Toggle Panel never fire in
-      // Normal mode.
+      // Vim Normal mode claims Ctrl+F/B/D/U/E/Y while a Vim-enabled editor
+      // holds text focus. The registry's window-capture listener normally
+      // consumes these first; this guard is the safety net for a controller
+      // that is disabled or unfocused mid-flight, so Find / Toggle Panel /
+      // Redo never fire in Normal mode. A User binding still wins: the Vim
+      // dispatcher yielded to it, so fall through and execute it here.
       if (
         contextKeyService.get('vimNormalMode') === true &&
         contextKeyService.get('editorTextFocus') === true &&
-        isVimPagingStroke(e)
+        isVimViewportStroke(e) &&
+        !KeybindingsRegistry.hasBindingAtOrAbove(key, KeybindingWeight.User, contextKeyService)
       ) {
         if (dbg) {
           keyboardDebugService.append(
-            formatGuardStop(toDiagnostics(e, key), 'Vim Normal mode owns this paging stroke'),
+            formatGuardStop(toDiagnostics(e, key), 'Vim Normal mode owns this viewport stroke'),
           )
         }
+        e.preventDefault()
+        e.stopPropagation()
         return
       }
 

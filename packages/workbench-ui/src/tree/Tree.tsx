@@ -34,6 +34,7 @@ import {
 import { VirtualList } from '../list/VirtualList.js'
 import { resolveIndexNavigation } from '../list/listKeyboard.js'
 import { hasTrustworthyViewport } from '../list/scrollElementLayout.js'
+import { scrollViewportByRows } from '../list/scrollViewport.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
@@ -693,6 +694,16 @@ export function Tree<T>(props: ITreeProps<T>) {
         })
         const target = next === undefined ? undefined : vis[next]
         if (target) model.setSelection([target.id], target.id)
+      },
+      scrollViewport: (direction, count) => {
+        const current = model.getVisibleNodes().find((node) => node.id === model.focused)
+        const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
+        scrollViewportByRows(
+          containerRef.current,
+          (current === undefined ? undefined : resolve?.(current)) ?? fallback,
+          direction,
+          count,
+        )
       },
       expand: () => {
         const vis = model.getVisibleNodes()

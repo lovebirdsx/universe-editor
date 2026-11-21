@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { isVimPagingStroke, reduceVimKey } from '../vimKeymap.js'
+import { isVimViewportStroke, reduceVimKey } from '../vimKeymap.js'
 import { INITIAL_VIM_STATE, type VimKeyInput, type VimState } from '../vimTypes.js'
 
 function press(state: VimState, key: string, modifiers: Partial<Omit<VimKeyInput, 'key'>> = {}) {
@@ -456,6 +456,88 @@ describe('reduceVimKey', () => {
     })
   })
 
+  it('maps Ctrl+e/y to viewport scrolling with counts', () => {
+    expect(press(INITIAL_VIM_STATE, 'e', { ctrl: true }).command).toEqual({
+      type: 'scroll-viewport',
+      direction: 'down',
+      count: 1,
+    })
+    expect(press(INITIAL_VIM_STATE, 'y', { ctrl: true }).command).toEqual({
+      type: 'scroll-viewport',
+      direction: 'up',
+      count: 1,
+    })
+    const counted = press(INITIAL_VIM_STATE, '3').state
+    expect(press(counted, 'e', { ctrl: true }).command).toEqual({
+      type: 'scroll-viewport',
+      direction: 'down',
+      count: 3,
+    })
+  })
+
+  it('resolves zz / zt / zb, using a count as the target line', () => {
+    const z = press(INITIAL_VIM_STATE, 'z')
+    expect(z.state.pendingZ).toBe(true)
+    expect(z.command).toBeNull()
+    expect(press(z.state, 'z').command).toEqual({ type: 'reveal-line', at: 'center', line: null })
+    expect(press(press(INITIAL_VIM_STATE, 'z').state, 't').command).toEqual({
+      type: 'reveal-line',
+      at: 'top',
+      line: null,
+    })
+    expect(press(press(INITIAL_VIM_STATE, 'z').state, 'b').command).toEqual({
+      type: 'reveal-line',
+      at: 'bottom',
+      line: null,
+    })
+    const counted = press(press(INITIAL_VIM_STATE, '4').state, 'z').state
+    expect(press(counted, 't').command).toEqual({ type: 'reveal-line', at: 'top', line: 4 })
+  })
+
+  it('clears a dangling z and lets function keys through', () => {
+    const swallowed = press(press(INITIAL_VIM_STATE, 'z').state, 'x')
+    expect(swallowed.state.pendingZ).toBe(false)
+    expect(swallowed.command).toBeNull()
+    expect(swallowed.handled).toBe(true)
+
+    const passed = press(press(INITIAL_VIM_STATE, 'z').state, 'F5')
+    expect(passed.state.pendingZ).toBe(false)
+    expect(passed.handled).toBe(false)
+  })
+
+  it('maps H / M / L to visible-line jumps with counts', () => {
+    expect(press(INITIAL_VIM_STATE, 'H').command).toEqual({
+      type: 'goto-viewport-line',
+      at: 'top',
+      count: 1,
+    })
+    expect(press(INITIAL_VIM_STATE, 'M').command).toEqual({
+      type: 'goto-viewport-line',
+      at: 'middle',
+      count: 1,
+    })
+    expect(press(INITIAL_VIM_STATE, 'L').command).toEqual({
+      type: 'goto-viewport-line',
+      at: 'bottom',
+      count: 1,
+    })
+    expect(press(press(INITIAL_VIM_STATE, '2').state, 'H').command).toEqual({
+      type: 'goto-viewport-line',
+      at: 'top',
+      count: 2,
+    })
+  })
+
+  it('cancels a pending operator on z / H / M / L', () => {
+    for (const key of ['z', 'H', 'M', 'L']) {
+      const armed = press(INITIAL_VIM_STATE, 'd').state
+      const result = press(armed, key)
+      expect(result.state.pendingOperator).toBeNull()
+      expect(result.command).toBeNull()
+      expect(result.handled).toBe(true)
+    }
+  })
+
   it('lets function keys through a dangling g / bracket / indent prefix', () => {
     for (const prefix of ['g', '[', ']', '>', '<']) {
       const armed = press(INITIAL_VIM_STATE, prefix).state
@@ -466,18 +548,36 @@ describe('reduceVimKey', () => {
   })
 })
 
-describe('isVimPagingStroke', () => {
-  it('accepts only plain Ctrl + f/b/d/u', () => {
-    expect(isVimPagingStroke({ key: 'f', ctrlKey: true, altKey: false, metaKey: false })).toBe(true)
+describe('isVimViewportStroke', () => {
+  it('accepts only plain Ctrl + f/b/d/u/e/y', () => {
+    expect(isVimViewportStroke({ key: 'f', ctrlKey: true, altKey: false, metaKey: false })).toBe(
+      true,
+    )
+    expect(isVimViewportStroke({ key: 'e', ctrlKey: true, altKey: false, metaKey: false })).toBe(
+      true,
+    )
+    expect(isVimViewportStroke({ key: 'y', ctrlKey: true, altKey: false, metaKey: false })).toBe(
+      true,
+    )
     expect(
-      isVimPagingStroke({ key: 'F', ctrlKey: true, altKey: false, metaKey: false, shiftKey: true }),
+      isVimViewportStroke({
+        key: 'F',
+        ctrlKey: true,
+        altKey: false,
+        metaKey: false,
+        shiftKey: true,
+      }),
     ).toBe(false)
-    expect(isVimPagingStroke({ key: 'f', ctrlKey: true, altKey: true, metaKey: false })).toBe(false)
-    expect(isVimPagingStroke({ key: 'f', ctrlKey: true, altKey: false, metaKey: true })).toBe(false)
-    expect(isVimPagingStroke({ key: 'j', ctrlKey: true, altKey: false, metaKey: false })).toBe(
+    expect(isVimViewportStroke({ key: 'f', ctrlKey: true, altKey: true, metaKey: false })).toBe(
       false,
     )
-    expect(isVimPagingStroke({ key: 'f', ctrlKey: false, altKey: false, metaKey: false })).toBe(
+    expect(isVimViewportStroke({ key: 'f', ctrlKey: true, altKey: false, metaKey: true })).toBe(
+      false,
+    )
+    expect(isVimViewportStroke({ key: 'j', ctrlKey: true, altKey: false, metaKey: false })).toBe(
+      false,
+    )
+    expect(isVimViewportStroke({ key: 'f', ctrlKey: false, altKey: false, metaKey: false })).toBe(
       false,
     )
   })

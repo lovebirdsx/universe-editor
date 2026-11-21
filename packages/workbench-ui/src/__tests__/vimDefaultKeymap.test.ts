@@ -85,6 +85,22 @@ describe('VIM_DEFAULT_KEYMAP', () => {
     }
   })
 
+  it('scrolls list/overlay viewports with Ctrl+e/y but leaves menus alone', () => {
+    for (const kind of ['list', 'overlay'] as const) {
+      expect(commandFor(kind, ['ctrl+e'])).toBe('list.scrollViewportDown')
+      expect(commandFor(kind, ['ctrl+y'])).toBe('list.scrollViewportUp')
+    }
+    expect(commandFor('menu', ['ctrl+e'])).toBeUndefined()
+    expect(commandFor('menu', ['ctrl+y'])).toBeUndefined()
+  })
+
+  it('scrolls terminal normal mode lines with Ctrl+e/y', () => {
+    expect(commandFor('terminal', ['ctrl+e'])).toBe(
+      'workbench.action.terminal.normalScrollLineDown',
+    )
+    expect(commandFor('terminal', ['ctrl+y'])).toBe('workbench.action.terminal.normalScrollLineUp')
+  })
+
   it('editor leader aliases stay on the editor surface', () => {
     const expectations = [
       [['<leader>', 'd'], 'editor.action.revealDefinition'],

@@ -51,6 +51,11 @@ import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { LIST_PAGE_STEP, resolveIndexNavigation } from '../list/listKeyboard.js'
+import {
+  findScrollableElement,
+  measureRowHeight,
+  scrollViewportByRows,
+} from '../list/scrollViewport.js'
 
 /** Typeahead buffer lifetime — a pause longer than this starts a fresh query. */
 const TYPEAHEAD_RESET_MS = 500
@@ -314,6 +319,20 @@ export function useOverlayListNavigation(
             pageSize: LIST_PAGE_STEP * Math.max(1, count),
           })
           if (next !== undefined) setActiveIndex(next)
+        },
+        scrollViewport: (direction, count) => {
+          const container = containerElRef.current
+          const row =
+            container?.querySelector('[data-active="true"]') ?? container?.firstElementChild ?? null
+          // Hosts often put the focusable row container inside the panel that
+          // actually scrolls (AnchoredSurface); walk up so Ctrl+E/Y moves the
+          // visible scroller instead of a zero-overflow inner div.
+          scrollViewportByRows(
+            findScrollableElement(container),
+            measureRowHeight(row),
+            direction,
+            count,
+          )
         },
         activate: (_count, preview) => {
           const total = optionsRef.current.count

@@ -162,6 +162,22 @@ describe('Tree as a Vim list surface', () => {
     expect(document.querySelector('[data-row-key="p"]')?.getAttribute('data-expanded')).toBe('true')
   })
 
+  it('scrolls the viewport without changing the selection', () => {
+    const model = makeTreeModel()
+    render(<TreeHost model={model} onActivate={() => {}} onRowMenu={() => {}} />)
+    act(() => screen.getByRole('tree').focus())
+    const actions = surfaceActions()
+    act(() => actions.first?.(1))
+
+    const tree = screen.getByRole('tree')
+    tree.scrollTop = 100
+    act(() => actions.scrollViewport?.('up', 2))
+    expect(tree.scrollTop).toBe(56)
+    act(() => actions.scrollViewport?.('down', 3))
+    expect(tree.scrollTop).toBe(122)
+    expect(selectedRows()).toEqual(['p'])
+  })
+
   it('activates leaves with preview and raises the row context menu', () => {
     const model = makeTreeModel()
     const onActivate = vi.fn()
@@ -248,6 +264,19 @@ describe('FlatList as a Vim list surface', () => {
     expect(flatSelection()).toEqual(['row-0'])
   })
 
+  it('scrolls the viewport without moving the focused row', () => {
+    render(<FlatListHost vimSurfaceId="extensions" />)
+    act(() => screen.getByTestId('list').focus())
+    const actions = surfaceActions()
+    act(() => actions.first?.(1))
+
+    const list = screen.getByTestId('list')
+    list.scrollTop = 100
+    act(() => actions.scrollViewport?.('down', 2))
+    expect(list.scrollTop).toBe(144)
+    expect(flatSelection()).toEqual(['row-0'])
+  })
+
   it('activates only when the host owns activation', () => {
     const onActivate = vi.fn()
     render(<FlatListHost itemCount={3} onActivate={onActivate} />)
@@ -296,12 +325,14 @@ function OverlayHost({
     ...(onEscape !== undefined ? { onEscape } : {}),
   })
   return (
-    <div data-testid="popup" ref={nav.containerRef} {...nav.containerProps}>
-      {Array.from({ length: itemCount }, (_, i) => (
-        <div key={i} data-testid={`item-${i}`} {...nav.getItemProps(i)}>
-          item {i}
-        </div>
-      ))}
+    <div data-testid="popup-scroll">
+      <div data-testid="popup" ref={nav.containerRef} {...nav.containerProps}>
+        {Array.from({ length: itemCount }, (_, i) => (
+          <div key={i} data-testid={`item-${i}`} {...nav.getItemProps(i)}>
+            item {i}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -331,6 +362,22 @@ describe('Overlay as a Vim overlay surface', () => {
     expect(activeOverlayIndex()).toBe(0)
     act(() => actions.page?.('down', 1))
     expect(activeOverlayIndex()).toBe(7)
+  })
+
+  it('scrolls the visible ancestor without moving the active row', () => {
+    render(<OverlayHost onActivate={() => {}} />)
+    const actions = surfaceActions()
+    const scroller = screen.getByTestId('popup-scroll')
+    const popup = screen.getByTestId('popup')
+    // happy-dom has no layout: give the ancestor a real overflow range so
+    // findScrollableElement can tell it apart from the focusable inner div.
+    Object.defineProperty(scroller, 'scrollHeight', { value: 400, configurable: true })
+    Object.defineProperty(scroller, 'clientHeight', { value: 200, configurable: true })
+    scroller.scrollTop = 10
+    act(() => actions.scrollViewport?.('down', 1))
+    expect(scroller.scrollTop).toBe(32)
+    expect(popup.scrollTop).toBe(0)
+    expect(activeOverlayIndex()).toBe(0)
   })
 
   it('closes through the Vim escape action', () => {

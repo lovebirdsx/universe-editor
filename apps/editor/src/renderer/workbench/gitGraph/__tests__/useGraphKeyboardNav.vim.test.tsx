@@ -105,6 +105,19 @@ describe('useGraphKeyboardNav as a Vim list surface', () => {
     expect(selected()).toBe('b')
   })
 
+  it('scrolls the viewport without changing the selection', () => {
+    render(<Harness onSelect={() => {}} openMenu={() => {}} openCommitChanges={() => {}} />)
+    act(() => screen.getByTestId('graph').focus())
+    const actions = surfaceActions()
+    act(() => actions.first?.(1))
+
+    const graph = screen.getByTestId('graph')
+    graph.scrollTop = 100
+    act(() => actions.scrollViewport?.('down', 2))
+    expect(graph.scrollTop).toBe(140)
+    expect(selected()).toBe('a')
+  })
+
   it('activates the commit-changes view and raises the row menu', () => {
     const onSelect = vi.fn()
     const openMenu = vi.fn()

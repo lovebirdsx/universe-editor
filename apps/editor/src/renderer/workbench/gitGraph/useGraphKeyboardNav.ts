@@ -17,6 +17,7 @@
 import { useCallback, type KeyboardEvent, type RefObject } from 'react'
 import {
   isContextMenuKey,
+  scrollViewportByRows,
   useCtrlNavigationLayer,
   useVimSurface,
   useVimSurfaceKey,
@@ -132,6 +133,9 @@ export function useGraphKeyboardNav({
         const base = currentIndex < 0 ? 0 : currentIndex
         const delta = pageSize() * Math.max(1, count)
         moveTo(direction === 'down' ? base + delta : base - delta)
+      },
+      scrollViewport: (direction, count) => {
+        scrollViewportByRows(scrollRef.current, rowHeight, direction, count)
       },
       activate: () => {
         if (selectionRef.current[0] === undefined) return

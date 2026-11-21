@@ -49,6 +49,8 @@ export interface VimState {
   readonly pendingOperator: VimOperator | null
   /** `g` was pressed and we are waiting for the command key (`gg`, `gd`, …). */
   readonly pendingG: boolean
+  /** `z` was pressed and we are waiting for `z` / `t` / `b`. */
+  readonly pendingZ: boolean
   /** `[` or `]` was pressed and we are waiting for the navigation key. */
   readonly pendingBracket: '[' | ']' | null
   /** `>` or `<` was pressed and we are waiting for the same key (`>>`, `<<`). */
@@ -66,6 +68,7 @@ export const INITIAL_VIM_STATE: VimState = {
   count: 0,
   pendingOperator: null,
   pendingG: false,
+  pendingZ: false,
   pendingBracket: null,
   pendingIndent: null,
   countAfterOperator: false,
@@ -126,6 +129,25 @@ export type VimCommand =
     }
   /** `s`: delete characters under the cursor and enter Insert. */
   | { readonly type: 'substitute-char'; readonly count: number }
+  /** `Ctrl+E` / `Ctrl+Y`: scroll the viewport by screen lines, keeping the cursor visible. */
+  | {
+      readonly type: 'scroll-viewport'
+      readonly direction: 'up' | 'down'
+      readonly count: number
+    }
+  /** `zz` / `zt` / `zb`: place a line at the center / top / bottom of the viewport. */
+  | {
+      readonly type: 'reveal-line'
+      readonly at: 'top' | 'center' | 'bottom'
+      /** `null` means "the cursor line"; a count is a line number, like `[count]zt`. */
+      readonly line: number | null
+    }
+  /** `H` / `M` / `L`: jump to a visible line without moving the viewport. */
+  | {
+      readonly type: 'goto-viewport-line'
+      readonly at: 'top' | 'middle' | 'bottom'
+      readonly count: number
+    }
 
 export interface VimKeyInput {
   readonly key: string
@@ -199,6 +221,14 @@ export interface VimEditor {
   pushUndoStop(): boolean
   trigger(source: string, handlerId: string, payload: unknown): void
   revealPositionInCenterIfOutsideViewport(position: VimMonacoPosition, scrollType?: number): void
+  /** Content Y of a line's top edge; used for exact `zt` / `zb` alignment. */
+  getTopForLineNumber(lineNumber: number): number
+  /** Content Y of a line's bottom edge. */
+  getBottomForLineNumber(lineNumber: number): number
+  setScrollTop(scrollTop: number, scrollType?: number): void
+  getLayoutInfo(): { height: number }
+  /** Lets `zt`/`H` subtract the sticky-scroll overlay without importing Monaco. */
+  getContribution?<T extends monaco.editor.IEditorContribution>(id: string): T | null
   getVisibleRanges(): readonly VimRange[]
   getContainerDomNode(): HTMLElement
   onDidFocusEditorText(listener: () => void): { dispose(): void }

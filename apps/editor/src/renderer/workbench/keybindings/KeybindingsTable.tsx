@@ -113,6 +113,8 @@ export function KeybindingsTable({
     onFocusChange: useCallback((index: number) => onSelect(rows[index]?.row.id), [rows, onSelect]),
     getItemKey: useCallback((index: number) => rows[index]?.row.id ?? '', [rows]),
     getContainer: useCallback(() => containerRef.current, [containerRef]),
+    getScrollElement: useCallback(() => listRef.current?.getScrollElement() ?? null, []),
+    getRowHeight: () => ROW_HEIGHT,
     role: 'grid',
     // Unlike the other flat lists, focus alone must not select a row: the
     // `keybindingFocus` context key gates the row commands, and arriving in the

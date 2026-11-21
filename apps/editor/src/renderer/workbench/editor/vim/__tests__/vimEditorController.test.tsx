@@ -73,6 +73,7 @@ function createFakeEditor(lines: string[], doc: Document = document) {
       decorationClears++
     }),
   }
+  const contributions = new Map<string, monaco.editor.IEditorContribution>()
   const editor: VimEditor = {
     getModel: () => model,
     getSelections: () => [selection],
@@ -89,6 +90,12 @@ function createFakeEditor(lines: string[], doc: Document = document) {
     pushUndoStop: vi.fn(() => true),
     trigger: vi.fn(),
     revealPositionInCenterIfOutsideViewport: vi.fn(),
+    getTopForLineNumber: vi.fn((lineNumber: number) => (lineNumber - 1) * 20),
+    getBottomForLineNumber: vi.fn((lineNumber: number) => lineNumber * 20),
+    setScrollTop: vi.fn(),
+    getLayoutInfo: vi.fn(() => ({ height: 30, lineHeight: 20 })),
+    getContribution: <T extends monaco.editor.IEditorContribution>(id: string): T | null =>
+      (contributions.get(id) as T | undefined) ?? null,
     getVisibleRanges: () => [
       { startLineNumber: 1, startColumn: 1, endLineNumber: 20, endColumn: 1 },
     ],
@@ -141,6 +148,12 @@ function createFakeEditor(lines: string[], doc: Document = document) {
     overlays: () => overlays,
     decorationSets: () => decorationSets,
     decorationClears: () => decorationClears,
+    setContribution: (
+      id: string,
+      contribution: monaco.editor.IEditorContribution & { stickyScrollWidgetHeight?: number },
+    ) => {
+      contributions.set(id, contribution)
+    },
   }
 }
 
@@ -1325,6 +1338,165 @@ describe('createVimEditorController', () => {
     expect(getLastVimSearch()?.text).toBe('foo')
     controller.handleKeyDown(key('#'))
     expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+    controller.dispose()
+  })
+
+  it('scrolls the viewport with Ctrl+e / Ctrl+y and counts', () => {
+    const { fake, controller } = createNormalHarness(['one', 'two'])
+    vi.mocked(fake.editor.trigger).mockClear()
+
+    controller.handleKeyDown(key('e', { ctrlKey: true }))
+    expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'editorScroll', {
+      to: 'down',
+      by: 'wrappedLine',
+      value: 1,
+      revealCursor: true,
+      select: false,
+    })
+
+    controller.handleKeyDown(key('3'))
+    controller.handleKeyDown(key('y', { ctrlKey: true }))
+    expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'editorScroll', {
+      to: 'up',
+      by: 'wrappedLine',
+      value: 3,
+      revealCursor: true,
+      select: false,
+    })
+    controller.dispose()
+  })
+
+  it('centers / tops / bottoms a line with zz/zt/zb and moves the cursor for a count', () => {
+    const { fake, controller } = createNormalHarness(['one', 'two', 'three'])
+    controller.handleKeyDown(key('j'))
+    vi.mocked(fake.editor.setPosition).mockClear()
+    vi.mocked(fake.editor.trigger).mockClear()
+    vi.mocked(fake.editor.setScrollTop).mockClear()
+
+    controller.handleKeyDown(key('z'))
+    controller.handleKeyDown(key('z'))
+    expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'revealLine', {
+      lineNumber: 1,
+      at: 'center',
+    })
+
+    // Top/bottom bypass Monaco's revealLine padding (sticky scroll reserves
+    // five lines by default) and set the scroll offset for an edge-flush line.
+    controller.handleKeyDown(key('z'))
+    controller.handleKeyDown(key('t'))
+    expect(fake.editor.setScrollTop).toHaveBeenLastCalledWith(20)
+
+    controller.handleKeyDown(key('z'))
+    controller.handleKeyDown(key('b'))
+    expect(fake.editor.setScrollTop).toHaveBeenLastCalledWith(10)
+    // No count: the cursor line is the target, so it stays put.
+    expect(fake.editor.setPosition).not.toHaveBeenCalled()
+
+    // A count is the target line number: 3zt puts line 3 at the top and moves
+    // the cursor there (Vim keeps the column).
+    fake.editor.setPosition({ lineNumber: 2, column: 3 }, 'vim')
+    vi.mocked(fake.editor.setPosition).mockClear()
+    controller.handleKeyDown(key('3'))
+    controller.handleKeyDown(key('z'))
+    controller.handleKeyDown(key('t'))
+    expect(fake.editor.setScrollTop).toHaveBeenLastCalledWith(40)
+    expect(fake.editor.setPosition).toHaveBeenLastCalledWith({ lineNumber: 3, column: 3 }, 'vim')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 3, startColumn: 3 })
+    controller.dispose()
+  })
+
+  it('keeps zt below the sticky-scroll overlay', () => {
+    const { fake, controller } = createNormalHarness(['one', 'two', 'three'])
+    fake.setContribution('store.contrib.stickyScrollController', {
+      dispose: () => {},
+      stickyScrollWidgetHeight: 10,
+    })
+    controller.handleKeyDown(key('3'))
+    controller.handleKeyDown(key('z'))
+    controller.handleKeyDown(key('t'))
+    // topForLine(3) = 40, minus the 10px sticky overlay.
+    expect(fake.editor.setScrollTop).toHaveBeenLastCalledWith(30)
+    controller.dispose()
+  })
+
+  it('jumps to the top/middle/bottom visible line with H/M/L and counts', () => {
+    const lines = Array.from({ length: 50 }, (_, index) => `line${index + 1}`)
+    const { fake, controller } = createNormalHarness(lines)
+    fake.editor.getVisibleRanges = () => [
+      { startLineNumber: 10, startColumn: 1, endLineNumber: 30, endColumn: 1 },
+    ]
+    vi.mocked(fake.editor.revealPositionInCenterIfOutsideViewport).mockClear()
+
+    controller.handleKeyDown(key('H'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 10, startColumn: 1 })
+    controller.handleKeyDown(key('M'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 20, startColumn: 1 })
+    controller.handleKeyDown(key('L'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 30, startColumn: 1 })
+
+    controller.handleKeyDown(key('2'))
+    controller.handleKeyDown(key('H'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 11 })
+    controller.handleKeyDown(key('2'))
+    controller.handleKeyDown(key('M'))
+    // Vim's M ignores a count.
+    expect(fake.selection()).toMatchObject({ startLineNumber: 20 })
+    controller.handleKeyDown(key('2'))
+    controller.handleKeyDown(key('L'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 29 })
+
+    expect(fake.editor.revealPositionInCenterIfOutsideViewport).not.toHaveBeenCalled()
+    controller.dispose()
+  })
+
+  it('keeps H/M/L inside visible ranges when folds split the viewport', () => {
+    const lines = Array.from({ length: 100 }, (_, index) => `line${index + 1}`)
+    const { fake, controller } = createNormalHarness(lines)
+    fake.editor.getVisibleRanges = () => [
+      { startLineNumber: 10, startColumn: 1, endLineNumber: 19, endColumn: 1 },
+      { startLineNumber: 61, startColumn: 1, endLineNumber: 80, endColumn: 1 },
+    ]
+
+    controller.handleKeyDown(key('H'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+    controller.handleKeyDown(key('M'))
+    // 30 visible lines; the 16th is the first line of the second range + 5.
+    expect(fake.selection()).toMatchObject({ startLineNumber: 66 })
+    controller.handleKeyDown(key('L'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 80 })
+    controller.dispose()
+  })
+
+  it('skips sticky-scroll rows for H and M', () => {
+    const lines = Array.from({ length: 50 }, (_, index) => `line${index + 1}`)
+    const { fake, controller } = createNormalHarness(lines)
+    fake.editor.getVisibleRanges = () => [
+      { startLineNumber: 10, startColumn: 1, endLineNumber: 30, endColumn: 1 },
+    ]
+    // 10px at a 20px line height covers the first visible row.
+    fake.setContribution('store.contrib.stickyScrollController', {
+      dispose: () => {},
+      stickyScrollWidgetHeight: 10,
+    })
+
+    controller.handleKeyDown(key('H'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 11 })
+    controller.handleKeyDown(key('M'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 21 })
+    controller.handleKeyDown(key('L'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 30 })
+    controller.dispose()
+  })
+
+  it('drops a pending z on blur', () => {
+    const { fake, controller } = createNormalHarness(['one', 'two'])
+    controller.handleKeyDown(key('z'))
+    fake.blur()
+    fake.focus()
+    vi.mocked(fake.editor.trigger).mockClear()
+
+    controller.handleKeyDown(key('t'))
+    expect(fake.editor.trigger).not.toHaveBeenCalled()
     controller.dispose()
   })
 })

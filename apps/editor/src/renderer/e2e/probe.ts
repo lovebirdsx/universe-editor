@@ -930,7 +930,11 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       // Monaco 0.55's setPosition no longer reveals: a real user's "cursor on
       // line N" implies line N is visible (keyboard nav / go-to-line scrolls).
       // Mirror that so specs asserting viewport state see a truthful editor.
-      monaco.revealPosition({ lineNumber, column })
+      // Immediate: the default Smooth reveal keeps animating after `evaluate`
+      // returns and swallows the next viewport command (Ctrl+E landed on the
+      // old offset), so specs could never use the first visible line as a
+      // baseline.
+      monaco.revealPosition({ lineNumber, column }, MonacoLoader.get().editor.ScrollType.Immediate)
       monaco.focus()
       return true
     },

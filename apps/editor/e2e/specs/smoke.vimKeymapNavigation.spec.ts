@@ -11,12 +11,29 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/coreTypescriptSharedApp.js'
-import { mkTempDir } from '@universe-editor/e2e-harness'
+import { mkTempDir, type WorkbenchPO } from '@universe-editor/e2e-harness'
 
 const NAV_BODY = 'export function target() {}\nconst value = target()\n'
 
 const text = (page: Page) => page.evaluate(() => window.__E2E__!.getActiveEditorText())
 const cursor = (page: Page) => page.evaluate(() => window.__E2E__!.getActiveEditorCursor())
+const firstVisible = (page: Page) =>
+  page.evaluate(() => window.__E2E__!.getActiveEditorFirstVisibleLine())
+const lastVisible = (page: Page) =>
+  page.evaluate(() => window.__E2E__!.getActiveEditorLastVisibleLine())
+
+/**
+ * Keep the panel visible so the first error log does not auto-reveal Output:
+ * `ErrorLogAutoRevealContribution` focuses the Output view on that reveal,
+ * which steals the editor's keyboard focus mid-test. The workspace switch after
+ * `openWorkspace` reloads the persisted layout (panel hidden again), hence the
+ * second call right before the viewport assertions.
+ */
+async function ensurePanelVisible(page: Page, workbench: WorkbenchPO): Promise<void> {
+  if (await workbench.getContextKey<boolean>('panelVisible')) return
+  await workbench.runCommand('workbench.action.togglePanel')
+  await expect.poll(() => workbench.getContextKey<boolean>('panelVisible')).toBe(true)
+}
 
 async function setText(page: Page, body: string): Promise<void> {
   await expect
@@ -61,6 +78,7 @@ test.describe('@p1 vim keymap navigation', () => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
     await openWorkspaceFile(page)
+    await ensurePanelVisible(page, workbench)
     await setVimModeEnabled(page, true)
 
     await test.step('gd and <leader>d jump to the definition', async () => {
@@ -134,6 +152,80 @@ test.describe('@p1 vim keymap navigation', () => {
       await page.keyboard.press('Space')
       await page.keyboard.press('c')
       await expect.poll(() => text(page)).toMatch(/^\s*\/\/\s*const value = 1/)
+    })
+
+    await test.step('Ctrl+E/Y scroll the viewport without moving a mid-buffer cursor', async () => {
+      // The workspace layout reload may have hidden the panel again; re-open
+      // before the first error can reveal (and focus) Output.
+      await ensurePanelVisible(page, workbench)
+      const body = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join('\n')
+      await setText(page, `${body}\n`)
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(120, 1))
+      await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: 120 })
+      // setActiveEditorCursor reveals the line with ScrollType.Immediate, so
+      // the viewport is a stable baseline as soon as the cursor lands.
+      const before = (await firstVisible(page)) ?? 1
+      await page.keyboard.press('Control+e')
+      await expect.poll(() => firstVisible(page), { intervals: [100, 200, 500] }).toBe(before + 1)
+      await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: 120 })
+
+      await page.keyboard.press('Control+y')
+      await expect.poll(() => firstVisible(page), { intervals: [100, 200, 500] }).toBe(before)
+    })
+
+    await test.step('zt/zz/zb place a line at the viewport edge, moving the cursor only for a count', async () => {
+      await page.keyboard.press('z')
+      await page.keyboard.press('t')
+      await expect.poll(() => firstVisible(page), { intervals: [100, 200, 500] }).toBe(120)
+      await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: 120 })
+
+      await page.keyboard.press('z')
+      await page.keyboard.press('b')
+      await expect.poll(() => lastVisible(page), { intervals: [100, 200, 500] }).toBe(120)
+
+      await page.keyboard.press('z')
+      await page.keyboard.press('z')
+      await expect
+        .poll(
+          async () => {
+            const first = await firstVisible(page)
+            const last = await lastVisible(page)
+            if (first === undefined || last === undefined) return false
+            return first <= 120 && last >= 120 && Math.abs(120 - first - (last - 120)) <= 1
+          },
+          { intervals: [100, 200, 500] },
+        )
+        .toBe(true)
+      await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: 120 })
+
+      // A count is a target line and also moves the cursor there, like Vim.
+      await page.keyboard.press('5')
+      await page.keyboard.press('z')
+      await page.keyboard.press('t')
+      await expect.poll(() => firstVisible(page), { intervals: [100, 200, 500] }).toBe(5)
+      await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: 5 })
+
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(120, 1))
+      await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: 120 })
+    })
+
+    await test.step('H/M/L jump to the first/middle/last visible line', async () => {
+      await page.keyboard.press('z')
+      await page.keyboard.press('b')
+      await expect.poll(() => lastVisible(page), { intervals: [100, 200, 500] }).toBe(120)
+
+      const first = (await firstVisible(page))!
+      const last = (await lastVisible(page))!
+      await page.keyboard.press('H')
+      await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: first })
+
+      await page.keyboard.press('L')
+      await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: last })
+
+      await page.keyboard.press('M')
+      await expect
+        .poll(() => cursor(page))
+        .toMatchObject({ lineNumber: first + Math.floor((last - first + 1) / 2) })
     })
   })
 })

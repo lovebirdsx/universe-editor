@@ -308,6 +308,7 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
       return Math.max(1, Math.floor((height || 600) / SETTINGS_ROW_ESTIMATE))
     }, []),
     scrollToIndex: useCallback((index: number) => listRef.current?.scrollToIndex(index), []),
+    getScrollElement: useCallback(() => listRef.current?.getScrollElement() ?? null, []),
     onActivate: focusRowControl,
     vimSurfaceId: 'settings',
   })

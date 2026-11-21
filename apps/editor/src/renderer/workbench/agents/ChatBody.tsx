@@ -745,6 +745,10 @@ function ChatScroll({
         const target = direction === 'down' ? 'pageDown' : 'pageUp'
         for (let i = 0; i < Math.max(1, count); i++) handleRef.current.scrollTimeline(target)
       },
+      scrollViewport: (direction, count) => {
+        const target = direction === 'down' ? 'down' : 'up'
+        for (let i = 0; i < Math.max(1, count); i++) handleRef.current.scrollTimeline(target)
+      },
       // Deterministic fold state for z o / z c; Enter / o toggle like Alt+F.
       expand: () => {
         const key = handleRef.current.getFocusedKey()
