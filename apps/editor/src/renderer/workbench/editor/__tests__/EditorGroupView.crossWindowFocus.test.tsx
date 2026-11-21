@@ -48,9 +48,15 @@ function setup() {
   const auxGroup = aux.activeGroup as EditorGroup
   auxGroup.openEditor(new FakeEditor('a'))
   let activePart: IEditorPart = groups.mainPart
+  let auxDocumentFocused = true
   const windows = {
     get activeWindow() {
       return { part: activePart }
+    },
+    getWindowForPart(part: IEditorPart | number) {
+      const id = typeof part === 'number' ? part : part.id
+      if (id !== aux.id) return undefined
+      return { part: aux, document: { hasFocus: () => auxDocumentFocused } }
     },
   } as unknown as IWorkbenchWindowServiceType
   const focus = new FakeWindowFocusService()
@@ -71,6 +77,7 @@ function setup() {
     auxGroup,
     focus,
     setActiveWindowPart: (p: IEditorPart) => (activePart = p),
+    setAuxDocumentFocused: (focused: boolean) => (auxDocumentFocused = focused),
   }
 }
 
@@ -94,6 +101,16 @@ describe('EditorGroupView cross-window activation focus', () => {
     setActiveWindowPart(aux)
     act(() => groups.activateGroup(auxGroup))
     expect(focus.focusedGroups).toHaveLength(0)
+  })
+
+  it('requests window focus when the target document is not focused even if its part became active', () => {
+    const { groups, aux, auxGroup, focus, setActiveWindowPart, setAuxDocumentFocused } = setup()
+    // The open path can move DOM focus into the background window before this
+    // effect runs, so the part is already active while the native window is not.
+    setActiveWindowPart(aux)
+    setAuxDocumentFocused(false)
+    act(() => groups.activateGroup(auxGroup))
+    expect(focus.focusedGroups).toEqual([auxGroup])
   })
 
   it('does not bring a background window forward for a close-driven activation', () => {

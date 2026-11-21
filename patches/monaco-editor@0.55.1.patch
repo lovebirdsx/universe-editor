@@ -1,17 +1,60 @@
 diff --git a/esm/vs/base/browser/dom.js b/esm/vs/base/browser/dom.js
-index 8cee36eff190659b5544edda32ca1d206cc20977..30d4189521c06ce0bd8fe937141008285e0ac45d 100644
+index 8cee36eff190659b5544edda32ca1d206cc20977..dec29d4c638c5b54403de4a569f5c93aa9114735 100644
 --- a/esm/vs/base/browser/dom.js
 +++ b/esm/vs/base/browser/dom.js
-@@ -19,7 +19,7 @@ import { derived, derivedOpts } from '../common/observableInternal/observables/d
+@@ -19,11 +19,19 @@ import { derived, derivedOpts } from '../common/observableInternal/observables/d
   *  Licensed under the MIT License. See License.txt in the project root for license information.
   *--------------------------------------------------------------------------------------------*/
  //# region Multi-Window Support Utilities
 -const { getWindow, getDocument, getWindows, getWindowsCount, getWindowId, getWindowById, onDidRegisterWindow, onWillUnregisterWindow, onDidUnregisterWindow } = (function () {
-+const { getWindow, getDocument, getWindows, getWindowsCount, getWindowId, getWindowById, registerWindow, onDidRegisterWindow, onWillUnregisterWindow, onDidUnregisterWindow } = (function () {
++const { getWindow, getDocument, getWindows, getWindowsCount, getWindowId, getWindowById, getLastFocusedWindowId, registerWindow, onDidRegisterWindow, onWillUnregisterWindow, onDidUnregisterWindow } = (function () {
      const windows = new Map();
      ensureCodeWindow(mainWindow, 1);
      const mainWindowRegistration = { window: mainWindow, disposables: new DisposableStore() };
-@@ -1451,4 +1451,4 @@ function isObservable(obj) {
+     windows.set(mainWindow.vscodeWindowId, mainWindowRegistration);
++    // Electron reports `document.hasFocus() === true` for every auxiliary document
++    // opened via `window.open` in the same renderer, so "first document that has
++    // focus" always resolves to the main window. Track the document that last
++    // received a DOM focus instead; auxiliary editors otherwise never report
++    // `editorTextFocus`, breaking Monaco keybindings gated on it (e.g. Escape to
++    // close a references peek).
++    let lastFocusedWindowId = mainWindow.vscodeWindowId;
++    mainWindow.document.addEventListener('focusin', () => { lastFocusedWindowId = mainWindow.vscodeWindowId; }, true);
+     const onDidRegisterWindow = new Emitter();
+     const onDidUnregisterWindow = new Emitter();
+     const onWillUnregisterWindow = new Emitter();
+@@ -52,6 +60,9 @@ const { getWindow, getDocument, getWindows, getWindowsCount, getWindowId, getWin
+             disposables.add(addDisposableListener(window, EventType.BEFORE_UNLOAD, () => {
+                 onWillUnregisterWindow.fire(window);
+             }));
++            disposables.add(addDisposableListener(window.document, 'focusin', () => {
++                lastFocusedWindowId = window.vscodeWindowId;
++            }, true));
+             onDidRegisterWindow.fire(registeredWindow);
+             return disposables;
+         },
+@@ -61,6 +72,9 @@ const { getWindow, getDocument, getWindows, getWindowsCount, getWindowId, getWin
+         getWindowsCount() {
+             return windows.size;
+         },
++        getLastFocusedWindowId() {
++            return lastFocusedWindowId;
++        },
+         getWindowId(targetWindow) {
+             return targetWindow.vscodeWindowId;
+         },
+@@ -570,6 +584,10 @@ function getActiveDocument() {
+     if (getWindowsCount() <= 1) {
+         return mainWindow.document;
+     }
++    const lastFocused = getWindowById(getLastFocusedWindowId());
++    if (lastFocused?.window.document.hasFocus()) {
++        return lastFocused.window.document;
++    }
+     const documents = Array.from(getWindows()).map(({ window }) => window.document);
+     return documents.find(doc => doc.hasFocus()) ?? mainWindow.document;
+ }
+@@ -1451,4 +1469,4 @@ function isObservable(obj) {
      return !!obj && obj.read !== undefined && obj.reportChanges !== undefined;
  }
  

@@ -1019,7 +1019,17 @@ export const EditorGroupView = memo(function EditorGroupView({
     wasTargetGroupRef.current = isTargetGroup
     if (!isTargetGroup || !activeEditor) return
     const focusActivation = (editor: EditorInput): void => {
-      if (workbenchWindows && workbenchWindows.activeWindow.part !== group.part) {
+      const targetWindow = workbenchWindows?.getWindowForPart(group.part)
+      // An open can reveal the editor before this effect runs, which moves DOM
+      // focus into the target document and makes it the active window even when
+      // the native window is still in the background. Active-window identity
+      // alone would then skip the native focus request, leaving keystrokes in a
+      // background window; the document's own focus state is the reliable guard.
+      const targetDocumentFocused = targetWindow?.document.hasFocus() ?? true
+      if (
+        workbenchWindows &&
+        (workbenchWindows.activeWindow.part !== group.part || !targetDocumentFocused)
+      ) {
         // Closing/detaching a tab in a background window auto-activates its
         // replacement (watcher deletes a file, a terminal process exits). That
         // is not a window-focus intent: bringing the window forward would steal

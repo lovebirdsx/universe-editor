@@ -247,7 +247,7 @@ overrides:
 pnpmfileChecksum: sha256-f82UpNmTbduyUZTUqjsXVcD8M46KMgQ0oaUAQGcsEco=
 
 patchedDependencies:
-  monaco-editor@0.55.1: d9a25e9ef8e0983acc3041dabaf426dc81353cc5142bc376dcc42f1cf56476fc
+  monaco-editor@0.55.1: 2369344d079c3ed1f4e00d6a8502fa551a3fba19b2d18e67463d82f9e1053666
   playwright-core@1.62.1: fbbc098f61fe4063f66941a5dec787f34e85ebe62743c185ffda0820239b4325
   vscode-markdown-languageservice@0.5.0-alpha.13: a88c1e5a1870db5ba3ef3a1a7d86451ca10e11f47f0d9dc9623dfc15f8d18cbe
 
@@ -495,7 +495,7 @@ importers:
         version: 11.15.0
       monaco-editor:
         specifier: 'catalog:'
-        version: 0.55.1(patch_hash=d9a25e9ef8e0983acc3041dabaf426dc81353cc5142bc376dcc42f1cf56476fc)
+        version: 0.55.1(patch_hash=2369344d079c3ed1f4e00d6a8502fa551a3fba19b2d18e67463d82f9e1053666)
       pixelmatch:
         specifier: 'catalog:'
         version: 5.3.0
@@ -9235,7 +9235,7 @@ snapshots:
     dependencies:
       minimist: 1.2.8
 
-  monaco-editor@0.55.1(patch_hash=d9a25e9ef8e0983acc3041dabaf426dc81353cc5142bc376dcc42f1cf56476fc):
+  monaco-editor@0.55.1(patch_hash=2369344d079c3ed1f4e00d6a8502fa551a3fba19b2d18e67463d82f9e1053666):
     dependencies:
       dompurify: 3.2.7
       marked: 14.0.0
