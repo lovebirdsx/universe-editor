@@ -67,4 +67,65 @@ describe('runPackage', () => {
     const dir = mkTempDir('uex-pkg-empty-')
     await expect(runPackage({ cwd: dir })).rejects.toBeInstanceOf(UexError)
   })
+
+  it('refuses a trustedView whose entry is missing', async () => {
+    const dir = makeExtension({
+      contributes: {
+        trustedViews: [
+          {
+            id: 'demo.status',
+            name: 'Status',
+            location: 'view',
+            container: 'demo',
+            entry: './dist/renderer/status.js',
+          },
+        ],
+      },
+    })
+    const err = await runPackage({ cwd: dir }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(UexError)
+    expect((err as UexError).message).toContain('dist/renderer/status.js')
+  })
+
+  it('refuses a trustedView entry not covered by files[]', async () => {
+    const dir = makeExtension({
+      files: ['dist/extension.js'],
+      contributes: {
+        trustedViews: [
+          {
+            id: 'demo.status',
+            name: 'Status',
+            location: 'view',
+            container: 'demo',
+            entry: './dist/renderer/status.js',
+          },
+        ],
+      },
+    })
+    mkdirSync(path.join(dir, 'dist', 'renderer'), { recursive: true })
+    writeFileSync(path.join(dir, 'dist', 'renderer', 'status.js'), 'export default () => null')
+    const err = await runPackage({ cwd: dir }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(UexError)
+    expect((err as UexError).message).toContain('not covered')
+  })
+
+  it('packages a trustedView entry covered by files[]', async () => {
+    const dir = makeExtension({
+      contributes: {
+        trustedViews: [
+          {
+            id: 'demo.status',
+            name: 'Status',
+            location: 'view',
+            container: 'demo',
+            entry: './dist/renderer/status.js',
+          },
+        ],
+      },
+    })
+    mkdirSync(path.join(dir, 'dist', 'renderer'), { recursive: true })
+    writeFileSync(path.join(dir, 'dist', 'renderer', 'status.js'), 'export default () => null')
+    const { vsixPath } = await runPackage({ cwd: dir })
+    expect(existsSync(vsixPath)).toBe(true)
+  })
 })

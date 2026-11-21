@@ -1,19 +1,19 @@
 # apps/editor/CLAUDE.md
 
-Electron 43 桌面应用，VSCode 范式的 workbench。「套路 A~I」可直接抄；细节拆在 `cases-*.md`。
+Electron 43 桌面应用，VSCode 范式的 workbench。「套路 A~J」可直接抄；细节拆在 `cases-*.md`。
 
 ## 三端边界（electron-vite）
 
-main `src/main/`（Node，业务逻辑抽独立类，经 `bootstrapWindowIpc` 注册 IPC）/ preload `src/preload/`（`contextBridge` 白名单）/ renderer `src/renderer/`（React，`main.tsx` 启动，`ProxyChannel.toService` 拿服务）/ shared `src/shared/`（`ipc/channelNames.ts`）。产物 `out/`（勿改）。
+main `src/main/`（Node，业务逻辑抽独立类） / preload `src/preload/`（`contextBridge` 白名单） / renderer `src/renderer/`（React，`main.tsx` 启动） / shared `src/shared/`（`ipc/channelNames.ts`）。产物 `out/`（勿改）。
 
 ## 用户数据目录与启动配置
 
 main 入口（`index.ts`）在 service 实例化前调 `applyProductIdentity()` 切 `userData`：
 
-- 任何模式可用 `UNIVERSE_USER_DATA_DIR=<absolute>` 或原生 `--user-data-dir=<absolute>` 覆盖（**CLI 优先**）。
+- 任何模式可用 `UNIVERSE_USER_DATA_DIR` / `--user-data-dir`（绝对路径，**CLI 优先**）覆盖。
 - CLI/env/配置读取收口 `EnvironmentMainService`（`src/main/environment/`），优先级 `cli > env > file > default`；新增启动期配置加声明项。
 
-模式判定表、`--help` 生成、**构建期注入 settings 默认值**（内网地址不进仓库，打包期经 `product.json` 注入）的优先级与链路、自动更新 feed url 覆盖见 [cases-user-data-dir.md](cases-user-data-dir.md)。
+模式判定表、`--help` 生成、**构建期注入 settings 默认值**（打包期经 `product.json` 注入）的优先级与链路、自动更新 feed url 覆盖见 [cases-user-data-dir.md](cases-user-data-dir.md)。
 
 ## renderer 目录归类规则
 
@@ -124,7 +124,7 @@ export interface IMyService {
 export const IMyService = createDecorator<IMyService>('myService')
 ```
 
-**3. main 端实现**：`main/services/myService/myMainService.ts` 写 `class MyMainService implements IMyService`。单例：`main-services.ts` 加 `registerSingleton(IMyService, new SyncDescriptor(MyMainService, [], false))`，并把 `myService` 加进 `ApplicationServices` 与 `getOrCreateServices()` 表；`registerMainServices.ts`：
+**3. main 端实现**：`main/services/myService/myMainService.ts` 写 `class MyMainService implements IMyService`。单例：`main-services.ts` 用 `registerSingleton(...)` 注册，并加进 `ApplicationServices`/`getOrCreateServices()`；`registerMainServices.ts`：
 ```ts
 server.registerChannel(ServiceChannels.MyService, ProxyChannel.fromService(app.myService))
 ```
@@ -168,15 +168,15 @@ entry.update({ text: '完成' })
 entry.dispose()
 ```
 
-要点：**生命周期自己管**：React `useRef` + `useEffect` cleanup dispose；Contribution 成员字段 / `_hide()` dispose。
+要点：**生命周期自己管**：React `useRef`+cleanup、Contribution 字段 / `_hide()` 里 dispose。
 
 ## 右键菜单图标：新增菜单项一律写 `icon`
 
-图标 id 经 `workbench/icons/icon-map.ts` 的 `resolveIcon` 查表——**表里没有 → 静默不渲染**；`<ContextMenu>`/`<ListMenu>` **必须传 `renderIcon={renderMenuIcon}`**（`menuIcon.tsx`）。⚠️ `registerAction2` 会把 `desc.icon` 撒到其声明的**每一个** menu 槽位——Menubar 命令加图标会整组开启图标列。
+图标 id 经 `workbench/icons/icon-map.ts` 查表——**没有 → 静默不渲染**；`<ContextMenu>`/`<ListMenu>` **必须传 `renderIcon={renderMenuIcon}`**（`menuIcon.tsx`）。⚠️ `registerAction2` 会把 `desc.icon` 撒到其声明的**每一个** menu 槽位——Menubar 命令加图标会整组开启图标列。
 
 ## 套路 F：加一个 E2E 冒烟场景
 
-冒烟栈在 `apps/editor/e2e/`：Playwright + `_electron`，spec 经 `window.__E2E__` 探针调服务，不戳 DOM（`UNIVERSE_E2E=1` 开启，production 剥除）。
+冒烟栈在 `apps/editor/e2e/`：Playwright + `_electron`，spec 经 `window.__E2E__` 探针调服务（`UNIVERSE_E2E=1`，production 剥除）。
 
 **1. 新建 spec**：`apps/editor/e2e/specs/smoke.myThing.spec.ts`
 ```ts
@@ -207,7 +207,7 @@ test.describe('@p0 my thing', () => {
 
 ## 套路 H：加一个语言特性（DocumentSymbol / Definition / Reference / Outline）
 
-语言特性走**薄门面 `ILanguageFeaturesService`**（`services/languageFeatures/`）：注册时一边存镜像表（供 Outline 枚举），一边转发 `monaco.languages.register*Provider`——一个 provider 即点亮 **Outline 视图** 与 **F12/Shift+F12 peek**。peek 等嵌入编辑器布局见 `docs/development/monaco-embedding.md`。
+语言特性走**薄门面 `ILanguageFeaturesService`**（`services/languageFeatures/`）：注册时一边存镜像表（供 Outline 枚举），一边转发 `monaco.languages.register*Provider`——一个 provider 即点亮 **Outline 视图** 与 **F12/Shift+F12 peek**。
 
 1. 在 `services/languageFeatures/<lang>/` 写 provider（实现 `monaco.languages.DocumentSymbolProvider` 等）。
 2. 在 `contributions/LanguageFeaturesContribution.ts` 的 `MonacoLoader.ensureInitialized().then(...)` 里 `this._register(langFeatures.registerXxxProvider('<lang>', new XxxProvider()))`。**必须等 Monaco 就绪**。
@@ -231,6 +231,10 @@ AI 服务三层：platform 契约（`IAiModelService` / `IAiModelProvider` / `Ai
 - **费率单一来源，绝不兜底**（未声明 `pricingSource` 就是「费率未知」）；**会话开销与账号费用绝不互兜底**。
 - **🔴 生效凭据是反查出来的，不是编辑器声明的**：agent 自己的配置文件是唯一真相（编辑器不持久化 `agentSettings.<agent>.authentication`）；判定走纯函数 `agentActiveAuth.ts`。
 
+
+## 套路 J：受信视图
+
+`contributes.trustedViews` + `TrustedViewService`：import 扩展 ESM（React shim）挂成 View/标签。受信读用户设置 `extensions.trustedViewExtensions`；同 realm 非沙箱，勿碰 DI。CSP `universe-app:`、ErrorBoundary；StrictMode 双挂载。见 `docs/extension-dev/zh-CN/trusted-views.md`
 
 ## 编辑器输入三件套
 

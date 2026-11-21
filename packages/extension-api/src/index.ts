@@ -13,6 +13,13 @@ import type { ChatApi, ChatContextProvider } from './chat.js'
 import type { ScmApi, SourceControl } from './scm.js'
 import type { TimelineProvider } from './timeline.js'
 import type { TreeDataProvider, TreeView, TreeViewOptions } from './treeView.js'
+import type { TrustedViewsApi } from './trustedViews.js'
+export type {
+  OpenTrustedEditorOptions,
+  TrustedViewProvider,
+  TrustedViewSession,
+  TrustedViewsApi,
+} from './trustedViews.js'
 import type {
   CustomEditorOptions,
   CustomReadonlyEditorProvider,
@@ -108,7 +115,7 @@ export { InlayHintKind } from 'vscode-languageserver-types'
  *  version space); the host checks `engines.universe` against its own runtime
  *  version. Bumping is governed by COMPATIBILITY.md — keep in sync with
  *  package.json (release.mjs syncs both; publish preflight enforces it). */
-export const version = '0.24.0'
+export const version = '0.25.0'
 
 export { CancellationTokenSource, Disposable, EventEmitter } from './util.js'
 export type { CancellationToken, Event } from './util.js'
@@ -138,6 +145,8 @@ export interface ExtensionContext {
   readonly globalStoragePath: string
   readonly globalState: Memento
   readonly workspaceState: Memento
+  /** Host-side half of this extension's `contributes.trustedViews`. */
+  readonly trustedViews: TrustedViewsApi
 }
 
 export interface CommandsApi {

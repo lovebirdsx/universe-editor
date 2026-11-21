@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  ConfigurationTarget,
   Disposable,
   DisposableStore,
   IConfigurationService,
@@ -35,6 +36,13 @@ import {
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { IExtensionMcpServersService } from '../services/extensions/extensionMcpServersService.js'
 import { ExtensionPointTranslator } from '../services/extensions/ExtensionPointTranslator.js'
+import { ITrustedViewService } from '../services/trustedViews/TrustedViewService.js'
+import {
+  TRUSTED_VIEW_EXTENSIONS_SETTING,
+  isTrustedViewExtension,
+  readTrustedViewExtensions,
+  trustedViewIdsSignature,
+} from '../services/trustedViews/trustedViewTrust.js'
 import { ITextMateService } from '../services/textmate/textMateService.js'
 import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
 import { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
@@ -48,6 +56,11 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
   private readonly _logger: ILogger
   /** Ids already notified as version-incompatible (memory-only dedup). */
   private readonly _seenVersionIncompatibleIds = new Set<string>()
+  /** Extensions already prompted about trusted views in this renderer session. */
+  private readonly _notifiedUntrustedTrustedViewIds = new Set<string>()
+  /** Last translated contribution set, replayed after the trust list changes. */
+  private _lastContributions: readonly IExtensionDescriptionDto[] = []
+  private _trustedViewIdsSignature = ''
 
   constructor(
     @IExtensionHostClientService private readonly _client: IExtensionHostClientService,
@@ -62,12 +75,24 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     @IThemeService private readonly _themeService: WorkbenchThemeService,
     @ITextMateService private readonly _textMateService: ITextMateService,
     @IExtensionMcpServersService private readonly _extensionMcpServers: IExtensionMcpServersService,
+    @ITrustedViewService private readonly _trustedViews: ITrustedViewService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
     this._logger =
       loggerService?.createLogger({ id: 'extensionSchemas', name: 'Extension Schemas' }) ??
       new NullLogger()
+    this._register(
+      this._configuration.onDidChangeConfiguration((event) => {
+        if (!event.affectsConfiguration(TRUSTED_VIEW_EXTENSIONS_SETTING)) return
+        const signature = trustedViewIdsSignature(readTrustedViewExtensions(this._configuration))
+        if (signature === this._trustedViewIdsSignature) return
+        // The trust list changed: an extension the user removed must be able to
+        // prompt again on the next scan.
+        this._notifiedUntrustedTrustedViewIds.clear()
+        this._applyContributions(this._lastContributions)
+      }),
+    )
     void this._boot()
   }
 
@@ -197,6 +222,9 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
 
   /** Dispose the previous translation and re-apply the current contribution set. */
   private _applyContributions(contributions: readonly IExtensionDescriptionDto[]): void {
+    this._lastContributions = contributions
+    const trustedIds = readTrustedViewExtensions(this._configuration)
+    this._trustedViewIdsSignature = trustedViewIdsSignature(trustedIds)
     this._translator.clear()
     const translator = new ExtensionPointTranslator(
       (event) => this._client.activateByEvent(event),
@@ -221,6 +249,9 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
       (grammars, context) => this._textMateService.registerGrammars(grammars, context),
       (languages, context) => this._textMateService.registerLanguages(languages, context),
       (colors) => this._themeService.registerColors(colors),
+      (ext) => isTrustedViewExtension(ext, trustedIds),
+      (registration) => this._trustedViews.registerView(registration),
+      (ext) => this._notifyUntrustedTrustedViews(ext),
     )
     try {
       translator.translate(contributions)
@@ -238,6 +269,52 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     // Extension commands are now in CommandsRegistry; re-apply VSCode/user
     // keybindings so bindings to those commands (skipped at startup) take effect.
     void this._userKeybindings.reload()
+  }
+
+  /**
+   * An untrusted extension declares `contributes.trustedViews`: tell the user
+   * once per extension per session. Trusting writes the id to the User layer
+   * and re-translates so the views load without a reload; ignoring is silent.
+   */
+  private _notifyUntrustedTrustedViews(ext: IExtensionDescriptionDto): void {
+    const key = ext.id.toLowerCase()
+    if (this._notifiedUntrustedTrustedViewIds.has(key)) return
+    this._notifiedUntrustedTrustedViewIds.add(key)
+    const name = ext.displayName ?? ext.name ?? ext.id
+    void this._notification.prompt(
+      Severity.Warning,
+      localize(
+        'extensions.trustedViews.untrusted',
+        'Extension {0} provides trusted views. Add it to the trusted list to load them.',
+        { 0: name },
+      ),
+      [
+        {
+          label: localize('extensions.trustedViews.trust', 'Trust and Load'),
+          run: () => this._trustTrustedViewExtension(ext.id),
+        },
+        {
+          label: localize('extensions.trustedViews.ignore', 'Ignore'),
+          isSecondary: true,
+          run: () => {},
+        },
+      ],
+    )
+  }
+
+  private _trustTrustedViewExtension(extensionId: string): void {
+    const current = readTrustedViewExtensions(this._configuration)
+    if (!current.some((id) => id.toLowerCase() === extensionId.toLowerCase())) {
+      this._configuration.update(
+        TRUSTED_VIEW_EXTENSIONS_SETTING,
+        [...current, extensionId],
+        ConfigurationTarget.User,
+      )
+    }
+    const signature = trustedViewIdsSignature(readTrustedViewExtensions(this._configuration))
+    if (signature !== this._trustedViewIdsSignature) {
+      this._applyContributions(this._lastContributions)
+    }
   }
 }
 

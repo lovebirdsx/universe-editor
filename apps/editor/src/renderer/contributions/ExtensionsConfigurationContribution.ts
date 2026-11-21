@@ -48,6 +48,15 @@ export class ExtensionsConfigurationContribution
               'Hours to wait after an update is published before installing it automatically. An extension you disabled or opted out of is never updated automatically.',
             ),
           },
+          'extensions.trustedViewExtensions': {
+            type: 'array',
+            items: { type: 'string' },
+            default: [],
+            description: localize(
+              'settings.extensions.trustedViewExtensions',
+              'Extension ids allowed to contribute trusted views (renderer components). Built-in and development extensions are always trusted. Only the user-level value is read; workspace settings cannot grant trust.',
+            ),
+          },
         },
       }),
     )

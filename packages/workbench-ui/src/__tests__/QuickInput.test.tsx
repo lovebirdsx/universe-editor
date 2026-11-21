@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Window } from 'happy-dom'
 import { useLayoutEffect, useRef } from 'react'
 import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
-import { QuickPickPanel } from '../feedback/quickInput/QuickInputPanel.js'
+import { QuickInputPanel, QuickPickPanel } from '../feedback/quickInput/QuickInputPanel.js'
 import { BUSY_BAR_DELAY_MS } from '../feedback/quickInput/QuickInputProgress.js'
 import type { QuickPickState } from '../feedback/quickInput/quickInputViewModel.js'
 import {
@@ -2636,5 +2636,32 @@ describe('QuickPickPanel owner document', () => {
 
     fireEvent.keyUp(document, { key: 'Control' })
     expect(onAccept).not.toHaveBeenCalled()
+  })
+})
+
+describe('QuickInputPanel input box', () => {
+  // The e2e harness drives every quick input through the shared
+  // `quick-input-field` testid; the pick path always had it, the input-box
+  // branch did not, so `showInputBox` callers (extensions included) were
+  // undrivable end-to-end.
+  it('exposes the shared field testid and submits the typed value', () => {
+    const onInput = vi.fn()
+    render(
+      <QuickInputPanel
+        state={{
+          type: 'input',
+          inputPrompt: 'Surface Id (Probe)',
+          inputValue: 'default',
+          placeholder: 'default',
+          onInput,
+        }}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    expect(input.value).toBe('default')
+    fireEvent.change(input, { target: { value: 'custom' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onInput).toHaveBeenCalledWith('custom')
   })
 })

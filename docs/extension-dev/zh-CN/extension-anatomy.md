@@ -34,7 +34,7 @@ my-extension/
 | `description` | 简介，显示在市场详情页。 |
 | `main` | 入口模块，相对扩展根（如 `./dist/extension.js`），须指向打包后的 ESM 产物。没有 `main` 的扩展是纯声明式扩展（如纯主题）：只有 `contributes`，不执行代码，也谈不上激活。 |
 | `activationEvents` | 激活事件清单，见下文「激活事件」。 |
-| `contributes` | 静态贡献点（commands / menus / keybindings / configuration / jsonValidation / customEditors / themes / iconThemes / productIconThemes / grammars / mcpServers）。逐项语法见 [贡献点参考](./contribution-points.md)。 |
+| `contributes` | 静态贡献点（commands / menus / keybindings / configuration / jsonValidation / customEditors / themes / iconThemes / productIconThemes / grammars / mcpServers / trustedViews）。逐项语法见 [贡献点参考](./contribution-points.md)。 |
 | `capabilities` | 能力声明，目前只有 `untrustedWorkspaces`，见下文专节。 |
 
 ### 市场展示元数据（纯附加）
@@ -46,7 +46,7 @@ my-extension/
 `files` 是 npm 惯例的打包白名单，**不在宿主 manifest schema 里、宿主不校验**，但它是 `uex package` 的硬规则：
 
 - 缺 `files`（或为空数组）会被 `uex package` 直接**拒包**（error，不是 warning）。白名单制保证 `node_modules`、`.env` 之类永远不可能被意外打进 `.vsix`。
-- 声明了 `main` 又没写 `files` 时，打包默认只带 `package.json` + `dist/`；`package.json` 本身永远进包。
+- 声明了 `main` 或带 `contributes.trustedViews` 又没写 `files` 时，打包默认只带 `package.json` + `dist/`；`package.json` 本身永远进包。
 - 条目是字面相对路径（文件或目录），`./` 前缀与 `/**` 后缀会被归一化；**不允许 glob**（`*.png` 报错），不允许逃逸扩展根（`../`、绝对路径报错）。
 - 典型写法：`"files": ["dist", "icon.png"]`。manifest 里用相对路径引用的资源（`icon`、`contributes.themes[].path`、`jsonValidation[].url` 等）都必须能在 `files` 覆盖范围内找到。
 

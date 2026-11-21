@@ -6,7 +6,7 @@
  * never tears down the host or other extensions.
  */
 import { pathToFileURL } from 'node:url'
-import type { ExtensionContext } from '@universe-editor/extension-api'
+import type { ExtensionContext, TrustedViewsApi } from '@universe-editor/extension-api'
 import {
   getUntrustedWorkspaceSupportType,
   matchesManifestActivationEvent,
@@ -46,6 +46,7 @@ export class ExtensionActivationService {
     private readonly _storage?: IExtensionStorage,
     private readonly _globalStorageHome?: string,
     private readonly _onActivationError?: (report: IActivationErrorReport) => void,
+    private readonly _getTrustedViewsApi?: (extensionId: string) => TrustedViewsApi,
   ) {}
 
   /**
@@ -154,7 +155,12 @@ export class ExtensionActivationService {
   }
 
   private async _doActivate(ext: IScannedExtension): Promise<void> {
-    const context = await createExtensionContext(ext, this._storage, this._globalStorageHome)
+    const context = await createExtensionContext(
+      ext,
+      this._storage,
+      this._globalStorageHome,
+      this._getTrustedViewsApi?.(ext.id),
+    )
     try {
       let exports: unknown
       let deactivate: (() => unknown) | undefined

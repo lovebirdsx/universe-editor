@@ -2,7 +2,11 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { parseManifest } from '@universe-editor/extension-manifest/manifest-schema'
-import { createVsix } from '@universe-editor/extension-packaging'
+import {
+  createVsix,
+  extensionPackageFiles,
+  isPathCoveredByPackageFiles,
+} from '@universe-editor/extension-packaging'
 import { UexError } from '../errors.js'
 import { info, warn, printUexError } from '../output.js'
 import { parseCommandArgs } from '../args.js'
@@ -76,6 +80,34 @@ export async function runPackage(opts: RunPackageOptions): Promise<RunPackageRes
     throw new UexError(`entry point "${manifest.main}" does not exist`, [
       'run `npm run build` first (or wire "universe:prepublish" so packaging builds for you)',
     ])
+  }
+
+  // Trusted-view entries are loaded directly by the renderer, so they must
+  // exist on disk AND be shipped by the files whitelist. A silently unshipped
+  // entry turns into a runtime load failure only on the user's machine.
+  const trustedViews = manifest.contributes?.trustedViews ?? []
+  if (trustedViews.length > 0) {
+    const shipped = extensionPackageFiles(
+      manifest as {
+        main?: string
+        contributes?: { trustedViews?: readonly unknown[] }
+        files?: readonly string[]
+      },
+    )
+    for (const view of trustedViews) {
+      const entry = view.entry.replaceAll('\\', '/')
+      if (!existsSync(path.join(extensionDir, entry))) {
+        throw new UexError(`trusted view "${view.id}" entry "${view.entry}" does not exist`, [
+          'run `npm run build` first so the browser ESM component is emitted',
+        ])
+      }
+      if (!isPathCoveredByPackageFiles(shipped, entry)) {
+        throw new UexError(
+          `trusted view "${view.id}" entry "${view.entry}" is not covered by the package files whitelist`,
+          [`add the directory containing "${entry}" to "files" in package.json`],
+        )
+      }
+    }
   }
 
   const publisher = manifest.publisher ?? ''

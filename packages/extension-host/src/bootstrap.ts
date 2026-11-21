@@ -39,6 +39,7 @@ import {
   type IExtHostScm,
   type IExtHostTimeline,
   type IExtHostTreeViews,
+  type IExtHostTrustedViews,
   type IExtHostWebviews,
   type IExtHostWindow,
   type IMainThreadAi,
@@ -52,6 +53,7 @@ import {
   type IMainThreadScm,
   type IMainThreadTimeline,
   type IMainThreadTreeViews,
+  type IMainThreadTrustedViews,
   type IMainThreadWebviews,
   type IMainThreadWindow,
   type IMainThreadStorage,
@@ -163,6 +165,9 @@ const mainThreadTimeline = ProxyChannel.toService<IMainThreadTimeline>(
 )
 const mainThreadTreeViews = ProxyChannel.toService<IMainThreadTreeViews>(
   client.getChannel(ExtHostChannels.mainThreadTreeViews),
+)
+const mainThreadTrustedViews = ProxyChannel.toService<IMainThreadTrustedViews>(
+  client.getChannel(ExtHostChannels.mainThreadTrustedViews),
 )
 const mainThreadChat = ProxyChannel.toService<IMainThreadChat>(
   client.getChannel(ExtHostChannels.mainThreadChat),
@@ -390,6 +395,15 @@ const extHostTreeViews: IExtHostTreeViews = {
     ;(await serviceReady).executeTreeItemCommand(viewId, handle, commandId)
   },
 }
+const extHostTrustedViews: IExtHostTrustedViews = {
+  $resolveSession: async (viewId, sessionId, state) =>
+    (await serviceReady).resolveTrustedViewSession(viewId, sessionId, state),
+  $request: async (sessionId, method, args, token) =>
+    (await serviceReady).requestTrustedView(sessionId, method, args, token),
+  $disposeSession: async (sessionId) => {
+    ;(await serviceReady).disposeTrustedViewSession(sessionId)
+  },
+}
 const extHostChat: IExtHostChat = {
   $resolveChatContextItem: async (handle, query, context) =>
     (await serviceReady).resolveChatContextItem(handle, query, context),
@@ -412,6 +426,10 @@ server.registerChannel(ExtHostChannels.extHostWindow, ProxyChannel.fromService(e
 server.registerChannel(ExtHostChannels.extHostWebviews, ProxyChannel.fromService(extHostWebviews))
 server.registerChannel(ExtHostChannels.extHostTimeline, ProxyChannel.fromService(extHostTimeline))
 server.registerChannel(ExtHostChannels.extHostTreeViews, ProxyChannel.fromService(extHostTreeViews))
+server.registerChannel(
+  ExtHostChannels.extHostTrustedViews,
+  ProxyChannel.fromService(extHostTrustedViews),
+)
 server.registerChannel(ExtHostChannels.extHostChat, ProxyChannel.fromService(extHostChat))
 
 async function main(): Promise<void> {
@@ -515,6 +533,7 @@ async function main(): Promise<void> {
       mainThreadFileEvents,
       mainThreadTreeViews,
       mainThreadChat,
+      mainThreadTrustedViews,
       uriTransformer,
     ),
   )

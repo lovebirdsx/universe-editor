@@ -22,6 +22,7 @@
 | `grammars` | TextMate 语法（词法高亮） |
 | `languages` | 声明语言（id / 文件关联 / language-configuration） |
 | `mcpServers` | 声明式注入 MCP server（stdio），供 AI agent 会话使用 |
+| `trustedViews` | 受信扩展提供的原生 UI 组件（侧栏视图 / 编辑器标签） |
 
 **前向兼容**：`contributes` 对象本身是透传（passthrough）校验的——写了宿主不认识的贡献点不会报错，会被静默忽略。这是为了旧宿主能加载新扩展，不是给你试验幻想贡献点的许可证：**只写本文列出的分支**。
 
@@ -568,6 +569,52 @@
 - **v1 仅支持 stdio**：条目里带 `type` 字段（http/sse 等传输形态）会被跳过并记 warning。
 - **容错**：非法条目（缺 `command`、空 server 名等）跳过并记 warning，不影响会话创建与扩展其余部分。多个扩展贡献同名 server 时后扫描到的覆盖先到的，并记 warning。
 - **Workspace Trust 门控**：不受信任的工作区里，`untrustedWorkspaces` 解析为 `false` 的非内置扩展不注入任何 server（`limited` 仍注入，与激活门控一致）。门控状态或 `whenConfiguration` 引用的设置变化时实时重算，无需重启。
+
+## trustedViews
+
+> 需要显式受信。适用场景、运行时 API、组件契约与安全边界见 [受信视图](./trusted-views.md)；本节只讲 manifest 写法。
+
+把扩展自带的浏览器 ESM 组件挂成工作台原生 UI：侧栏视图（`location: "view"`）或编辑器标签（`location: "editor"`）。与 Tree View 的数据驱动模式不同，组件是一段 React 代码，运行在编辑器界面进程里——所以它的加载受受信列表约束：只有内置扩展、开发中扩展，或被用户列入 `extensions.trustedViewExtensions` 的扩展，其受信视图才会被加载。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | string | 是 | 视图 id，匹配 `^[A-Za-z][A-Za-z0-9._-]*$`、全局唯一；也是激活事件锚点 `onView:<id>` 与 `context.trustedViews.registerProvider` 的 `viewId` |
+| `name` | string | 是 | 显示名，支持 `%key%` 本地化 |
+| `location` | `"view"` \| `"editor"` | 是 | 挂到侧栏容器，还是作为编辑器标签打开 |
+| `container` | string | `view` 必填 | 归属容器：`explorer` / `search` / `scm` / `outline`，或 `viewsContainers.activitybar` 里声明的容器 id；`editor` 禁止填写 |
+| `entry` | string | 是 | 组件入口，相对扩展根、必须落在扩展目录内、后缀 `.js` / `.mjs` 的浏览器目标 ESM |
+| `icon` | string | 否 | 图标标识 |
+| `when` | string | 否 | 可见性条件；仅 `view` 可用，`editor` 禁止填写 |
+
+```jsonc
+{
+  "activationEvents": ["onView:acme.serviceStatus"],
+  "contributes": {
+    "trustedViews": [
+      {
+        "id": "acme.serviceStatus",
+        "name": "Service Status",
+        "location": "view",
+        "container": "explorer",
+        "entry": "./dist/renderer/status.js",
+        "icon": "$(pulse)"
+      },
+      {
+        "id": "acme.serviceDetail",
+        "name": "Service Detail",
+        "location": "editor",
+        "entry": "./dist/renderer/detail.js"
+      }
+    ]
+  }
+}
+```
+
+行为：
+
+- 组件首次挂载时宿主派发 `onView:<id>`（与 Tree View 同款，须显式写进 `activationEvents`），你的 `activate()` 里用 `context.trustedViews.registerProvider(viewId, provider)` 接住会话。
+- `entry` 文件必须存在且被 `files` 打包白名单覆盖，`uex package` 会检查；扩展有 `trustedViews` 但没写 `files` 时默认打包 `dist/`。
+- id 冲突时后扫描到的条目被跳过并记 warning；`context.trustedViews` 只能注册**本扩展** manifest 声明的 `viewId`，借用其他扩展的 id 会抛错。
 
 ## 相关阅读
 

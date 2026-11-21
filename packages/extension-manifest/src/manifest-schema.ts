@@ -158,6 +158,64 @@ const viewsContainersSchema = z.object({
   activitybar: z.array(viewContainerContributionSchema).optional(),
 })
 
+/** Contract: `^[A-Za-z][A-Za-z0-9._-]*$`. */
+const trustedViewIdSchema = z
+  .string()
+  .regex(/^[A-Za-z][A-Za-z0-9._-]*$/, 'trusted view id must match ^[A-Za-z][A-Za-z0-9._-]*$')
+
+/**
+ * `entry` must stay inside the extension and be a browser ESM module. Both
+ * separators are accepted (manifests are authored on Windows too), but the
+ * path is otherwise literal — no `..`, no absolute/drive/UNC prefix.
+ */
+function isTrustedViewEntry(entry: string): boolean {
+  if (entry.trim() !== entry || entry === '') return false
+  const normalized = entry.replaceAll('\\', '/')
+  if (normalized.startsWith('/')) return false
+  if (/^[A-Za-z]:\//.test(normalized)) return false
+  if (!/\.(?:js|mjs)$/i.test(normalized)) return false
+  return !normalized.split('/').includes('..')
+}
+
+const trustedViewContributionSchema = z
+  .object({
+    id: trustedViewIdSchema,
+    name: z.string().min(1),
+    location: z.enum(['view', 'editor']),
+    container: z.string().min(1).optional(),
+    entry: z.string().min(1).refine(isTrustedViewEntry, {
+      message:
+        'trusted view entry must be a relative .js/.mjs path inside the extension (no absolute path, no "..")',
+    }),
+    icon: z.string().min(1).optional(),
+    when: z.string().optional(),
+  })
+  .superRefine((view, ctx) => {
+    if (view.location === 'view' && view.container === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['container'],
+        message: 'a "view" trustedView must declare "container"',
+      })
+    }
+    if (view.location === 'editor') {
+      if (view.container !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['container'],
+          message: 'an "editor" trustedView must not declare "container"',
+        })
+      }
+      if (view.when !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['when'],
+          message: 'an "editor" trustedView must not declare "when"',
+        })
+      }
+    }
+  })
+
 const contributesSchema = z
   .object({
     commands: z.array(commandContributionSchema).optional(),
@@ -176,6 +234,7 @@ const contributesSchema = z
     mcpServers: z.record(mcpServerContributionSchema).optional(),
     viewsContainers: viewsContainersSchema.optional(),
     views: z.record(z.array(viewContributionSchema)).optional(),
+    trustedViews: z.array(trustedViewContributionSchema).optional(),
   })
   // Tolerate contribution points we don't understand yet (forward-compat).
   .passthrough()

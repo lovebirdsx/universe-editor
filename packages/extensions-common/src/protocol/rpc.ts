@@ -91,6 +91,14 @@ export const ExtHostChannels = {
   mainThreadTreeViews: 'mainThreadTreeViews',
   /** Renderer → ext host: tree children pulls + selection/expansion/visibility callbacks. */
   extHostTreeViews: 'extHostTreeViews',
+  /**
+   * Ext host → renderer: trusted-view provider registrations, session events and
+   * editor-open requests (renderer-hosted components talking to the host-side
+   * provider of the same extension).
+   */
+  mainThreadTrustedViews: 'mainThreadTrustedViews',
+  /** Renderer → ext host: session resolution, provider requests and session disposal. */
+  extHostTrustedViews: 'extHostTrustedViews',
   /** Ext host → renderer: chat-context provider registrations feeding the agent input's `#` popover. */
   mainThreadChat: 'mainThreadChat',
   /** Renderer → ext host: resolves an accepted chat-context entry into the final item. */

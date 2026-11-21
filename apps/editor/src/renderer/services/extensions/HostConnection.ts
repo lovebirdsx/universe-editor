@@ -55,6 +55,7 @@ import {
   type IExtHostChat,
   type IExtHostTimeline,
   type IExtHostTreeViews,
+  type IExtHostTrustedViews,
   type IExtHostWebviews,
   type IExtHostWindow,
   type IExtensionActivationErrorDto,
@@ -85,6 +86,8 @@ import type { IScmService } from './ScmService.js'
 import type { ITimelineService } from '../timeline/TimelineService.js'
 import type { IChatContextService } from './ChatContextService.js'
 import type { ITreeViewsService } from './TreeViewsService.js'
+import type { ITrustedViewService } from '../trustedViews/TrustedViewService.js'
+import { MainThreadTrustedViews } from '../trustedViews/MainThreadTrustedViews.js'
 import type { IWebviewService } from './WebviewService.js'
 import type { IAiModelService, IpcMessage } from '@universe-editor/platform'
 
@@ -124,6 +127,9 @@ export interface HostConnectionDeps {
   readonly scm: IScmService
   readonly timeline: ITimelineService
   readonly treeViews: ITreeViewsService
+  readonly trustedViews: ITrustedViewService
+  /** Starts the host if needed and fires an activation event on the live one. */
+  readonly activateByEvent: (event: string) => Promise<void>
   /** Backs `chat.registerChatContextProvider` (the `#` popover's extension entries). */
   readonly chatContext: IChatContextService
   readonly languageFeatures: ILanguageFeaturesService
@@ -304,6 +310,17 @@ export class HostConnection extends Disposable {
     server.registerChannel(
       ExtHostChannels.mainThreadTreeViews,
       ProxyChannel.fromService(deps.treeViews),
+    )
+
+    deps.trustedViews.setExtHost(
+      ProxyChannel.toService<IExtHostTrustedViews>(
+        client.getChannel(ExtHostChannels.extHostTrustedViews),
+      ),
+      deps.activateByEvent,
+    )
+    server.registerChannel(
+      ExtHostChannels.mainThreadTrustedViews,
+      ProxyChannel.fromService(new MainThreadTrustedViews(deps.trustedViews, deps.editorService)),
     )
 
     deps.chatContext.setExtHost(

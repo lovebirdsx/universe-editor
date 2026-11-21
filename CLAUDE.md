@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-VSCode 范式的桌面游戏内容编辑器。本仓库通过分层 CLAUDE.md 指导：根文件做**导航 + 跨包共同约定**；进入子目录后请优先阅读该目录的 CLAUDE.md。
+VSCode 范式的桌面游戏内容编辑器。分层 CLAUDE.md：根文件做**导航 + 跨包共同约定**；进入子目录请先读该目录的 CLAUDE.md。
 
 ## 仓库布局
 
@@ -33,6 +33,7 @@ packages/
 | 调整 tsconfig 预设 | `packages/config-ts/` | `packages/config-ts/CLAUDE.md` | strict 三件套不可在子包覆盖关掉 |
 | 调整 ESLint 规则 | `packages/config-eslint/` | `packages/config-eslint/CLAUDE.md` | flat config；base + react 两套 |
 | 加扩展 API / 改插件运行时 | `packages/extension-host/` | `packages/extension-host/CLAUDE.md` | 单 host + Workspace Trust；RPC 对端是 renderer 不是 main |
+| 写受信视图扩展（原生 UI） | `apps/editor/src/renderer/services/trustedViews/` | `docs/extension-dev/zh-CN/trusted-views.md` | entry 浏览器 ESM、React 走 shim、仅受信、ctx 外不碰 DI |
 | 加通用 UI 控件 | `packages/workbench-ui/` | `packages/workbench-ui/CLAUDE.md` | 纯组件无 DI；editor 侧只留薄 wrapper |
 | 写内置扩展（typescript/perforce/markdown） | `extensions/<name>/` | 各扩展目录 CLAUDE.md | 走 skill `create-extension` 脚手架 |
 | 写预览类扩展范例 | `extensions-external/pdf/` | `extensions-external/pdf/CLAUDE.md` | pdf 是最小可照抄范例 |
@@ -67,13 +68,13 @@ pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动�
 | 本机路径 | `X:/workspace` |
 | 账号名 / 机器名 | `testuser`、`dev`、`DESKTOP-TEST` |
 
-内网真实地址走 gitignored 的 `.env`（`UE_UPDATE_FEED_URL` / `UE_GALLERY_URL` 构建期注入）或部署时的 `<userData>/update-config.json`，绝不写进仓库。规则命中确属无害巧合时，在该行加 `sensitive-strings:allow` 注释豁免。
+内网真实地址走 gitignored `.env`（`UE_UPDATE_FEED_URL`/`UE_GALLERY_URL` 构建期注入）或部署时 `<userData>/update-config.json`，不进仓库。无害巧合在该行加 `sensitive-strings:allow` 豁免。
 
-**包依赖传递**：修改 `platform` 后，apps 看到的是 `dist/`。`pnpm dev` 下 watcher 会自动重建；离开 dev 模式时手动 `pnpm build` 或 `pnpm --filter <pkg> build`，否则 apps 仍使用旧产物。
+**包依赖传递**：改 `platform` 后 apps 读到的是 `dist/`；`pnpm dev` 自动重建，否则手动 `pnpm build`（或 `--filter <pkg>`），不然用旧产物。
 
 **路径/URI 身份比较**：唯一入口是内核 `IUriIdentityService`（`packages/platform/src/uriIdentity/`）；无 DI 的场景（main、纯函数模块）用 `packages/platform` 的 `arePathsEqual` / `relativePathUnder` / `getPathComparisonKey` + `normalizePlatform(process.platform)`（签名必带 platform）。**禁手写 `fsPath.toLowerCase()` / 反斜杠折叠**做路径身份键（ESLint 护栏会拦）。规则、例外与形态陷阱见 `packages/platform/CLAUDE.md`。
 
-**配置变更订阅不是前缀匹配**：platform 的 `ConfigurationService.affectsConfiguration` 是**精确匹配**（`packages/platform/src/configuration/configurationService.ts` 的 `changed.has(k)` / `k === key`），订阅必须枚举具体 key——写 `affectsConfiguration('ai')` 这类 section 名会**静默漏事件**（全仓多处 `ai.*` / `editor.*` 订阅点沿用过 section 名）。VSCode 的 section 前缀语义只存在于扩展 API（`packages/extension-host/src/extensionService.ts` 的 `acceptConfigurationChanged`），两者不可类推。
+**配置变更订阅不是前缀匹配**：platform 的 `ConfigurationService.affectsConfiguration` 是**精确匹配**（`packages/platform/src/configuration/configurationService.ts` 的 `changed.has(k)` / `k === key`），订阅必须枚举具体 key——写 `affectsConfiguration('ai')` 这类 section 名会**静默漏事件**。VSCode 的 section 前缀语义只存在于扩展 API（`packages/extension-host/src/extensionService.ts` 的 `acceptConfigurationChanged`），两者不可类推。
 
 **TS 严格性**：开启 `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`（定义在 `packages/config-ts/base.json`，子包不要覆盖关掉）。这意味着：
 - 数组/对象索引返回 `T | undefined`，必须显式处理
@@ -86,7 +87,7 @@ pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动�
 
 **版本管理**：依赖版本统一在 `pnpm-workspace.yaml` 的 `catalog:` 下，包内 `package.json` 写 `"catalog:"` 而非具体版本号。
 
-**ESM only**：所有包 `"type": "module"`；相对导入带 `.js` 后缀（即使源文件是 `.ts`），TS 的 `NodeNext`/`bundler` 模块解析依赖这点。
+**ESM only**：所有包 `"type": "module"`；相对导入带 `.js` 后缀（即使源文件是 `.ts`）。
 
 **命令与快捷键的两条静默失效红线**（全仓遵守，机制与排查见 `docs/development/commands-and-context-keys.md`）：
 

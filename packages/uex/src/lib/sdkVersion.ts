@@ -5,4 +5,4 @@
  * engines.universe coverage warning (authors most often target the current
  * API). Derived at build time from packages/extension-api/package.json.
  */
-export const CURRENT_API_VERSION = '0.24.0'
+export const CURRENT_API_VERSION = '0.25.0'

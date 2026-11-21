@@ -1,6 +1,6 @@
 {
   "name": "@universe-editor/editor",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "private": true,
   "description": "VSCode-style desktop game content editor.",
   "author": "Universe Editor Contributors",
@@ -88,6 +88,7 @@
     "@universe-editor/platform": "workspace:*",
     "@universe-editor/process-job": "workspace:*",
     "@universe-editor/temp-root": "workspace:*",
+    "@universe-editor/trusted-view-api": "workspace:*",
     "@universe-editor/typescript": "workspace:*",
     "@universe-editor/workbench-ui": "workspace:*",
     "@vitejs/plugin-react": "catalog:",

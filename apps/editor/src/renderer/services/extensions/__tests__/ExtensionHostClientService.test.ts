@@ -61,6 +61,7 @@ import type { IOutOfWorkspaceWatchService } from '../../files/outOfWorkspaceWatc
 import type { IScmService } from '../ScmService.js'
 import type { ITimelineService } from '../../timeline/TimelineService.js'
 import type { ITreeViewsService } from '../TreeViewsService.js'
+import type { ITrustedViewService } from '../../trustedViews/TrustedViewService.js'
 import type { IChatContextService } from '../ChatContextService.js'
 import type { IWebviewService } from '../WebviewService.js'
 import type { IExtensionEnablementService } from '../ExtensionEnablementService.js'
@@ -244,6 +245,7 @@ function makeServiceWith(
     { resetSourceControls } as unknown as IScmService,
     { reset: vi.fn() } as unknown as ITimelineService,
     { reset: vi.fn() } as unknown as ITreeViewsService,
+    { reset: vi.fn(), setExtHost: vi.fn() } as unknown as ITrustedViewService,
     (stubs?.chatContext ?? { reset: vi.fn() }) as unknown as IChatContextService,
     {
       setExtHost: vi.fn(),

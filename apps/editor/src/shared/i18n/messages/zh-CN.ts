@@ -269,6 +269,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.extensions.autoUpdate': '自动安装可用的扩展更新。关闭后仍会检测并提示有更新。',
   'settings.extensions.autoUpdateDelay':
     '更新发布后等待多少小时再自动安装。已禁用或已关闭自动更新的扩展不会被自动更新。',
+  'settings.extensions.trustedViewExtensions':
+    '允许提供受信视图（渲染进程组件）的扩展 id。内置和开发中的扩展始终受信。只读取用户级设置，工作区设置无法授予信任。',
+  'extensions.trustedViews.untrusted': '扩展 {0} 提供了受信视图。将其加入受信列表后即可加载。',
+  'extensions.trustedViews.trust': '信任并加载',
+  'extensions.trustedViews.ignore': '忽略',
   'windowTitle.extDevHost': '[扩展开发宿主]',
   'extensions.activation.failed': '扩展"{name}"激活失败：{error}',
   'extHost.crash.restarting': '扩展宿主已崩溃（代码 {code}），正在重启…',
@@ -4738,6 +4743,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'trigger.manager.toggle.resume': '恢复触发器「{name}」',
   'trigger.manager.toggle.disabled': '该触发器无法在这里暂停或恢复',
   'command.category.triggers': '触发器',
+  'trustedView.loading': '正在加载受信视图…',
+  'trustedView.loadError': '无法加载来自 {1} 的受信视图 {0}：{2}',
+  'trustedView.retry': '重试',
+  'trustedView.renderError': '来自 {0} 的受信视图崩溃：{1}',
   'triggers.status.disabled': '已禁用',
   'triggers.status.idle': '空闲',
   'triggers.status.running': '运行中',

@@ -1459,6 +1459,7 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
           aria-label={state.placeholder ?? localize('quickInput.inputBox.ariaLabel', 'Input')}
           aria-invalid={!!error}
           spellCheck={false}
+          data-testid="quick-input-field"
         />
       </div>
       <QuickInputProgress busy={state.busy === true} />

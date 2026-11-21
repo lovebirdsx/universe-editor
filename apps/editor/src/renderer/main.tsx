@@ -261,6 +261,10 @@ import { IWebviewService, WebviewService } from './services/extensions/WebviewSe
 import { ITimelineService, TimelineService } from './services/timeline/TimelineService.js'
 import { ITreeViewsService, TreeViewsService } from './services/extensions/TreeViewsService.js'
 import {
+  ITrustedViewService,
+  TrustedViewService,
+} from './services/trustedViews/TrustedViewService.js'
+import {
   IChatContextService,
   ChatContextService,
 } from './services/extensions/ChatContextService.js'
@@ -1122,6 +1126,14 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(ExtensionEnablementService),
   )
   services.set(IExtensionEnablementService, extensionEnablementService)
+
+  // Trusted-view components (contributes.trustedViews): registry, module
+  // loading and per-mount sessions. Created before the extension host client,
+  // which injects it into the HostConnection wiring.
+  services.set(
+    ITrustedViewService,
+    workbenchStore.add(instantiation.createInstance(TrustedViewService)),
+  )
 
   const extensionHostClientService = workbenchStore.add(
     instantiation.createInstance(ExtensionHostClientService),

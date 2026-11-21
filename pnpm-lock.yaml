@@ -436,6 +436,9 @@ importers:
       '@universe-editor/temp-root':
         specifier: workspace:*
         version: link:../../packages/temp-root
+      '@universe-editor/trusted-view-api':
+        specifier: workspace:*
+        version: link:../../packages/trusted-view-api
       '@universe-editor/typescript':
         specifier: workspace:*
         version: link:../../extensions/typescript
@@ -1290,6 +1293,28 @@ importers:
 
   packages/temp-root:
     devDependencies:
+      '@universe-editor/config-ts':
+        specifier: workspace:*
+        version: link:../config-ts
+      eslint:
+        specifier: 'catalog:'
+        version: 9.39.4(jiti@2.7.0)
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@17.6.3)(jiti@2.7.0)(lightningcss@1.33.0)
+
+  packages/trusted-view-api:
+    dependencies:
+      react:
+        specifier: ^19.0.0
+        version: 19.2.5
+    devDependencies:
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.2.14
       '@universe-editor/config-ts':
         specifier: workspace:*
         version: link:../config-ts

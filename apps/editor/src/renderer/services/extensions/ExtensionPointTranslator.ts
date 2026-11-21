@@ -51,10 +51,13 @@ import {
   type IResolvedJsonValidation,
   type ISubmenuContribution,
   type IThemeContribution,
+  type ITrustedViewContribution,
   type IViewContribution,
 } from '@universe-editor/extensions-common'
 import { registerCommandSource } from './contributedCommandSources.js'
 import { EXTENSION_TREE_VIEW_COMPONENT_KEY } from '../views/extensionViews.js'
+import { EXTENSION_TRUSTED_VIEW_COMPONENT_KEY } from '../views/trustedViews.js'
+import type { ITrustedViewRegistration } from '../trustedViews/TrustedViewService.js'
 
 /** Maps VSCode-style manifest menu keys to our internal MenuId. */
 const MENU_ID_BY_KEY: Readonly<Record<string, MenuId>> = {
@@ -179,6 +182,18 @@ export class ExtensionPointTranslator extends Disposable {
       colors: readonly IColorContribution[],
       context: IThemeRegistrationContext,
     ) => IDisposable,
+    /**
+     * Trust gate for `contributes.trustedViews` (built-in / dev / user list).
+     * Supplied by ExtensionsContribution; absent → untrusted.
+     */
+    private readonly _isTrustedViewExtension?: (ext: IExtensionDescriptionDto) => boolean,
+    /**
+     * Record a translated trusted view (sidebar descriptor or editor input) in
+     * TrustedViewService. Throws when the view id is already taken.
+     */
+    private readonly _registerTrustedView?: (registration: ITrustedViewRegistration) => IDisposable,
+    /** Untrusted extension with trustedViews: ask the user once per session. */
+    private readonly _onUntrustedTrustedView?: (ext: IExtensionDescriptionDto) => void,
   ) {
     super()
   }
@@ -221,6 +236,9 @@ export class ExtensionPointTranslator extends Disposable {
       })
       this._guardContribution(ext.id, 'view', () => {
         this._registerViews(ext, contributes.views)
+      })
+      this._guardContribution(ext.id, 'trustedView', () => {
+        this._registerTrustedViews(ext)
       })
       this._guardContribution(ext.id, 'customEditor', () => {
         for (const editor of contributes.customEditors ?? []) {
@@ -399,6 +417,100 @@ export class ExtensionPointTranslator extends Disposable {
     }
     if (ViewContainerRegistry.getViewContainer(key) !== undefined) return key
     return undefined
+  }
+
+  /**
+   * Translate `contributes.trustedViews` for one extension. Untrusted
+   * extensions register nothing and hand the decision to the contribution
+   * (one warning notification per extension per session). Trusted views whose
+   * id is already registered — by another extension or a regular `views` entry
+   * with the same id — are skipped; later declarations lose.
+   */
+  private _registerTrustedViews(ext: IExtensionDescriptionDto): void {
+    const views = ext.contributes.trustedViews
+    if (views === undefined || views.length === 0) return
+    if (!(this._isTrustedViewExtension?.(ext) ?? false)) {
+      this._logger.warn(
+        `${ext.id}: not loading ${views.length} trusted view(s): extension is not trusted`,
+      )
+      this._onUntrustedTrustedView?.(ext)
+      return
+    }
+    if (this._registerTrustedView === undefined) {
+      this._logger.warn(`${ext.id}: cannot register trusted views: no registry wired`)
+      return
+    }
+    const extensionLocation = URI.revive(ext.extensionLocation)
+    if (extensionLocation === null || extensionLocation === undefined) {
+      this._logger.warn(`${ext.id}: ignoring trusted views: invalid extension location`)
+      return
+    }
+    views.forEach((view, index) => {
+      if (view.location === 'view') {
+        const containerId =
+          view.container !== undefined ? this._resolveViewsContainerKey(view.container) : undefined
+        if (containerId === undefined) {
+          this._logger.warn(
+            `${ext.id}: ignoring trusted view "${view.id}" for unknown container: ${view.container ?? ''}`,
+          )
+          return
+        }
+        if (ViewRegistry.getView(view.id) !== undefined) {
+          this._logger.warn(
+            `${ext.id}: ignoring trusted view "${view.id}": view id already registered`,
+          )
+          return
+        }
+        this._registerTrustedViewEntry(ext, view, {
+          extensionLocation,
+          registerDescriptor: () =>
+            ViewRegistry.registerView({
+              id: view.id,
+              name: view.name,
+              containerId,
+              componentKey: EXTENSION_TRUSTED_VIEW_COMPONENT_KEY,
+              order: index,
+              ...(view.icon !== undefined ? { icon: normalizeContainerIcon(view.icon) } : {}),
+              ...(view.when !== undefined ? { when: view.when } : {}),
+            }),
+        })
+        return
+      }
+      this._registerTrustedViewEntry(ext, view, { extensionLocation })
+    })
+  }
+
+  private _registerTrustedViewEntry(
+    ext: IExtensionDescriptionDto,
+    view: ITrustedViewContribution,
+    options: {
+      readonly extensionLocation: URI
+      readonly registerDescriptor?: () => IDisposable
+    },
+  ): void {
+    let handle: IDisposable
+    try {
+      handle = this._registerTrustedView!({
+        viewId: view.id,
+        extensionId: ext.id,
+        extensionLocation: options.extensionLocation,
+        contribution: view,
+      })
+    } catch (err) {
+      this._logger.warn(
+        `${ext.id}: ignoring trusted view "${view.id}": ${err instanceof Error ? err.message : String(err)}`,
+      )
+      return
+    }
+    try {
+      if (options.registerDescriptor !== undefined) this._register(options.registerDescriptor())
+      this._register(handle)
+    } catch (err) {
+      handle.dispose()
+      this._logger.warn(
+        `${ext.id}: ignoring trusted view "${view.id}": ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
   }
 
   private _registerCommand(

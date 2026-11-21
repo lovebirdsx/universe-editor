@@ -5,6 +5,7 @@
 export * from './scmWire.js'
 export * from './timelineWire.js'
 export * from './treeViewWire.js'
+export * from './trustedViewWire.js'
 export * from './aiWire.js'
 export * from './chatWire.js'
 export * from './gitGraph.js'

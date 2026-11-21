@@ -39,6 +39,12 @@ export class ViewsService extends Disposable implements IViewsService {
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
   private _initialLoadDone = false
+  // An extension host restart deregisters every contributed container before
+  // re-registering it. Remember what was active so the part comes back to the
+  // same container instead of falling back to the first one in the location.
+  private readonly _activeBeforeDeregister = new Map<number, string>()
+  /** Active containers currently filled by {@link _seedDefaults} (not user choices). */
+  private readonly _seededDefaults = new Map<number, string>()
 
   constructor(
     @IStorageService private readonly _storage: IStorageService,
@@ -79,6 +85,8 @@ export class ViewsService extends Disposable implements IViewsService {
 
   openViewContainer(containerId: string): void {
     const location = this._getLocation(containerId)
+    this._activeBeforeDeregister.delete(location)
+    this._seededDefaults.delete(location)
     const cur = this.activeContainerByLocation.get()
     if (cur[location] === containerId) return
     this.activeContainerByLocation.set({ ...cur, [location]: containerId }, undefined)
@@ -87,6 +95,8 @@ export class ViewsService extends Disposable implements IViewsService {
 
   closeViewContainer(containerId: string): void {
     const location = this._getLocation(containerId)
+    this._activeBeforeDeregister.delete(location)
+    this._seededDefaults.delete(location)
     const cur = this.activeContainerByLocation.get()
     if (cur[location] !== containerId) return
     const next = { ...cur }
@@ -100,6 +110,9 @@ export class ViewsService extends Disposable implements IViewsService {
   }
 
   async load(): Promise<void> {
+    // A load (re)reads the persisted layout: memories from the previous scope
+    // are stale and must not override it.
+    this._activeBeforeDeregister.clear()
     this.loadDefaults()
     await this.reconcileFromStorage()
   }
@@ -164,7 +177,10 @@ export class ViewsService extends Disposable implements IViewsService {
         ...this.activeContainerByLocation.get(),
       }
       for (const [k, v] of Object.entries(data.activeContainerByLocation)) {
-        if (typeof v === 'string') merged[Number(k)] = v
+        if (typeof v === 'string') {
+          merged[Number(k)] = v
+          this._seededDefaults.delete(Number(k))
+        }
       }
       this.activeContainerByLocation.set(merged, undefined)
     } finally {
@@ -205,6 +221,8 @@ export class ViewsService extends Disposable implements IViewsService {
       clearTimeout(this._saveTimer)
       this._saveTimer = undefined
     }
+    // Switching workspaces invalidates the previous workspace's deregister memory.
+    this._activeBeforeDeregister.clear()
     await this._loadFromStorage()
   }
 
@@ -232,10 +250,39 @@ export class ViewsService extends Disposable implements IViewsService {
     const next: Record<number, string | undefined> = { ...cur }
     let changed = false
     for (const loc of ALL_LOCATIONS) {
+      const remembered = this._activeBeforeDeregister.get(loc)
+      if (remembered !== undefined) {
+        const visible = this._viewDescriptors
+          .getViewContainersByLocation(loc)
+          .some((c) => c.id === remembered)
+        if (visible) {
+          this._activeBeforeDeregister.delete(loc)
+          // A remembered container is a fallback only: never override a real
+          // selection the user (or persisted layout) made in the meantime.
+          const current = next[loc]
+          const seeded = current !== undefined && this._seededDefaults.get(loc) === current
+          if (current === undefined || current === remembered || seeded) {
+            if (current !== remembered) {
+              next[loc] = remembered
+              changed = true
+            }
+            this._seededDefaults.delete(loc)
+          }
+          continue
+        }
+        if (ViewContainerRegistry.getViewContainer(remembered) !== undefined) {
+          const rememberedLocation = this._viewDescriptors.getViewContainerLocation(remembered)
+          if (rememberedLocation !== undefined && rememberedLocation !== loc) {
+            // Still registered, but now lives in another location.
+            this._activeBeforeDeregister.delete(loc)
+          }
+        }
+      }
       if (next[loc]) continue
       const first = this._viewDescriptors.getViewContainersByLocation(loc)[0]
       if (!first) continue
       next[loc] = first.id
+      this._seededDefaults.set(loc, first.id)
       changed = true
     }
     if (!changed) return
@@ -265,6 +312,8 @@ export class ViewsService extends Disposable implements IViewsService {
         .some((c) => c.id === activeId)
       if (!visible) {
         delete next[loc]
+        this._seededDefaults.delete(loc)
+        this._activeBeforeDeregister.set(loc, activeId)
         changed = true
       }
     }

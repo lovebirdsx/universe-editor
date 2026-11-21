@@ -410,6 +410,22 @@ preflight 守护。扩展在自己的 `package.json` 里用 `engines.universe` �
   - 配套内部改动（不影响扩展侧表面）：宿主在中途接管 busy picker 时不会遗留挂起的
     RPC；`QuickInputService` 的单面板槽位在换主时先触发前一位的 `onHide`。
 
+- `0.25.0` — 受信视图（trusted views）表面，含一处 0.x 破坏性调整：
+  - **新增贡献点 `contributes.trustedViews`**：扩展可声明在编辑器界面进程里运行的原生
+    React 组件（`location: "view" | "editor"`，`entry` 为浏览器 ESM 模块）。组件经
+    `ctx.request()` / `session.postEvent()` 与扩展宿主侧通信；只有内置、开发中
+    （`--extension-development-path`）或出现在用户设置
+    `extensions.trustedViewExtensions`（application scope）里的扩展会被加载。
+  - **新增 `ExtensionContext.trustedViews: TrustedViewsApi`**（`src/trustedViews.ts`）：
+    - `registerProvider(viewId, provider): Disposable`
+    - `openEditor(viewId, options?): Promise<void>`
+    宿主把上下文与该扩展的 id 绑定，`viewId` 必须由**该扩展** manifest 声明，否则
+    抛错；同一 `viewId` 被多个扩展声明时视为歧义，注册直接失败并记宿主 warning。
+  - **移除 `window.registerTrustedViewProvider` / `window.openTrustedEditor`**：全局
+    bridge 无法携带调用方身份，任何扩展都能冒用他人的 `viewId`；改为
+    `context.trustedViews` 后归属由宿主按 manifest 校验。0.x 下按破坏性变更流程
+    记录于此。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则

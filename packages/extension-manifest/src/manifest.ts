@@ -266,6 +266,31 @@ export interface IViewContainersContribution {
   activitybar?: IViewContainerContribution[]
 }
 
+/**
+ * A renderer component an extension ships and registers as a native view or
+ * editor tab. `entry` is a browser-target ESM module inside the extension root
+ * whose default export is a React component; the renderer loads it only for
+ * explicitly trusted extensions.
+ */
+export interface ITrustedViewContribution {
+  /** Globally unique id, e.g. `acme.editorService.status`. */
+  id: string
+  /** Display name; supports `%nls%` placeholders. */
+  name: string
+  /** `view` = sidebar view (needs `container`), `editor` = editor tab. */
+  location: 'view' | 'editor'
+  /**
+   * Home container for a `view`: `explorer`/`search`/`scm`/`outline`, or the id
+   * of a `viewsContainers.activitybar` entry. Forbidden for `editor`.
+   */
+  container?: string
+  /** Relative path to the component's browser ESM entry (`.js` / `.mjs`). */
+  entry: string
+  icon?: string
+  /** Visibility clause; only meaningful for `view` (forbidden for `editor`). */
+  when?: string
+}
+
 /** The `contributes` block as declared in a manifest. Grows phase by phase. */
 export interface IExtensionContributions {
   commands?: ICommandContribution[]
@@ -292,6 +317,8 @@ export interface IExtensionContributions {
   viewsContainers?: IViewContainersContribution
   /** Tree views, keyed by the id of their home view container. */
   views?: Record<string, IViewContribution[]>
+  /** Renderer components injected as native views / editors (trusted only). */
+  trustedViews?: ITrustedViewContribution[]
 }
 
 /**

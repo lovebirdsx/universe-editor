@@ -81,6 +81,7 @@ import { ITreeViewsService } from './TreeViewsService.js'
 import { IChatContextService } from './ChatContextService.js'
 import { IWebviewService } from './WebviewService.js'
 import { IExtensionEnablementService } from './ExtensionEnablementService.js'
+import { ITrustedViewService } from '../trustedViews/TrustedViewService.js'
 import { HostConnection, type HostConnectionDeps } from './HostConnection.js'
 import { setWireUriRemoteAuthority } from '../languageFeatures/typescript/wireUri.js'
 
@@ -222,6 +223,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IScmService private readonly _scm: IScmService,
     @ITimelineService private readonly _timeline: ITimelineService,
     @ITreeViewsService private readonly _treeViews: ITreeViewsService,
+    @ITrustedViewService private readonly _trustedViews: ITrustedViewService,
     @IChatContextService private readonly _chatContext: IChatContextService,
     @IWebviewService private readonly _webview: IWebviewService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
@@ -384,6 +386,8 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       scm: this._scm,
       timeline: this._timeline,
       treeViews: this._treeViews,
+      trustedViews: this._trustedViews,
+      activateByEvent: (event) => this.activateByEvent(event),
       chatContext: this._chatContext,
       languageFeatures: this._languageFeatures,
       editorService: this._editorService,
@@ -658,6 +662,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     this._scm.resetSourceControls()
     this._timeline.reset()
     this._treeViews.reset()
+    this._trustedViews.reset()
     this._chatContext.reset()
     this._webview.reset(conn.kind)
     conn.dispose()

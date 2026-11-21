@@ -5,6 +5,7 @@ import {
   ViewContainerLocation,
   ViewContainerRegistry,
   constObservable,
+  observableValue,
   type IStorageService,
   type IViewDescriptorService,
   type IWorkspaceService,
@@ -110,6 +111,130 @@ describe('ViewsService', () => {
       expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe('explorer')
       expect(svc.getActiveViewContainerId(ViewContainerLocation.SecondarySideBar)).toBe(
         'test.outline2',
+      )
+    })
+  })
+
+  describe('extension host restart', () => {
+    const disposables: { dispose(): void }[] = []
+
+    function register(id: string, order: number): { dispose(): void } {
+      const disposable = ViewContainerRegistry.registerViewContainer({
+        id,
+        label: id,
+        icon: 'pulse',
+        order,
+        location: ViewContainerLocation.SideBar,
+      })
+      disposables.push(disposable)
+      return disposable
+    }
+
+    afterEach(() => {
+      for (const d of disposables.splice(0)) d.dispose()
+    })
+
+    it('restores the active contributed container when it re-registers', () => {
+      register('test.restart.default', 1)
+      let extension = register('test.restart.plugin', 2)
+      const svc = makeService()
+      svc.openViewContainer('test.restart.plugin')
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe(
+        'test.restart.plugin',
+      )
+
+      // Host restart: contributions are torn down, then re-translated.
+      extension.dispose()
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe(
+        'test.restart.default',
+      )
+      extension = register('test.restart.plugin', 2)
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe(
+        'test.restart.plugin',
+      )
+    })
+
+    it('does not override a container the user picked while the extension was down', () => {
+      register('test.restart.default2', 1)
+      const extension = register('test.restart.plugin2', 2)
+      const svc = makeService()
+      svc.openViewContainer('test.restart.plugin2')
+
+      extension.dispose()
+      svc.openViewContainer('test.restart.default2')
+      register('test.restart.plugin2', 2)
+
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe(
+        'test.restart.default2',
+      )
+    })
+
+    it('forgets the deregister memory when load() re-reads the layout', async () => {
+      register('test.restart.default4', 1)
+      const extension = register('test.restart.plugin4', 2)
+      const svc = makeService()
+      svc.openViewContainer('test.restart.plugin4')
+
+      extension.dispose()
+      await svc.load()
+      register('test.restart.plugin4', 2)
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe(
+        'test.restart.default4',
+      )
+    })
+
+    it('forgets the deregister memory on a workspace switch', async () => {
+      const emitter = new Emitter<void>()
+      const storage: IStorageService = {
+        ...stubStorage,
+        onDidChangeWorkspaceScope: emitter.event,
+      }
+      register('test.restart.default5', 1)
+      const extension = register('test.restart.plugin5', 2)
+      const svc = makeService(storage)
+      await svc.load()
+
+      svc.openViewContainer('test.restart.plugin5')
+      extension.dispose()
+      emitter.fire() // workspace switch → reload + clear memory
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      register('test.restart.plugin5', 2)
+
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe(
+        'test.restart.default5',
+      )
+    })
+
+    it('keeps waiting while the re-registered container has no visible views yet', () => {
+      // The translator registers a contributed container before its views, so
+      // the container is briefly filtered out of getViewContainersByLocation.
+      // That must not be mistaken for "moved to another location".
+      register('test.restart.default3', 1)
+      const extension = register('test.restart.plugin3', 2)
+      const hidden = new Set<string>()
+      const version = observableValue('test.views.version', 0)
+      const descriptors = {
+        _serviceBrand: undefined,
+        version,
+        getViewContainerLocation: (id: string) =>
+          ViewContainerRegistry.getViewContainer(id)?.location,
+        getViewContainersByLocation: (location: ViewContainerLocation) =>
+          ViewContainerRegistry.getViewContainers(location).filter((c) => !hidden.has(c.id)),
+      } as unknown as IViewDescriptorService
+      const svc = new ViewsService(stubStorage, stubWorkspace, descriptors)
+      svc.openViewContainer('test.restart.plugin3')
+
+      extension.dispose()
+      hidden.add('test.restart.plugin3')
+      register('test.restart.plugin3', 2)
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe(
+        'test.restart.default3',
+      )
+
+      hidden.delete('test.restart.plugin3')
+      version.set(version.get() + 1, undefined)
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe(
+        'test.restart.plugin3',
       )
     })
   })

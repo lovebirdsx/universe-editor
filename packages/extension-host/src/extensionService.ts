@@ -116,6 +116,7 @@ import {
   type IMainThreadScm,
   type IMainThreadTimeline,
   type IMainThreadTreeViews,
+  type IMainThreadTrustedViews,
   type IMainThreadChat,
   type IChatContextItemDto,
   type IChatContextResolveContextDto,
@@ -170,6 +171,7 @@ import { HostChatContextRegistry } from './hostChat.js'
 import { HostSourceControl } from './hostScm.js'
 import { ExtHostTimelineRegistry } from './hostTimeline.js'
 import { HostTreeViewRegistry } from './hostTreeViews.js'
+import { HostTrustedViewsRegistry } from './hostTrustedViews.js'
 import { HostWebviewManager } from './hostWebviews.js'
 import { HostAi } from './hostAi.js'
 import { ExtHostDocuments } from './hostDocuments.js'
@@ -303,6 +305,7 @@ export class ExtensionService implements IExtensionHostBridge {
   private readonly _sourceControls = new Map<number, HostSourceControl>()
   private readonly _timelines: ExtHostTimelineRegistry
   private readonly _treeViews?: HostTreeViewRegistry
+  private readonly _trustedViews?: HostTrustedViewsRegistry
   private readonly _chat?: HostChatContextRegistry
   private readonly _webviews?: HostWebviewManager
   private _statusBarHandle = 0
@@ -402,6 +405,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadFileEvents?: IMainThreadFileEvents,
     private readonly _mainThreadTreeViews?: IMainThreadTreeViews,
     private readonly _mainThreadChat?: IMainThreadChat,
+    private readonly _mainThreadTrustedViews?: IMainThreadTrustedViews,
     private readonly _uriTransformer?: IURITransformer,
   ) {
     this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
@@ -418,12 +422,16 @@ export class ExtensionService implements IExtensionHostBridge {
       _mainThreadExtensions
         ? (report) => _mainThreadExtensions.$onActivationError(report)
         : undefined,
+      _mainThreadTrustedViews ? (id) => this._trustedViews!.createApi(id) : undefined,
     )
     if (_mainThreadWebviews) this._webviews = new HostWebviewManager(_mainThreadWebviews)
     if (_mainThreadTreeViews) {
       this._treeViews = new HostTreeViewRegistry(_mainThreadTreeViews, (command, args) =>
         this._commands.execute(command, args),
       )
+    }
+    if (_mainThreadTrustedViews) {
+      this._trustedViews = new HostTrustedViewsRegistry(_mainThreadTrustedViews, _extensions)
     }
     if (_mainThreadChat) this._chat = new HostChatContextRegistry(_mainThreadChat)
     this._documents.onDidOpen((document) => this._onVisibleDocumentOpened(document))
@@ -833,6 +841,37 @@ export class ExtensionService implements IExtensionHostBridge {
   /** IExtHostTreeViews.$executeTreeItemCommand */
   executeTreeItemCommand(viewId: string, handle: number, commandId?: string): Promise<void> {
     return this._treeViews?.executeTreeItemCommand(viewId, handle, commandId) ?? Promise.resolve()
+  }
+
+  // --- IExtensionHostBridge: trusted views ---
+
+  private _trustedRegistry(): HostTrustedViewsRegistry {
+    if (!this._trustedViews) {
+      throw new Error('trusted view support is not available in this extension host')
+    }
+    return this._trustedViews
+  }
+
+  // --- IExtHostTrustedViews ---
+
+  /** IExtHostTrustedViews.$resolveSession */
+  resolveTrustedViewSession(viewId: string, sessionId: string, state: unknown): Promise<void> {
+    return this._trustedRegistry().resolveSession(viewId, sessionId, state)
+  }
+
+  /** IExtHostTrustedViews.$request */
+  requestTrustedView(
+    sessionId: string,
+    method: string,
+    args: readonly unknown[],
+    token?: CancellationToken,
+  ): Promise<unknown> {
+    return this._trustedRegistry().request(sessionId, method, args, token)
+  }
+
+  /** IExtHostTrustedViews.$disposeSession */
+  disposeTrustedViewSession(sessionId: string): void {
+    this._trustedViews?.disposeSession(sessionId)
   }
 
   /** IExtHostChat.$resolveChatContextItem */
@@ -1760,6 +1799,7 @@ export class ExtensionService implements IExtensionHostBridge {
     this._webviews?.dispose()
     this._timelines.dispose()
     this._treeViews?.dispose()
+    this._trustedViews?.dispose()
     this._chat?.dispose()
     this._fileWatchers?.dispose()
     this._diagnostics?.dispose()

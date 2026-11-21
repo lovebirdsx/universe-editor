@@ -64,6 +64,7 @@ import type {
   TreeDataProvider,
   TreeView,
   TreeViewOptions,
+  TrustedViewsApi,
   TypeDefinitionProvider,
   UriComponents,
   WebviewOptions,
@@ -423,7 +424,9 @@ export async function createExtensionContext(
   ext: IScannedExtension,
   storage?: IExtensionStorage,
   globalStorageHome?: string,
+  trustedViews?: TrustedViewsApi,
 ): Promise<ExtensionContext> {
+  const trustedViewsApi = trustedViews ?? unavailableTrustedViews()
   const globalStoragePath = globalStorageHome ? join(globalStorageHome, ext.id) : ''
   if (!storage) {
     return {
@@ -432,6 +435,7 @@ export async function createExtensionContext(
       globalStoragePath,
       globalState: createInMemoryMemento(),
       workspaceState: createInMemoryMemento(),
+      trustedViews: trustedViewsApi,
     }
   }
   const [globalInitial, workspaceInitial] = await Promise.all([
@@ -448,5 +452,16 @@ export async function createExtensionContext(
     workspaceState: createPersistentMemento(workspaceInitial, (state) => {
       void storage.$set(1, ext.id, JSON.stringify(state))
     }),
+    trustedViews: trustedViewsApi,
+  }
+}
+
+function unavailableTrustedViews(): TrustedViewsApi {
+  const unavailable = (): never => {
+    throw new Error('trusted view support is not available in this extension host')
+  }
+  return {
+    registerProvider: unavailable,
+    openEditor: () => Promise.reject(new Error('trusted view support is not available')),
   }
 }

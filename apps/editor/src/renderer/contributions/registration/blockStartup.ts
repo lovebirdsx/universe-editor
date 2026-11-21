@@ -17,6 +17,7 @@ import { BuiltInViewContainersContribution } from '../BuiltInViewContainersContr
 import { BuiltInViewsContribution } from '../BuiltInViewsContribution.js'
 import { ExtensionsViewContribution } from '../ExtensionsViewContribution.js'
 import { ExtensionTreeViewsContribution } from '../ExtensionTreeViewsContribution.js'
+import { TrustedViewsContribution } from '../TrustedViewsContribution.js'
 import { SwarmViewContribution } from '../SwarmViewContribution.js'
 import { SwarmConfigurationContribution } from '../SwarmConfigurationContribution.js'
 import { SettingsContribution } from '../SettingsContribution.js'
@@ -149,6 +150,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.extensionTreeViews',
   ExtensionTreeViewsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Trusted views: the shared component for `location: 'view'` entries and the
+// editor provider for restored `trustedView` tabs (WorkspaceRestore runs in
+// BlockRestore, so register before it).
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.trustedViews',
+  TrustedViewsContribution,
   WorkbenchPhase.BlockStartup,
 )
 

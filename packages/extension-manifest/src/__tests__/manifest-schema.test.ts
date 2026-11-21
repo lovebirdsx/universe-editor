@@ -306,6 +306,81 @@ describe('parseManifest', () => {
     })
   })
 
+  describe('trustedViews', () => {
+    const view = {
+      id: 'acme.editorService.status',
+      name: 'Editor Service',
+      location: 'view',
+      container: 'acme',
+      entry: './dist/renderer/status.js',
+      icon: 'server',
+      when: 'workspaceFolderCount > 0',
+    }
+
+    it('keeps a view trustedView contribution', () => {
+      const m = parseManifest({ ...baseManifest(), contributes: { trustedViews: [view] } })
+      expect(m.contributes?.trustedViews).toEqual([view])
+    })
+
+    it('accepts an editor trustedView without container/when', () => {
+      const m = parseManifest({
+        ...baseManifest(),
+        contributes: {
+          trustedViews: [
+            {
+              id: 'acme.editorService.detail',
+              name: 'Detail',
+              location: 'editor',
+              entry: 'dist/renderer/detail.mjs',
+            },
+          ],
+        },
+      })
+      expect(m.contributes?.trustedViews?.[0]?.location).toBe('editor')
+    })
+
+    it('rejects an invalid id', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: { trustedViews: [{ ...view, id: '1bad id' }] },
+        }),
+      ).toThrow(/trusted view id/)
+    })
+
+    it('requires container for a view', () => {
+      const { container: _container, ...withoutContainer } = view
+      expect(() =>
+        parseManifest({ ...baseManifest(), contributes: { trustedViews: [withoutContainer] } }),
+      ).toThrow(/container/)
+    })
+
+    it('rejects container/when on an editor', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: { trustedViews: [{ ...view, location: 'editor' }] },
+        }),
+      ).toThrow(/must not declare/)
+    })
+
+    it.each([
+      '/etc/evil.js',
+      'C:/evil.js',
+      '../evil.js',
+      'dist/../../evil.js',
+      './dist/evil.ts',
+      './dist/evil.css',
+    ])('rejects unsafe entry %s', (entry) => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: { trustedViews: [{ ...view, entry }] },
+        }),
+      ).toThrow(/entry/)
+    })
+  })
+
   describe('forward-compat passthrough', () => {
     it('tolerates unknown contribution points', () => {
       const m = parseManifest({
