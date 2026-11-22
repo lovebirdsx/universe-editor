@@ -126,6 +126,8 @@ React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keyb
 
 **键不会自动回收**：`setContext` 写下的值随窗口存活，下一次激活（宿主因工作区切换而重启）读到的是上一次留下的值。所以写两态是扩展自己的责任：`activate()` 里**先无条件写 `false`、再在条件满足处写 `true`**（perforce 的 `perforceHasWorkspace` 即此形态，`extensions/perforce/src/extension.ts` 顶部——写在任何提前返回之前）。
 
+同一形态的第二个例子是 git 的 `gitHasRepository`：`activate()` 顶部无条件写 `false`，`setupRepositories()`（初始扫描或 `.git` 迟到检测）之后写 `true`。它演示的是「键在窗口生命周期内会翻转」的版本——仓库只会增加，所以只有 `false → true`；工作区切换会重启扩展宿主，而 renderer 的 root context 不随宿主重启清空，靠的仍是 `activate()` 顶部那次无条件 `false`。新增 git 命令时必须同时补 `contributes.menus.commandPalette` 显式条目（`when: gitHasRepository`；需要参数/探针的命令用 `when: false`），清单测试会直接失败。
+
 **每个键要有一个「谁写它」的单一事实源**：同一个键被两处写就会出现「谁最后写谁赢」的静默覆盖。写入的动作本身按 VSCode 语义把 URI 值转成字符串（`when` 只能比字符串）。
 
 命令可见性分三层，**不要混用**：

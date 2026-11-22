@@ -177,10 +177,24 @@ describe('activate in a workspace without git', () => {
     return call?.[1] as ((...args: unknown[]) => unknown) | undefined
   }
 
+  function expectGateCleared(): void {
+    const writes = mocks.executeCommand.mock.calls.filter(
+      ([id, key]) => id === 'setContext' && key === 'gitHasRepository',
+    )
+    expect(writes.length).toBeGreaterThan(0)
+    expect(writes.at(-1)).toEqual(['setContext', 'gitHasRepository', false])
+    // The clear must precede the stub burst: a stale `true` left by the previous
+    // activation would otherwise keep the palette open for the whole activation.
+    expect(mocks.executeCommand.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.registerCommand.mock.invocationCallOrder[0]!,
+    )
+  }
+
   it('answers the pending-work probe when no folder is open', async () => {
     mocks.workspaceRootPath = undefined
     await activate(makeContext())
 
+    expectGateCleared()
     expect(await probeHandler()?.({ sourceCwd: ROOT })).toEqual(NOT_A_REPOSITORY)
   })
 
@@ -188,6 +202,7 @@ describe('activate in a workspace without git', () => {
     mocks.workspaceRootPath = ROOT
     await activate(makeContext())
 
+    expectGateCleared()
     expect(await probeHandler()?.({ sourceCwd: ROOT })).toEqual(NOT_A_REPOSITORY)
   })
 })

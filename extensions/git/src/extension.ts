@@ -932,7 +932,29 @@ export function createGitCommandsForTest(
   return registerGitCommands(context, env, mgr, graph, statusBar)
 }
 
+/**
+ * Two-state command-palette gate for every `git.*` command (the manifest declares
+ * `when: gitHasRepository`). `contributes.commands` puts every command in the
+ * palette, but `activate()` only registers handlers once a repository is known —
+ * a folder that is not a repository would otherwise offer dozens of rows that
+ * reject with "Contributed command '…' does not exist.".
+ *
+ * The key lives on the renderer's root context service and outlives the extension
+ * host, so every activation must clear the previous value before anything can
+ * return early. A failed write is swallowed: the gate is cosmetic, and taking
+ * activation down over it would cost the whole provider.
+ */
+async function setRepositoryPaletteGate(value: boolean): Promise<void> {
+  try {
+    await commands.executeCommand('setContext', 'gitHasRepository', value)
+  } catch (err) {
+    console.error('[git] setContext(gitHasRepository) failed', err)
+  }
+}
+
 export async function activate(context: ExtensionContext): Promise<void> {
+  await setRepositoryPaletteGate(false)
+
   const root = workspace.rootPath
   if (!root) {
     console.info('[git] no workspace folder open; git source control disabled')
@@ -972,6 +994,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
     context.subscriptions.push(...stubs)
     console.info(`[git] no git repository found under ${root}; watching for one to appear`)
   }
+  // `setupRepositories` registers the full command surface synchronously; only
+  // now is every palette row actually executable.
+  await setRepositoryPaletteGate((mgr?.all.length ?? 0) > 0)
 
   const onPossibleRepos = async (candidates: readonly string[]): Promise<void> => {
     if (!mgr) {
@@ -983,23 +1008,24 @@ export async function activate(context: ExtensionContext): Promise<void> {
       stubs = []
       log(`[git] repository appeared under ${root}; enabling source control`)
       mgr = setupRepositories(context, env, found)
-      return
+    } else {
+      const known = mgr
+      for (const candidate of candidates) {
+        const dir = joinCandidate(root, candidate)
+        if (known.has(dir)) continue
+        const confirmed = await detectRepoRoot(dir)
+        if (!confirmed || known.has(confirmed)) continue
+        // The workspace folder itself becoming a repo upgrades to main.
+        const isMain = norm(confirmed) === norm(root)
+        const repo = known.add(confirmed, {
+          label: isMain ? 'Git' : `Git: ${basename(confirmed)}`,
+        })
+        if (isMain) known.setMainRoot(confirmed)
+        log(`[git] late repository detected: ${confirmed}`)
+        void repo.refresh({ fetch: true, silent: true })
+      }
     }
-    const known = mgr
-    for (const candidate of candidates) {
-      const dir = joinCandidate(root, candidate)
-      if (known.has(dir)) continue
-      const confirmed = await detectRepoRoot(dir)
-      if (!confirmed || known.has(confirmed)) continue
-      // The workspace folder itself becoming a repo upgrades to main.
-      const isMain = norm(confirmed) === norm(root)
-      const repo = known.add(confirmed, {
-        label: isMain ? 'Git' : `Git: ${basename(confirmed)}`,
-      })
-      if (isMain) known.setMainRoot(confirmed)
-      log(`[git] late repository detected: ${confirmed}`)
-      void repo.refresh({ fetch: true, silent: true })
-    }
+    await setRepositoryPaletteGate(mgr.all.length > 0)
   }
 
   // Mirror VSCode's onPossibleGitRepositoryChange: a `.git` entry appearing

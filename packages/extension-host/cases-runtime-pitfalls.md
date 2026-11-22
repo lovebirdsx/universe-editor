@@ -12,7 +12,7 @@ renderer → host（`$executeContributedCommand`，静态贡献命令的 bootstr
 
 VSCode 语义：renderer→host 方向宿主无 handler 即 reject `Contributed command 'X' does not exist.`（`api/common/extHostCommands.ts`），**从不回弹**；host→renderer 方向根本没有白名单（`api/browser/mainThreadCommands.ts`）。现 `ExtensionCommandRegistry.executeContributed` 只跑本宿主所持命令（缺失即 reject），`execute` 保留 renderer 回落——回落服务的是**扩展 API 的 `executeCommand`**（未注册 id 转 renderer 执行 Action2，VSCode 同样行为）与树视图的 `_workbench.*` 转发，别顺手删。白名单仍是命名空间边界：环路现在断在宿主侧，最多回弹一次，**贡献命令方向**不再撞它；但**扩展 API 方向仍会**——扩展调 `commands.executeCommand('workbench.action.files.save')` 这类非 `_workbench.*` 核心命令照样被拒（VSCode 无此限制，这里是**有意收紧**），所以那条消息对扩展作者仍然可见，只是不再是「用户点面板」的路径。
 
-**同型未修：git**。git 在非仓库窗口里同样是 `activate()` 只注册几个 stub 命令，54 条命令中 51 条还是**隐式无 `when`** 的面板条目（3 条 `when:false`）——非 git 窗口的面板里同样列着一批点了必失败的 `Git: …`，只是报错现在是准确的。perforce 的门控（键 + 逐条 `menus.commandPalette.when`）可直接照搬，但 git 的键要跟仓库增删事件联动（perforce 一次写死即可），属于独立一轮。
+**同型（已门控）：git**。git 在非仓库窗口里同样是 `activate()` 只注册几个 stub 命令，而 manifest 的 71 条命令里 51 条原先走**隐式无 `when`** 的面板条目（20 条参数/探针型命令显式 `when:false`）——非 git 窗口的面板里列着一批点了必失败的 `Git: …`。现按 perforce 的形态收口：`activate()` 顶部无条件 `await setContext('gitHasRepository', false)`（任何提前返回之前），`setupRepositories()`（初始扫描命中或 `.git` 迟到检测）之后写 `true`；71 条命令全部有显式 `commandPalette` 条目（51 条 `gitHasRepository`、20 条 `false`），唯一的 `git.refresh` 快捷键也带同一个 `when`。与 perforce 的差异：git 的仓库集合只增不减（`RepositoryManager` 没有移除 API），窗口内只有 `false → true`；工作区切换靠扩展宿主重启 + 顶部无条件 `false` 清残留。清单测试 `extensions/git/src/__tests__/manifestCommandPalette.test.ts` 逐条钉住，e2e `smoke.gitLateRepoDetection.spec.ts` 钉住隐藏 → `git init` → 可见。
 
 ## treeKill 是 backstop 不是主路径
 

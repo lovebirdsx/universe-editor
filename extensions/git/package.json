@@ -900,8 +900,212 @@
       ],
       "commandPalette": [
         {
+          "command": "git.commit",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.commitAmend",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.commitAndPush",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.commitAndSync",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.undoLastCommit",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.refresh",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.stage",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.unstage",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.stageAll",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.unstageAll",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.discard",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.discardAll",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.checkout",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.createBranch",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.renameBranch",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.deleteBranch",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.merge",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.rebase",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.publishBranch",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.createWorktree",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.openWorktree",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.openWorktreeInNewWindow",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.deleteWorktree",
+          "when": "gitHasRepository"
+        },
+        {
           "command": "git.openChange",
           "when": "false"
+        },
+        {
+          "command": "git.openMergeEditor",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.openFile",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.getCommitDiff",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.setCommitMessage",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.pull",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.pullRebase",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.pullAutostash",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.push",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.pushForce",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.pushTo",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.sync",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.fetch",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.fetchPrune",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.stash",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.stashIncludeUntracked",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.stashApply",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.stashPop",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.stashDrop",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.addRemote",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.removeRemote",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.createTag",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.deleteTag",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.submoduleUpdateInit",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.submoduleSync",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.timeline.openDiff",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.timeline.copyCommitId",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.timeline.copyCommitMessage",
+          "when": "gitHasRepository"
+        },
+        {
+          "command": "git.timeline.openInGraph",
+          "when": "gitHasRepository"
         },
         {
           "command": "git.timeline.viewCommit",
@@ -984,7 +1188,8 @@
     "keybindings": [
       {
         "command": "git.refresh",
-        "key": "ctrl+alt+g"
+        "key": "ctrl+alt+g",
+        "when": "gitHasRepository"
       }
     ],
     "configuration": {
