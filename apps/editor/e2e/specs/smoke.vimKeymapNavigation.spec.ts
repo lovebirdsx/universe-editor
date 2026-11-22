@@ -125,6 +125,15 @@ test.describe('@p1 vim keymap navigation', () => {
       await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: 1, column: 9 })
     })
 
+    await test.step('* matches whole words only', async () => {
+      await setText(page, 'foo fooBar foo\n')
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
+      await page.keyboard.press('*')
+      await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: 1, column: 12 })
+      await page.keyboard.press('n')
+      await expect.poll(() => cursor(page)).toMatchObject({ lineNumber: 1, column: 1 })
+    })
+
     await test.step('o opens a new line and enters Insert', async () => {
       await setText(page, 'alpha\nbeta\n')
       await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))

@@ -36,7 +36,7 @@ function find(
   from: VimPosition,
   query: string,
   direction: VimSearchDirection,
-  options: { count?: number; caseSensitive?: boolean } = {},
+  options: { count?: number; caseSensitive?: boolean; wholeWord?: boolean } = {},
 ): ReturnType<typeof findVimMatch> {
   return findVimMatch(source(lines), from, query, { direction, ...options })
 }
@@ -210,8 +210,13 @@ describe('last search', () => {
 
   it('stores and resets the last search', () => {
     expect(getLastVimSearch()).toBeNull()
-    setLastVimSearch({ text: 'foo', direction: 'backward', caseSensitive: true })
-    expect(getLastVimSearch()).toEqual({ text: 'foo', direction: 'backward', caseSensitive: true })
+    setLastVimSearch({ text: 'foo', direction: 'backward', caseSensitive: true, wholeWord: false })
+    expect(getLastVimSearch()).toEqual({
+      text: 'foo',
+      direction: 'backward',
+      caseSensitive: true,
+      wholeWord: false,
+    })
     resetVimSearchForTests()
     expect(getLastVimSearch()).toBeNull()
   })
@@ -307,6 +312,73 @@ describe('case-insensitive matching', () => {
       column: 1,
       wrapped: true,
     })
+  })
+})
+
+describe('whole-word matching', () => {
+  it('skips keyword substrings for * / #', () => {
+    // `foo` inside `fooBar` is not a word match; the next standalone one is.
+    expect(find(['fooBar foo'], at(1, 1), 'foo', 'forward', { wholeWord: true })).toEqual({
+      line: 1,
+      column: 8,
+      wrapped: false,
+    })
+    // The only whole-word `foo` is the cursor's own; the `fooBar` match is
+    // skipped, so the backward search wraps back onto column 8.
+    expect(find(['fooBar foo'], at(1, 8), 'foo', 'backward', { wholeWord: true })).toEqual({
+      line: 1,
+      column: 8,
+      wrapped: true,
+    })
+  })
+
+  it('treats underscore, digits and $ as keyword characters', () => {
+    expect(find(['foo_bar foo'], at(1, 1), 'foo', 'forward', { wholeWord: true })).toEqual({
+      line: 1,
+      column: 9,
+      wrapped: false,
+    })
+    expect(find(['foo1 foo'], at(1, 1), 'foo', 'forward', { wholeWord: true })).toEqual({
+      line: 1,
+      column: 6,
+      wrapped: false,
+    })
+    expect(find(['$foo $foo'], at(1, 1), '$foo', 'forward', { wholeWord: true })).toEqual({
+      line: 1,
+      column: 6,
+      wrapped: false,
+    })
+  })
+
+  it('applies boundaries to case-insensitive matches', () => {
+    expect(
+      find(['FooBar foo'], at(1, 1), 'foo', 'forward', {
+        caseSensitive: false,
+        wholeWord: true,
+      }),
+    ).toEqual({ line: 1, column: 8, wrapped: false })
+  })
+
+  it('keeps greedy non-overlap and wraps', () => {
+    expect(find(['foo foo'], at(1, 1), 'foo', 'forward', { wholeWord: true })).toEqual({
+      line: 1,
+      column: 5,
+      wrapped: false,
+    })
+    expect(find(['foo foo'], at(1, 5), 'foo', 'forward', { wholeWord: true })).toEqual({
+      line: 1,
+      column: 1,
+      wrapped: true,
+    })
+  })
+
+  it('collects only bounded matches for hlsearch', () => {
+    expect(
+      findAllVimMatches(source(['fooBar foo']), 'foo', {
+        caseSensitive: true,
+        wholeWord: true,
+      }),
+    ).toEqual({ matches: [{ line: 1, column: 8, length: 3 }], truncated: false })
   })
 })
 

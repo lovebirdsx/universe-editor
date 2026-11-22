@@ -870,6 +870,7 @@ describe('createVimEditorController', () => {
       text: 'foo',
       direction: 'forward',
       caseSensitive: false,
+      wholeWord: false,
     })
     expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
     expect(context.get('vimSearchFocused')).toBe(false)
@@ -1379,12 +1380,30 @@ describe('createVimEditorController', () => {
   })
 
   it('searches the word under the cursor with * and #', () => {
-    const { fake, controller } = createNormalHarness(['foo bar foo', 'foo'])
+    const { fake, controller } = createNormalHarness(['foo fooBar foo'])
     controller.handleKeyDown(key('*'))
-    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 9 })
-    expect(getLastVimSearch()?.text).toBe('foo')
-    controller.handleKeyDown(key('#'))
+    // `fooBar` is a different word: `*` skips its `foo` and lands on the
+    // standalone match.
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 12 })
+    expect(getLastVimSearch()).toMatchObject({
+      text: 'foo',
+      direction: 'forward',
+      wholeWord: true,
+    })
+    controller.handleKeyDown(key('n'))
     expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+    controller.handleKeyDown(key('#'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 12 })
+    controller.dispose()
+  })
+
+  it('keeps / searches literal inside words', async () => {
+    const { fake, controller } = createNormalHarness(['x fooBar'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    press(input, 'Enter')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 3 })
+    expect(getLastVimSearch()).toMatchObject({ text: 'foo', wholeWord: false })
     controller.dispose()
   })
 

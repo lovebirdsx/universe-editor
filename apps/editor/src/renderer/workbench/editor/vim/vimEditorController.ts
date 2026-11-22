@@ -30,6 +30,7 @@ import {
   findAllVimMatches,
   findVimMatch,
   getLastVimSearch,
+  isVimKeywordChar,
   oppositeSearchDirection,
   resolveVimSearchPattern,
   setLastVimSearch,
@@ -569,6 +570,7 @@ export function createVimEditorController(
             direction: searchDirection,
             count: searchOpenCount,
             caseSensitive: pattern.caseSensitive,
+            wholeWord: false,
           })
     if (pattern.text.length === 0 || match === null) {
       closeSearch(true, false)
@@ -579,6 +581,7 @@ export function createVimEditorController(
       text: pattern.text,
       direction: searchDirection,
       caseSensitive: pattern.caseSensitive,
+      wholeWord: false,
     })
     searchHighlightSuppressed = false
     setPosition({ line: match.line, column: match.column })
@@ -638,7 +641,11 @@ export function createVimEditorController(
   }
 
   /** The span under the cursor when it starts a match the capped scan may miss. */
-  function matchAtCursor(query: string, caseSensitive: boolean): VimSearchSpan | null {
+  function matchAtCursor(
+    query: string,
+    caseSensitive: boolean,
+    wholeWord: boolean,
+  ): VimSearchSpan | null {
     const model = editor.getModel()
     if (model === null || query.length === 0) return null
     const cursor = primaryPosition()
@@ -647,7 +654,12 @@ export function createVimEditorController(
     if (start + query.length > line.length) return null
     const slice = line.slice(start, start + query.length)
     const equal = caseSensitive ? slice === query : slice.toLowerCase() === query.toLowerCase()
-    return equal ? { line: cursor.line, column: cursor.column, length: query.length } : null
+    if (!equal) return null
+    const leftBoundary = isVimKeywordChar(line[start - 1])
+    const rightBoundary = isVimKeywordChar(line[start + query.length])
+    return wholeWord && (leftBoundary || rightBoundary)
+      ? null
+      : { line: cursor.line, column: cursor.column, length: query.length }
   }
 
   /**
@@ -659,6 +671,7 @@ export function createVimEditorController(
   function renderAllMatchesFor(
     query: string,
     caseSensitive: boolean,
+    wholeWord: boolean,
     forcedCurrent: VimSearchSpan | null = null,
   ): void {
     const model = editor.getModel()
@@ -668,6 +681,7 @@ export function createVimEditorController(
     }
     const { matches } = findAllVimMatches(model, query, {
       caseSensitive,
+      wholeWord,
       ...VIM_SEARCH_HIGHLIGHT_LIMITS,
     })
     const cursor = primaryPosition()
@@ -679,7 +693,7 @@ export function createVimEditorController(
           cursor.column >= span.column &&
           cursor.column < span.column + span.length,
       ) ??
-      matchAtCursor(query, caseSensitive)
+      matchAtCursor(query, caseSensitive, wholeWord)
     if (current === null) {
       renderAllMatches(matches, null)
       return
@@ -696,7 +710,7 @@ export function createVimEditorController(
       clearSearchHighlight()
       return
     }
-    renderAllMatchesFor(last.text, last.caseSensitive)
+    renderAllMatchesFor(last.text, last.caseSensitive, last.wholeWord)
   }
 
   function refreshSearchHighlights(): void {
@@ -732,7 +746,12 @@ export function createVimEditorController(
       if (widget === null) return
       const pattern = resolveCurrentSearch(widget.input.value)
       if (pattern.text.length === 0) return
-      renderAllMatchesFor(pattern.text, pattern.caseSensitive, previewCurrentSpan(pattern.text))
+      renderAllMatchesFor(
+        pattern.text,
+        pattern.caseSensitive,
+        false,
+        previewCurrentSpan(pattern.text),
+      )
     }, PREVIEW_HIGHLIGHT_REFRESH_MS)
   }
 
@@ -844,6 +863,7 @@ export function createVimEditorController(
       direction: searchDirection,
       count: searchOpenCount,
       caseSensitive: pattern.caseSensitive,
+      wholeWord: false,
     })
     if (match === null) {
       cancelPreviewHighlightTimer()
@@ -858,7 +878,7 @@ export function createVimEditorController(
     const current = spanFor(match, pattern.text.length)
     if (highlightSearch && !searchHighlightSuppressed) {
       if (model.getLineCount() <= SEARCH_SYNC_HIGHLIGHT_MAX_LINES) {
-        renderAllMatchesFor(pattern.text, pattern.caseSensitive, current)
+        renderAllMatchesFor(pattern.text, pattern.caseSensitive, false, current)
       } else {
         renderAllMatches([current], current)
         schedulePreviewHighlightRefresh()
@@ -878,6 +898,7 @@ export function createVimEditorController(
     const raw = widget.input.value
     const last = getLastVimSearch()
     let pattern: VimSearchPattern
+    let wholeWord: boolean
     if (raw.length === 0) {
       if (last === null) {
         widget.showHint(localize('vim.search.noPrevious', 'No previous search'))
@@ -885,6 +906,7 @@ export function createVimEditorController(
       }
       const caseSensitive =
         searchCaseOverride === null ? last.caseSensitive : searchCaseOverride === 'sensitive'
+      wholeWord = last.wholeWord
       pattern = {
         text: last.text,
         caseSensitive,
@@ -893,6 +915,7 @@ export function createVimEditorController(
         marker: null,
       }
     } else {
+      wholeWord = false
       pattern = resolveCurrentSearch(raw)
     }
 
@@ -905,6 +928,7 @@ export function createVimEditorController(
       text: pattern.text,
       direction: searchDirection,
       caseSensitive: pattern.caseSensitive,
+      wholeWord,
     })
     searchHighlightSuppressed = false
 
@@ -912,6 +936,7 @@ export function createVimEditorController(
       direction: searchDirection,
       count: searchOpenCount,
       caseSensitive: pattern.caseSensitive,
+      wholeWord,
     })
     if (match === null) {
       setPosition(origin)
@@ -941,6 +966,7 @@ export function createVimEditorController(
       direction,
       count,
       caseSensitive: last.caseSensitive,
+      wholeWord: last.wholeWord,
     })
     if (match === null) return
     searchHighlightSuppressed = false
@@ -950,25 +976,23 @@ export function createVimEditorController(
   }
 
   /**
-   * `*` / `#`: search for the keyword under the cursor. The search core is
-   * literal, so this matches the word as plain text rather than Vim's
-   * `\<...\>` whole-word pattern.
+   * `*` / `#`: search for the keyword under the cursor with Vim's `\<...\>`
+   * whole-word boundaries, so `foo` never matches inside `fooBar`. The stored
+   * `wholeWord` flag keeps `n` / `N` on the same semantics.
    */
   function searchWord(direction: VimSearchDirection, count: number): void {
     const model = editor.getModel()
     if (model === null) return
     const from = primaryPosition()
     const line = model.getLineContent(from.line)
-    const isKeyword = (value: string | undefined): boolean =>
-      value !== undefined && /[A-Za-z0-9_$]/.test(value)
 
     let start = from.column - 1
-    if (!isKeyword(line[start])) {
-      while (start < line.length && !isKeyword(line[start])) start++
+    if (!isVimKeywordChar(line[start])) {
+      while (start < line.length && !isVimKeywordChar(line[start])) start++
       if (start >= line.length) return
     }
     let end = start
-    while (end < line.length && isKeyword(line[end])) end++
+    while (end < line.length && isVimKeywordChar(line[end])) end++
     const word = line.slice(start, end)
     if (word.length === 0) return
 
@@ -978,6 +1002,7 @@ export function createVimEditorController(
       text: pattern.text,
       direction,
       caseSensitive: pattern.caseSensitive,
+      wholeWord: true,
     })
     searchHighlightSuppressed = false
     // Start after the word so `*` / `#` skip the match under the cursor.
@@ -999,6 +1024,7 @@ export function createVimEditorController(
       direction,
       count: Math.max(1, count),
       caseSensitive: pattern.caseSensitive,
+      wholeWord: true,
     })
     if (match === null) return
     setPosition({ line: match.line, column: match.column })

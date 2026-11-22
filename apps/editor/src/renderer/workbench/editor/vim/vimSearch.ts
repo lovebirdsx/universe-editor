@@ -1,13 +1,15 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  Vim-style `/`, `?`, `n`, `N` search. Literal, single-line patterns with
- *  Vim's wrapscan; the editor is only read line by line so a hit near the cursor
- *  short-circuits instead of materialising the whole buffer. Case sensitivity
- *  follows Vim's `smartcase` by default and can be overridden per search with
- *  `\c` / `\C` or the Aa toggle; `n`/`N` replay the stored effective setting.
- *  The last search is module-level (like the unnamed register), so `n` keeps
- *  working after switching editors.
+ *  Vim-style `/`, `?`, `n`, `N` search. Single-line patterns with Vim's
+ *  wrapscan; the editor is only read line by line so a hit near the cursor
+ *  short-circuits instead of materialising the whole buffer. `/` and `?` match
+ *  literal substrings; `*` / `#` add word boundaries (Vim's `\<...\>`), and that
+ *  mode is stored so `n` / `N` replay it. Case sensitivity follows Vim's
+ *  `smartcase` by default and can be overridden per search with `\c` / `\C` or
+ *  the Aa toggle; `n`/`N` replay the stored effective setting. The last search
+ *  is module-level (like the unnamed register), so `n` keeps working after
+ *  switching editors.
  *--------------------------------------------------------------------------------------------*/
 
 import type { VimPosition, VimSearchDirection, VimTextModel } from './vimTypes.js'
@@ -37,6 +39,8 @@ export interface VimSearchOptions {
   readonly count?: number
   /** Defaults to true so the pure matcher keeps its original behavior. */
   readonly caseSensitive?: boolean
+  /** `*` / `#` match whole words only (Vim's `\<...\>`); `/` / `?` leave it false. */
+  readonly wholeWord?: boolean
 }
 
 export interface VimSearchMatch {
@@ -59,6 +63,7 @@ export interface VimSearchSpan {
 
 export interface VimFindAllOptions {
   readonly caseSensitive: boolean
+  readonly wholeWord?: boolean
   readonly maxMatches?: number
   readonly maxLines?: number
   readonly maxLineLength?: number
@@ -81,6 +86,8 @@ export interface VimLastSearch {
   readonly direction: VimSearchDirection
   /** Effective case sensitivity at commit time; `n`/`N` must not re-derive it. */
   readonly caseSensitive: boolean
+  /** `*` / `#` searches stay whole-word when replayed by `n` / `N`. */
+  readonly wholeWord: boolean
 }
 
 let lastSearch: VimLastSearch | null = null
@@ -187,17 +194,42 @@ function escapeRegExp(text: string): string {
 }
 
 /**
+ * Vim keyword characters for `*` / `#` word boundaries. Kept in sync with the
+ * cursor-word extraction in `vimEditorController.searchWord`; both use this
+ * predicate so `foo` never matches inside `fooBar` while `$foo` stays one word.
+ */
+const VIM_KEYWORD_CHAR = /[A-Za-z0-9_$]/
+
+export function isVimKeywordChar(char: string | undefined): boolean {
+  return char !== undefined && VIM_KEYWORD_CHAR.test(char)
+}
+
+function isWholeWordAt(text: string, index: number, length: number): boolean {
+  return !isVimKeywordChar(text[index - 1]) && !isVimKeywordChar(text[index + length])
+}
+
+/**
  * Case-insensitive matching uses a `giu` regex on the original line instead of
  * `toLowerCase()`: `match.index` stays in UTF-16 code units (the `u` flag does
  * not change indices), while lowercasing can change a string's length (`İ`),
  * which would corrupt Monaco columns.
  */
-function createLineMatcher(query: string, caseSensitive: boolean): VimLineMatcher {
+function createLineMatcher(
+  query: string,
+  caseSensitive: boolean,
+  wholeWord = false,
+): VimLineMatcher {
   if (caseSensitive) {
     return {
       next(text, fromIndex) {
-        const index = text.indexOf(query, fromIndex)
-        return index < 0 ? null : { index, length: query.length }
+        let index = text.indexOf(query, fromIndex)
+        while (index >= 0) {
+          if (!wholeWord || isWholeWordAt(text, index, query.length)) {
+            return { index, length: query.length }
+          }
+          index = text.indexOf(query, index + Math.max(1, query.length))
+        }
+        return null
       },
     }
   }
@@ -206,9 +238,15 @@ function createLineMatcher(query: string, caseSensitive: boolean): VimLineMatche
   return {
     next(text, fromIndex) {
       pattern.lastIndex = fromIndex
-      const match = pattern.exec(text)
-      if (match === null) return null
-      return { index: match.index, length: Math.max(1, match[0].length) }
+      let match = pattern.exec(text)
+      while (match !== null) {
+        const length = Math.max(1, match[0].length)
+        if (!wholeWord || isWholeWordAt(text, match.index, length)) {
+          return { index: match.index, length }
+        }
+        match = pattern.exec(text)
+      }
+      return null
     },
   }
 }
@@ -303,7 +341,11 @@ export function findVimMatch(
   options: VimSearchOptions,
 ): VimSearchMatch | null {
   if (query.length === 0 || source.getLineCount() <= 0) return null
-  const matcher = createLineMatcher(query, options.caseSensitive ?? true)
+  const matcher = createLineMatcher(
+    query,
+    options.caseSensitive ?? true,
+    options.wholeWord === true,
+  )
   const steps = Math.max(1, options.count ?? 1)
   const seen = new Map<string, number>()
   let position = from
@@ -359,7 +401,7 @@ export function findAllVimMatches(
   const maxMatches = options.maxMatches ?? VIM_SEARCH_HIGHLIGHT_LIMITS.maxMatches
   const maxLines = options.maxLines ?? VIM_SEARCH_HIGHLIGHT_LIMITS.maxLines
   const maxLineLength = options.maxLineLength ?? VIM_SEARCH_HIGHLIGHT_LIMITS.maxLineLength
-  const matcher = createLineMatcher(query, options.caseSensitive)
+  const matcher = createLineMatcher(query, options.caseSensitive, options.wholeWord === true)
   const matches: VimSearchSpan[] = []
   const scanLines = Math.min(lineCount, maxLines)
   let truncated = scanLines < lineCount
