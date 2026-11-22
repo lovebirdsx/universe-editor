@@ -41,28 +41,28 @@ f1: false,
 
 排查读 `KeybindingsRegistry.traceKeystroke` 的 candidates（`selected` / `outcomeReason`）；完整决策树见 skill `fix-keybinding-not-firing`。
 
-## 列表 Ctrl 别名：window capture + 单层仲裁
+## 菜单 / 浮层 Ctrl 别名：window capture + 单层仲裁
 
-列表 / 菜单 / 浮层的方向别名（`Ctrl+K` 上、`Ctrl+J` 下，`Ctrl+H`/`Ctrl+L` 左右）**不能**用普通 keybinding 实现：`resolveKeystroke` 先解析和弦前缀，`ctrl+k` 开头的弦永远先于单键命中，因此单键 `Ctrl+K` 在列表聚焦期间只能由 **window capture** 抢下（代价就是这段期间 `Ctrl+K` 和弦不可用）。`Ctrl+P` / `Ctrl+N` 有意不在别名集合里——它们始终是「转到文件」/「新建文件」，在列表、树、菜单、浮层与可编辑输入框里都保持全局含义。
+菜单 / 浮层 / 对话框 / 配置栏按钮行的方向别名（`Ctrl+K` 上、`Ctrl+J` 下，`Ctrl+H`/`Ctrl+L` 左右）**不能**用普通 keybinding 实现：`resolveKeystroke` 先解析和弦前缀，`ctrl+k` 开头的弦永远先于单键命中，因此单键 `Ctrl+K` 在 picker 聚焦期间只能由 **window capture** 抢下（代价就是这段期间 `Ctrl+K` 和弦不可用）。纯列表 / 树（Explorer、Search、Scm、Outline、Timeline、图谱、Chat 时间线等）**不注册**这些别名，它们用裸键 `j/k/h/l`（开 Vim 时）或方向键，因此这四键在这些表面上保持全局含义。`Ctrl+P` / `Ctrl+N` 有意不在别名集合里——它们始终是「转到文件」/「新建文件」，在任何表面都保持全局含义。
 
 React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts`：每个 `Document` 一个 window-capture 监听；注册层按 `menu > dialog > overlay > list` 优先级激活，同 kind 取嵌套更深者。一次按键只交给一层，命中即 `preventDefault + stopPropagation + stopImmediatePropagation`（边界落空也吞，否则底下的全局命令会照常执行）。
 
 **例外：Monaco 自有的引用 peek 树**不走这个注册表（它的 DOM 由 Monaco 渲染，且 contribution 类用不了 React Hook），而是由 `apps/editor/src/renderer/contributions/PeekNavigationContribution.ts` 在每个 workbench document 的 window capture 上裁决：自行判定**裸** `h/j/k/l`（不带修饰键；Ctrl 形式不认领，回落全局含义），命中 `.ref-tree` 焦点、非可编辑元素且 `lastFocusedList` 的宿主包含该元素后，自己完成同一套三连吞键，再调树的 `focusNext/focusPrevious` / `onLeftArrow/onRightArrow` 并同步镜像 selection；和弦待定时整段放行。新增 Monaco 自有列表表面时照此办理，不要为它再造一个全局 dispatcher。
 
 - **菜单是虚拟焦点**（`aria-activedescendant`），DOM 焦点仍在唤出它的树上，所以不能每个组件各挂一个 window 监听——`stopPropagation` 不会阻止同一 target 上的其它监听器，两层会同时移动。
-- `list` 层默认 `focus: 'self'`（容器自身是 `activeElement`）且拒绝 editable 焦点，行内输入框因此保留自己的键；`overlay` 默认 `focus: 'within'`；`dialog` 可用 `allowEditableFocus`（复选框对话框）。层的 `directions` 每次按键从 `optionsRef` 读取，可随渲染增减（FlatList 的 `onMoveHorizontal` 后加也即时生效），不需要重新注册。
-- 接入点：Tree 注册四方向（`focus: 'within'`，行内按钮聚焦时仍可移动、可编辑控件除外）；FlatList 固定上下，仅宿主传 `onMoveHorizontal` 时才注册左右（扩展视图分区列表）；Agent 配置栏触发器行注册 `left`/`right`；Git·Perforce 图谱 / ChatBody 时间线 / 大纲走 list 层。Select（overlay），扩展「更多」菜单（menu），Perforce 同步对话框（dialog）。Outline 的方向导航只保留用户可绑定的 `outline.navigate.*` 命令，**无默认键位**；树聚焦时由注册表接管，筛选框等可编辑表面保持全局语义。
+- `list` 层默认 `focus: 'self'`（容器自身是 `activeElement`）且拒绝 editable 焦点；`overlay` 默认 `focus: 'within'`；`dialog` 可用 `allowEditableFocus`（复选框对话框）。层的 `directions` 每次按键从 `optionsRef` 读取，可随渲染增减，不需要重新注册。现在只有 Agent 配置栏触发器行仍以 `kind: 'list'` 注册（`left`/`right`）。
+- 接入点（**只有输入框型 picker / 菜单 / 对话框 / 配置栏**）：`useOverlayListNavigation`（overlay，快速打开 / 选择器 / 弹窗列表）、`Select`（overlay）、`useMenuNavigation` 与扩展「更多」菜单（menu）、`PerforceGraphSyncDialog`（dialog，`allowEditableFocus`）、`PromptInput` 建议弹窗（overlay）、Agent 配置栏触发器行（list，仅 `left`/`right`）。**纯列表 / 树不接入**：Tree（Explorer / Search / Scm / Outline / Timeline 等）、FlatList（设置 / 快捷键 / 扩展分区 / 会话 / 触发器 / MCP / Process Explorer 等）、Git·Perforce 图谱、ChatBody 时间线都只用 `useVimSurface`（裸键）与各自的方向键处理。Outline 的方向导航只保留用户可绑定的 `outline.navigate.*` 命令，**无默认键位**。
 - QuickInput 不走注册表：锁定 / readOnly / 松开修饰键即接受的语义只有面板自己知道，J/K 别名（Ctrl/Alt/裸键三种形态）在 `QuickInputPanel` 内处理，`isQuickInputOwnedKey` 负责让 dispatcher 放行。`Ctrl+P/N` 不再放行：dispatcher 的 `quickInputVisible` 分支会解析到全局命令后 `preventDefault + stopPropagation`，但只执行 Escape，因此既不移动面板，也不会打开 Quick Open / New File。
-- **Esc 逃生口**：`FocusActiveEditorGroupAction` 不要加 `hasActiveEditor` precondition。列表 / 树聚焦时用户要靠 `Esc` 把焦点移回编辑区才能开始 `Ctrl+K` 和弦；空编辑区且焦点在视图里（`focusedView` 非空）时也必须能匹配（标题栏菜单 / 下拉保留自己的 Esc）。无编辑器时直接聚焦始终渲染的 `editor-group-body`——`editor-area` Part 根没有 tabIndex，`focusPart` / `Part.focus()` 只记账、不搬 DOM 焦点。
+- **Esc 逃生口**：`FocusActiveEditorGroupAction` 不要加 `hasActiveEditor` precondition。焦点在侧栏 / 面板的列表或树时，用户仍要靠 `Esc` 把焦点移回编辑区；空编辑区且焦点在视图里（`focusedView` 非空）时也必须能匹配（标题栏菜单 / 下拉保留自己的 Esc）。无编辑器时直接聚焦始终渲染的 `editor-group-body`——`editor-area` Part 根没有 tabIndex，`focusPart` / `Part.focus()` 只记账、不搬 DOM 焦点。
 
 ## Vim 模式：Normal 模式的按键归属
 
 `vim.enabled` 打开后，Normal 模式的裸键必须先于全局 dispatcher 被认领，否则 `d` 会触发删除、`p` 会打开 Quick Open 之类。机制、surface API 与排障见 [Vim 模式](vim-mode.md)，这里只列会静默失效的判据：
 
-- **唯一 window-capture 入口**是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts`：先仲裁 `Ctrl+J/K/H/L` 别名（`menu > dialog > overlay > list`），其余交给 `setVimKeyHandlerProvider` 注入的 `VimDispatcher`。不要在组件里另装 window 监听。
+- **唯一 window-capture 入口**是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts`：先仲裁菜单 / 浮层 / 对话框 / 配置栏的 `Ctrl+J/K/H/L` 别名（`menu > dialog > overlay > list`），其余交给 `setVimKeyHandlerProvider` 注入的 `VimDispatcher`。不要在组件里另装 window 监听。
 - **活跃 surface** 由 `getActiveVimSurface` 按 `menu > overlay > list > terminal > editor > chrome` 解析。编辑器 Normal 下把 `handleStroke` 交给 `vimEditorController`，只有 leader 与已在途的序列例外（走共享序列引擎）。**不要用 `editor.addCommand`**——standalone Monaco 的 keybinding service 跨实例共享，会吞掉其它编辑器的键。
 - **必须让行的六种情况**：chord pending、模态对话框（`[data-renderer-dialog]`）、Quick Input（`quickInputVisible`）、IME 组合、Webview 焦点、普通可编辑控件（editor / terminal 除外）。非保留键存在 weight ≥ `User` 的键位时 Vim 也让行；保留集由 `vim.reservedKeys` 配置。
-- **`Ctrl+H/J/K/L` 不走 Vim**：Normal 下列表 / 树 / 菜单仍把它们当方向别名；Vim 只认领 `Ctrl+F/B/D/U`。Insert 模式完全放行。
+- **`Ctrl+H/J/K/L` 不走 Vim**：Normal 下菜单 / 浮层 / 对话框 / 配置栏仍把它们当方向别名，纯列表 / 树保持全局含义；Vim 只认领 `Ctrl+F/B/D/U`。Insert 模式完全放行。
 - **上下文键**：`vimMode` / `vimNormalMode` / `vimEnabled` / `vimSurface` / `vimSurfaceId` / `vimTerminalNormalMode` 由 `IVimModeService` 写；`vimNormalMode` 同时是全局分发器 paging 安全网的放行条件。状态栏 `vim-mode` 条目只在有活跃 surface 且 `vim.showStatusBar` 开启时存在。
 - **IME 与 Vim 搜索**：Normal 模式切英文输入法的实现（窗口级共享状态、`vim.autoSwitchInputMethod`）与 `/ ? n N` 搜索框的 `vimSearchFocused` / sticky scroll / 大小写优先级，见 [Vim 模式](vim-mode.md) 与 `workbench/editor/vim/` 目录内实现。
 

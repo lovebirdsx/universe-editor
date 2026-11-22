@@ -37,10 +37,7 @@ const selectedName = () => {
 }
 
 test.describe('@p1 outline keyboard navigation', () => {
-  test('arrows and Ctrl+J/K/H/L drive the outline; Ctrl+P stays global', async ({
-    page,
-    workbench,
-  }) => {
+  test('arrows drive the outline; Ctrl+P stays global', async ({ page, workbench }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -70,32 +67,31 @@ test.describe('@p1 outline keyboard navigation', () => {
     await page.keyboard.press('ArrowDown')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['version'])
 
-    // Ctrl+J → down. Globally Ctrl+J toggles the panel; it must NOT fire here,
-    // only move the outline selection.
-    await page.keyboard.press('Control+j')
+    // ArrowDown → down.
+    await page.keyboard.press('ArrowDown')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
 
-    // Ctrl+K → up, back to version (globally the chord leader).
-    await page.keyboard.press('Control+k')
+    // ArrowUp → up, back to version.
+    await page.keyboard.press('ArrowUp')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['version'])
-    await page.keyboard.press('Control+j')
+    await page.keyboard.press('ArrowDown')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
 
-    // Collapse via Ctrl+H, then re-expand + descend via Ctrl+L.
-    await page.keyboard.press('Control+h')
+    // Collapse via ArrowLeft, then re-expand + descend via ArrowRight.
+    await page.keyboard.press('ArrowLeft')
     await expect(outline.getByRole('treeitem', { name: 'build' })).toHaveCount(0)
-    await page.keyboard.press('Control+l')
+    await page.keyboard.press('ArrowRight')
     await expect(outline.getByRole('treeitem', { name: 'build' })).toBeVisible()
-    await page.keyboard.press('Control+l')
+    await page.keyboard.press('ArrowRight')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['build'])
-    // Ctrl+H from the child steps back to the parent.
-    await page.keyboard.press('Control+h')
+    // ArrowLeft from the child steps back to the parent.
+    await page.keyboard.press('ArrowLeft')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
 
-    // The filter box is editable, so the Tree layer steps aside and Ctrl+J/K/H/L
-    // keep their global meaning — there is no Action2 fallback any more. `i`
-    // matches scripts and build, so the pruned tree keeps both.
+    // The filter box is editable, so the tree's React handler ignores the
+    // stroke; Ctrl+J/K/H/L keep their global meaning. `i` matches scripts and
+    // build, so the pruned tree keeps both.
     await page.keyboard.press('i')
     // Scope to the Outline's part: the Output panel has a "Filter" placeholder too.
     const filter = page.getByTestId('part-secondarysidebar').getByPlaceholder('Filter')

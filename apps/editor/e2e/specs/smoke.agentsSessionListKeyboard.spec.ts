@@ -122,12 +122,11 @@ test.describe('@p1 agents session list keyboard navigation', () => {
     await page.keyboard.press('Home')
     expect(await page.evaluate(cursorRowIds)).toEqual(first)
 
-    // Ctrl+J / Ctrl+K are the movement aliases. Each has a global meaning while
-    // the list holds focus (toggle panel / chord leader), so the list must claim
-    // both. Ctrl+P/N are not aliases: P opens Quick Open even from the list.
-    await page.keyboard.press('Control+j')
+    // ArrowDown/ArrowUp move the cursor by one row. Ctrl+P remains a plain
+    // global command: P opens Quick Open even from the list.
+    await page.keyboard.press('ArrowDown')
     expect(await page.evaluate(cursorRowIds)).toEqual(second)
-    await page.keyboard.press('Control+k')
+    await page.keyboard.press('ArrowUp')
     expect(await page.evaluate(cursorRowIds)).toEqual(first)
     expect(await workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
 

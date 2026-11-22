@@ -32,7 +32,6 @@ import {
   type MouseEvent,
 } from 'react'
 import { isOpenTargetEnter } from '@universe-editor/platform'
-import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { LIST_PAGE_STEP, resolveIndexNavigation } from './listKeyboard.js'
@@ -85,11 +84,10 @@ export interface IUseFlatListNavigationOptions {
   /** Keys not handled here (Delete / F2 / …) reach the view, un-defaulted. */
   readonly onRowKeyDown?: ((e: KeyboardEvent, index: number) => void) | undefined
   /**
-   * Opt in to horizontal movement (Ctrl+H / Ctrl+L). Only when supplied does the
-   * shared registry layer register left/right; a list with no horizontal
-   * semantics must leave the global replace / select-line meanings untouched.
-   * Receives the controlled focused index; out-of-range indexes are not
-   * delivered (the stroke is still claimed, like every alias at a boundary).
+   * Opt in to horizontal movement (Vim `h`/`l`; ArrowLeft/ArrowRight where the
+   * host routes them). A list with no horizontal semantics leaves the global
+   * replace / select-line meanings untouched. Receives the controlled focused
+   * index; out-of-range indexes are not delivered.
    */
   readonly onMoveHorizontal?: ((direction: 'left' | 'right', index: number) => void) | undefined
   /** Shift+Tab inside the list — hand focus back to a prior region (a search box). */
@@ -195,36 +193,6 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
     },
     [revealRow],
   )
-
-  // Ctrl+J/K are the same movement as ArrowDown/ArrowUp, and Ctrl+H/L as
-  // ArrowLeft/ArrowRight when the host supplies `onMoveHorizontal`. The registry
-  // claims them on window capture (ahead of toggle panel / chord leader /
-  // replace / select-line) and only while the container itself is the active
-  // element — the same rule as the React handler below, so a row's inline input
-  // keeps its own keystrokes. Ctrl+P/N stay with the global Quick Open / New
-  // File commands.
-  useCtrlNavigationLayer({
-    kind: 'list',
-    directions:
-      options.onMoveHorizontal === undefined ? ['up', 'down'] : ['up', 'down', 'left', 'right'],
-    getElement: () => optionsRef.current.getContainer(),
-    onMove: (direction) => {
-      const { count, focusedIndex, getPageSize, onMoveHorizontal } = optionsRef.current
-      if (count === 0) return
-      if (direction === 'left' || direction === 'right') {
-        if (onMoveHorizontal === undefined) return
-        if (focusedIndex < 0 || focusedIndex >= count) return
-        onMoveHorizontal(direction, focusedIndex)
-        return
-      }
-      const next = resolveIndexNavigation(direction === 'down' ? 'ArrowDown' : 'ArrowUp', {
-        index: focusedIndex,
-        count,
-        pageSize: getPageSize?.(),
-      })
-      if (next !== undefined) focusRow(next)
-    },
-  })
 
   const openContextMenu = useCallback(() => {
     const { getContainer, getItemKey, rowDataAttr, focusedIndex, count } = optionsRef.current

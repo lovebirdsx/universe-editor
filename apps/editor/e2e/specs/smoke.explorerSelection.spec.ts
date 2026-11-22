@@ -140,7 +140,7 @@ test.describe('@p1 explorer selection feedback', () => {
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 
-  test('Ctrl+J/K walk the tree; Ctrl+P/N stay global', async ({ workbench, page }) => {
+  test('ArrowDown/ArrowUp walk the tree; Ctrl+P/N stay global', async ({ workbench, page }) => {
     const tmpDir = mkTempDir('ue2-sel-ctrl-')
     await fs.writeFile(path.join(tmpDir, 'alpha.txt'), 'a')
     await fs.writeFile(path.join(tmpDir, 'beta.txt'), 'b')
@@ -160,16 +160,14 @@ test.describe('@p1 explorer selection feedback', () => {
     const expectSelected = (name: string) =>
       expect.poll(() => selected.textContent()).toContain(name)
 
-    // Ctrl+J steps down, Ctrl+K steps back up. Both have a global meaning
-    // (toggle panel, chord leader) that must not fire while the tree itself
-    // holds focus.
-    await page.keyboard.press('Control+j')
+    // ArrowDown steps down, ArrowUp steps back up.
+    await page.keyboard.press('ArrowDown')
     await expectSelected('beta.txt')
-    await page.keyboard.press('Control+j')
+    await page.keyboard.press('ArrowDown')
     await expectSelected('gamma.txt')
-    await page.keyboard.press('Control+k')
+    await page.keyboard.press('ArrowUp')
     await expectSelected('beta.txt')
-    await page.keyboard.press('Control+k')
+    await page.keyboard.press('ArrowUp')
     await expectSelected('alpha.txt')
 
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
@@ -188,7 +186,7 @@ test.describe('@p1 explorer selection feedback', () => {
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 
-  test('Ctrl+H/L collapse, expand and descend the tree without leaking to replace', async ({
+  test('ArrowLeft/ArrowRight collapse, expand and descend the tree', async ({
     workbench,
     page,
   }) => {
@@ -212,21 +210,21 @@ test.describe('@p1 explorer selection feedback', () => {
     await expect(child).toHaveAttribute('aria-selected', 'true')
 
     // Left from the child selects its parent; Left again collapses it.
-    await page.keyboard.press('Control+h')
+    await page.keyboard.press('ArrowLeft')
     await expect(src).toHaveAttribute('aria-selected', 'true')
-    await page.keyboard.press('Control+h')
+    await page.keyboard.press('ArrowLeft')
     await expect(child).toHaveCount(0)
     await expect(src).toHaveAttribute('aria-expanded', 'false')
 
     // Right expands, then steps into the first child; Left comes back.
-    await page.keyboard.press('Control+l')
+    await page.keyboard.press('ArrowRight')
     await expect(child).toBeVisible()
-    await page.keyboard.press('Control+l')
+    await page.keyboard.press('ArrowRight')
     await expect(child).toHaveAttribute('aria-selected', 'true')
-    await page.keyboard.press('Control+h')
+    await page.keyboard.press('ArrowLeft')
     await expect(src).toHaveAttribute('aria-selected', 'true')
 
-    // None of the strokes reached the global replace / quick-open commands.
+    // The arrow keys did not open the find widget or Quick Open.
     await expect.poll(() => workbench.getContextKey<boolean>('findWidgetVisible')).toBe(false)
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
     await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()

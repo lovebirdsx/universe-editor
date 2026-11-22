@@ -196,8 +196,7 @@ test.describe('@p1 git graph keyboard scroll', () => {
       await page.keyboard.press('ArrowUp')
       expectFirstRowBelowHeader(await readTopRowGeometry(page), 'after ArrowDown/ArrowUp')
 
-      // Ctrl+J / Ctrl+K are the same down/up steps; Ctrl+J globally toggles the
-      // panel, so the graph container has to claim it on window capture.
+      // ArrowDown / ArrowUp move one row and back.
       const selectedHash = () =>
         page.evaluate(
           () =>
@@ -207,11 +206,11 @@ test.describe('@p1 git graph keyboard scroll', () => {
         )
       const firstHash = await selectedHash()
       expect(firstHash).not.toBeNull()
-      await page.keyboard.press('Control+j')
+      await page.keyboard.press('ArrowDown')
       await expect.poll(selectedHash).not.toBe(firstHash)
-      await page.keyboard.press('Control+k')
+      await page.keyboard.press('ArrowUp')
       await expect.poll(selectedHash).toBe(firstHash)
-      expectFirstRowBelowHeader(await readTopRowGeometry(page), 'after Ctrl+J/Ctrl+K')
+      expectFirstRowBelowHeader(await readTopRowGeometry(page), 'after ArrowDown/ArrowUp')
     } finally {
       await closeApp(app)
     }

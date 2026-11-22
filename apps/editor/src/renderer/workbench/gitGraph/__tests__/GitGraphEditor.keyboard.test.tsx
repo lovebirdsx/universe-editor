@@ -267,32 +267,24 @@ describe('GitGraphEditor keyboard navigation', () => {
     expect(bridgeCalls(executeCommand)).toHaveLength(3)
   })
 
-  it('Ctrl+J/K move the selection like ArrowDown/ArrowUp', async () => {
+  it('does not claim Ctrl+J/K/H/L', async () => {
     const { container } = renderEditor()
     await flush()
 
     const body = scrollBody(container)
     body.focus()
 
-    fireEvent.keyDown(body, { key: 'j', ctrlKey: true })
-    await flush()
-    expect(gitGraphViewState.selection).toEqual([HASH_B])
-
-    fireEvent.keyDown(body, { key: 'j', ctrlKey: true })
-    await flush()
-    expect(gitGraphViewState.selection).toEqual([HASH_C])
-
-    fireEvent.keyDown(body, { key: 'k', ctrlKey: true })
-    await flush()
-    expect(gitGraphViewState.selection).toEqual([HASH_B])
-
-    fireEvent.keyDown(body, { key: 'k', ctrlKey: true })
+    // The registry no longer claims these strokes; they reach the global
+    // dispatcher (Toggle Panel / chord leader / Replace / select-line).
+    expect(fireEvent.keyDown(body, { key: 'j', ctrlKey: true })).toBe(true)
     await flush()
     expect(gitGraphViewState.selection).toEqual([HASH_A])
 
-    // Ctrl+N/P are no longer graph aliases — they stay with the global commands.
-    fireEvent.keyDown(body, { key: 'n', ctrlKey: true })
-    fireEvent.keyDown(body, { key: 'p', ctrlKey: true })
+    expect(fireEvent.keyDown(body, { key: 'k', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(body, { key: 'h', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(body, { key: 'l', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(body, { key: 'n', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(body, { key: 'p', ctrlKey: true })).toBe(true)
     await flush()
     expect(gitGraphViewState.selection).toEqual([HASH_A])
   })

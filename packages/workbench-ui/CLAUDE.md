@@ -57,7 +57,7 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 - **不依赖 platform DI**：通过 props 接收服务实例，不用 `@IFooService` 装饰器
 - **图标走 props/children 注入**：不引应用图标库（如 `lucide-react`）；调用方传入图标元素或 `renderIcon` 回调
 - 可选 className 类 props 声明为 `string | undefined`（兼容调用方传入的 `styles['x']`，应对 `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`）
-- **列表 Ctrl 别名与 Vim 裸键同走 window capture**：`keybinding/ctrlNavigationRegistry.ts` 按 `menu > dialog > overlay > list` 只激活一层；list 默认要求容器自身是 `activeElement` 且拒绝 editable 焦点。Tree 注册四方向，FlatList 仅宿主传 `onMoveHorizontal` 时注册左右；Select（overlay）已接入；此时 `Ctrl+K` 和弦不可用。`Ctrl+P/N` 始终全局。Vim 裸键走 `keybinding/vim/` + `useVimSurface`，见 [docs/development/vim-mode.md](../../docs/development/vim-mode.md)。
+- **输入框型 picker / 菜单的 Ctrl 别名与 Vim 裸键同走 window capture**：`ctrlNavigationRegistry.ts` 按 `menu > dialog > overlay > list` 只活一层，overlay 要焦点在容器内，list（Agent 配置栏）拒绝 editable。`useOverlayListNavigation` / `Select` / 菜单 / 对话框 / 配置栏接入；**纯列表 / 树不注册**（Tree、FlatList、图谱、Chat 时间线），用裸键 `j/k/h/l` 或方向键，`Ctrl+J/K/H/L` 保持全局含义；`Ctrl+P/N` 始终全局。Vim 裸键见 [vim-mode.md](../../docs/development/vim-mode.md)。
 - 测试文件位于 `src/__tests__/`，环境 `happy-dom`
   - ⚠️ happy-dom **丢弃 inline style 里的 `var()`**：那条声明读回空串，若它还是该元素唯一的声明，`el.getAttribute('style')` 直接是 `null`（其余声明正常保留）。涉及 CSS 变量的样式写不成断言（`--view-background` 那条就因此只能靠审查 + 真机验证）。
 - **滚动列表的绘制约定**（滚动内容要不透明底衬 / 行定位用 `top` 不用 `transform` / reveal 只滚自己的 scroller、禁用 `scrollIntoView`）见 [docs/development/scroll-lists.md](../../docs/development/scroll-lists.md)。`Tree`/`VirtualList` 的行是透明底，底衬由 `VirtualList` 的 spacer 打、颜色取宿主 republish 的 `--view-background`——**part 根要设它，未走 portal 且自绘背景的浮层也要设它**：漏前者退回残影，漏后者会把宿主 part 的颜色涂到浮层上。手写虚拟化列表（`ChatBody` / `QuickInputPanel` / `useFlatListNavigation` 的 reveal）尚未跟上这套约定。

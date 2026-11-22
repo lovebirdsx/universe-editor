@@ -231,57 +231,7 @@ describe('Tree — arrow navigation drives model.navigate', () => {
     model.dispose()
   })
 
-  it('moves with Ctrl+J/K while the tree holds focus', () => {
-    const model = makeModel()
-    renderTree(model)
-    act(() => model.setSelection(['0'], '0'))
-    act(() => view().focus())
-
-    fireEvent.keyDown(view(), { key: 'j', ctrlKey: true })
-    expect(selected()).toEqual(['0/0'])
-    fireEvent.keyDown(view(), { key: 'j', ctrlKey: true })
-    expect(selected()).toEqual(['1'])
-    fireEvent.keyDown(view(), { key: 'k', ctrlKey: true })
-    expect(selected()).toEqual(['0/0'])
-    fireEvent.keyDown(view(), { key: 'k', ctrlKey: true })
-    expect(selected()).toEqual(['0'])
-
-    // The registry claims the stroke even when the cursor cannot move, so the
-    // document-capture dispatcher never turns it into the global command.
-    act(() => model.setSelection(['0'], '0'))
-    expect(fireEvent.keyDown(view(), { key: 'k', ctrlKey: true })).toBe(false)
-    expect(selected()).toEqual(['0'])
-
-    // Ctrl+N/P are no longer claimed: Quick Open / New File see them again.
-    expect(fireEvent.keyDown(view(), { key: 'n', ctrlKey: true })).toBe(true)
-    expect(fireEvent.keyDown(view(), { key: 'p', ctrlKey: true })).toBe(true)
-    expect(selected()).toEqual(['0'])
-    model.dispose()
-  })
-
-  it('moves with Ctrl+H/L while the tree holds focus', () => {
-    const model = makeModel()
-    renderTree(model)
-    act(() => model.setSelection(['0'], '0'))
-    act(() => view().focus())
-
-    fireEvent.keyDown(view(), { key: 'h', ctrlKey: true })
-    expect(model.isExpanded('0')).toBe(false)
-    fireEvent.keyDown(view(), { key: 'l', ctrlKey: true })
-    expect(model.isExpanded('0')).toBe(true)
-    fireEvent.keyDown(view(), { key: 'l', ctrlKey: true })
-    expect(selected()).toEqual(['0/0'])
-    fireEvent.keyDown(view(), { key: 'h', ctrlKey: true })
-    expect(selected()).toEqual(['0'])
-
-    // A leaf has nowhere to expand, but the stroke is still claimed.
-    act(() => model.setSelection(['1'], '1'))
-    expect(fireEvent.keyDown(view(), { key: 'l', ctrlKey: true })).toBe(false)
-    expect(selected()).toEqual(['1'])
-    model.dispose()
-  })
-
-  it('leaves Ctrl+J/K/H/L to a focused row input', () => {
+  it('does not claim Ctrl+J/K/H/L even when a row input is focused', () => {
     const model = makeModel()
     render(
       <Tree<Node>
@@ -298,20 +248,21 @@ describe('Tree — arrow navigation drives model.navigate', () => {
     const input = screen.getByTestId('input-0')
     act(() => input.focus())
 
+    // The registry no longer claims these strokes; they reach the global
+    // dispatcher (Toggle Panel / chord leader / Replace / expand-line-selection).
     expect(fireEvent.keyDown(input, { key: 'j', ctrlKey: true, bubbles: true })).toBe(true)
     expect(selected()).toEqual(['0'])
     expect(fireEvent.keyDown(input, { key: 'h', ctrlKey: true, bubbles: true })).toBe(true)
     expect(model.isExpanded('0')).toBe(true)
     expect(fireEvent.keyDown(input, { key: 'l', ctrlKey: true, bubbles: true })).toBe(true)
     expect(selected()).toEqual(['0'])
-    // Ctrl+N/P are not tree aliases either; they stay with the global commands.
     expect(fireEvent.keyDown(input, { key: 'n', ctrlKey: true, bubbles: true })).toBe(true)
     expect(fireEvent.keyDown(input, { key: 'p', ctrlKey: true, bubbles: true })).toBe(true)
     expect(selected()).toEqual(['0'])
     model.dispose()
   })
 
-  it('moves with Ctrl aliases while a row button holds focus, like the arrow keys', () => {
+  it('navigates with arrow keys while a row button holds focus', () => {
     const model = makeModel()
     render(
       <Tree<Node>
@@ -328,14 +279,14 @@ describe('Tree — arrow navigation drives model.navigate', () => {
     const button = screen.getByTestId('button-0')
     act(() => button.focus())
 
-    fireEvent.keyDown(button, { key: 'j', ctrlKey: true, bubbles: true })
+    fireEvent.keyDown(button, { key: 'ArrowDown', bubbles: true })
     expect(selected()).toEqual(['0/0'])
-    fireEvent.keyDown(button, { key: 'k', ctrlKey: true, bubbles: true })
+    fireEvent.keyDown(button, { key: 'ArrowUp', bubbles: true })
     expect(selected()).toEqual(['0'])
 
-    fireEvent.keyDown(button, { key: 'h', ctrlKey: true, bubbles: true })
+    fireEvent.keyDown(button, { key: 'ArrowLeft', bubbles: true })
     expect(model.isExpanded('0')).toBe(false)
-    fireEvent.keyDown(button, { key: 'l', ctrlKey: true, bubbles: true })
+    fireEvent.keyDown(button, { key: 'ArrowRight', bubbles: true })
     expect(model.isExpanded('0')).toBe(true)
     model.dispose()
   })

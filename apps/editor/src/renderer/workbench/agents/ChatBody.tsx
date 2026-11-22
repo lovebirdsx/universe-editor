@@ -83,7 +83,6 @@ import {
   isKeyboardContextMenu,
   isKeyupContextMenuSupplement,
   requestOwnerFrame,
-  useCtrlNavigationLayer,
   useVimSurface,
   useVimSurfaceKey,
   writeClipboardText,
@@ -702,22 +701,10 @@ function ChatScroll({
     [scrollContainerRef],
   )
 
-  // Ctrl+J/K move through the timeline like Alt+J/K. Scoped to the scroll
-  // container (`focus: 'within'`), with editable targets excluded by default so
-  // the find widget keeps its own keys. The prompt input lives outside this
-  // container and handles the aliases for its suggestion popover. Ctrl+P/N stay
-  // with the global Quick Open / New File commands.
-  useCtrlNavigationLayer({
-    kind: 'list',
-    focus: 'within',
-    directions: ['up', 'down'],
-    getElement: () => containerRef.current,
-    onMove: (direction) => handleRef.current.move(direction === 'down' ? 'next' : 'prev'),
-  })
-
   // Bare Vim keys: the same widget entry points Alt+J/K, Alt+H/L and Alt+A/E
   // drive, so the two key layers cannot diverge. The prompt input lives outside
   // this container (and is editable), so it never activates this surface.
+  // Ctrl+J/K/H/L stay global (toggle panel / chord leader / replace / select-line).
   const vimSurfaceKey = useVimSurfaceKey('list', `chat:${session.id}`)
   useVimSurface({
     id: vimSurfaceKey,

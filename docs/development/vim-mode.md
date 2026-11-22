@@ -20,7 +20,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | `packages/workbench-ui/src/keybinding/vim/vimSurfaceId.ts` | `useVimSurfaceKey`：稳定 / 自动 surfaceKey |
 | `packages/workbench-ui/src/keybinding/vim/navigationLayers.ts` | Ctrl 别名与 Vim 共用的「谁拥有这一击」仲裁（激活判断、嵌套优先、后挂载优先） |
 | `packages/workbench-ui/src/keybinding/vim/vimDefaultKeymap.ts` | 内置键位表（只写命令 id，不写实现） |
-| `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts` | 每 Document 唯一 window-capture 监听；先仲裁 `Ctrl+J/K/H/L` 别名，再调用 Vim provider |
+| `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts` | 每 Document 唯一 window-capture 监听；先仲裁菜单 / 浮层 / 对话框 / 配置栏的 `Ctrl+J/K/H/L` 别名，再调用 Vim provider |
 | `apps/editor/src/renderer/services/vim/vimModeService.ts` | 配置读取、per-surface 模式记忆、context key、状态栏条目、有效 keymap 合并、保留集 |
 | `apps/editor/src/renderer/workbench/vim/vimDispatcher.ts` | 纯决策类：这一击是否归 Vim、归哪个 surface、执行哪条命令 |
 | `apps/editor/src/renderer/workbench/vim/useVimDispatcher.ts` | 把 dispatcher 装成 provider，按 Document 隔离并维护 focus 事件 |
@@ -41,7 +41,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 `ctrlNavigationRegistry` 在 `window` 的 **capture** 阶段收键。顺序固定：
 
 1. `event.defaultPrevented`、IME 组合（`isComposing || keyCode === 229`）、`keybindingChordPending(doc)` 为真 → 直接放行。
-2. `ctrlNavigationDirection(event)` 命中 `Ctrl+J/K/H/L` → 按 `menu > dialog > overlay > list` 选出唯一一层并消费；**不再进入 Vim**。这四键永不归 Vim。
+2. `ctrlNavigationDirection(event)` 命中 `Ctrl+J/K/H/L` → 按 `menu > dialog > overlay > list` 选出唯一一层并消费；**不再进入 Vim**。只有菜单 / 浮层 / 对话框 / 配置栏注册这些层，纯列表 / 树不注册（它们用裸键或方向键）。
 3. 否则调用 `setVimKeyHandlerProvider` 注入的 provider（由 `useVimDispatcher` 安装）。provider 返回 `true` 时，注册表执行 `preventDefault + stopPropagation + stopImmediatePropagation`。
 
 `VimDispatcher.dispatch` 的判断顺序（改代码时不要随意换序）：
@@ -242,7 +242,7 @@ e2e 通过 `window.__E2E__.runCommand('_workbench.updateConfiguration', 'vim.ena
 - **编辑器不要用 `editor.addCommand`**：standalone Monaco 的 keybinding service 跨实例共享，会吞掉其它编辑器的键；编辑器 Vim 内核走 `handleStroke`。
 - **editable guard 是刻意让行**：树 / 列表里的搜索框、行内输入框必须能正常打字；只有 `editor` / `terminal` 例外。
 - **surfaceKey 必须稳定**：使用自动键的组件每次挂载都是新实例；需要跨卸载记忆的视图必须传稳定 id，并在真正该重置时 `forgetSurface`。
-- **Ctrl 别名优先级**：`Ctrl+J/K/H/L` 在到达 Vim 前已被 `ctrlNavigationRegistry` 消费；因此 surface 聚焦期间 `Ctrl+K` 和弦不可用，这是设计代价。
+- **Ctrl 别名优先级**：菜单 / 浮层 / 对话框 / 配置栏聚焦或打开期间，`Ctrl+J/K/H/L` 在到达 Vim 前已被 `ctrlNavigationRegistry` 消费，因此这段期间 `Ctrl+K` 和弦不可用，这是设计代价。纯列表 / 树不注册 layer，这四键保持全局含义，导航走裸键或方向键。
 - **模式是内存态**：重启不保留；不要把它当用户设置持久化。
 - **编辑器内核命令分两路**：Monaco action（`editor.action.*`）用 `editor.trigger`；workbench 命令（`workbench.action.editor.*`，如 `]c` / `[c`）必须走注入的 `executeCommand` 回调。把 workbench 命令塞给 `editor.trigger` 会静默 no-op。
 - **多窗口**：provider 按 Document 隔离，`Workbench.tsx` 与 `AuxiliaryWindowHost.tsx` 各装一份 `useVimDispatcher`；新增窗口宿主也要装。

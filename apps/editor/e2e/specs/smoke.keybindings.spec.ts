@@ -206,10 +206,7 @@ test.describe('@p1 keybindings editor', () => {
     await expect.poll(() => menu.count()).toBe(0)
   })
 
-  test('Ctrl+J / Ctrl+K step the focused grid without toggling the panel or a chord', async ({
-    page,
-    workbench,
-  }) => {
+  test('ArrowDown / ArrowUp step the focused grid', async ({ page, workbench }) => {
     await openKeybindingsEditor(workbench)
     await expect.poll(() => dataRows(page).count()).toBeGreaterThan(1)
 
@@ -228,11 +225,10 @@ test.describe('@p1 keybindings editor', () => {
     const initial = await selectedTitle()
     expect(initial).not.toBeNull()
 
-    // Ctrl+J globally toggles the panel; Ctrl+K starts a chord. The grid holds
-    // focus, so the shared navigation layer must claim both before the dispatcher.
-    await page.keyboard.press('Control+j')
+    // ArrowDown/ArrowUp move the grid selection by one row.
+    await page.keyboard.press('ArrowDown')
     await expect.poll(selectedTitle).not.toBe(initial)
-    await page.keyboard.press('Control+k')
+    await page.keyboard.press('ArrowUp')
     await expect.poll(selectedTitle).toBe(initial)
   })
 

@@ -3,10 +3,11 @@
  *  ctrlNavigation — the Ctrl+letter movement aliases, and the rule both of their
  *  consumers use to decide which modifier shapes count as one.
  *
- *  Every list surface maps these strokes onto a direction: the quick pick's list,
- *  context menus, overlay pickers, trees, flat lists and the graph views. They
- *  have to agree, or the same stroke would step one and leave the other to the
- *  global keybinding handler.
+ *  Menus, overlay pickers, dialogs and the config bar map these strokes onto a
+ *  direction. Pure view lists and trees (Explorer, Search, Scm, Outline,
+ *  Timeline, graphs, chat timeline) deliberately do NOT: they use the bare Vim
+ *  keys or the arrow keys, so Ctrl+J/K/H/L keep their global workbench meaning
+ *  (toggle panel / chord leader / replace / expand-line-selection).
  *
  *  Only the vim pair is claimed: `j`/`k` down/up, `h`/`l` left/right. The emacs
  *  `p`/`n` pair is deliberately absent — those strokes stay with the global

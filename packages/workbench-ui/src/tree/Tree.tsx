@@ -36,7 +36,6 @@ import { resolveIndexNavigation } from '../list/listKeyboard.js'
 import { hasTrustworthyViewport } from '../list/scrollElementLayout.js'
 import { scrollViewportByRows } from '../list/scrollViewport.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
-import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { useStableCallback } from '../hooks/useStableCallback.js'
@@ -754,27 +753,13 @@ export function Tree<T>(props: ITreeProps<T>) {
     dispatchKeyboardContextMenu(row ?? root, row !== null)
   }, [])
 
-  // Ctrl+J/K step the tree exactly like ArrowDown/ArrowUp, and Ctrl+H/L mirror
-  // ArrowLeft/ArrowRight (collapse / go to parent, expand / enter first child).
-  // The registry claims them on window capture, before the global
-  // toggle-panel/chord-leader/replace/select-line bindings. Ctrl+P/N are not
-  // claimed — Quick Open / New File keep them everywhere. `within` (not the
-  // list default `self`) matches the arrow keys: row controls such as Search's
-  // collapse / replace-all buttons keep DOM focus on the button, and the
-  // keydown still reaches the container. Editable targets are rejected
-  // separately, so a row's inline editor keeps its keys.
-  useCtrlNavigationLayer({
-    kind: 'list',
-    focus: 'within',
-    directions: ['up', 'down', 'left', 'right'],
-    getElement: () => containerRef.current,
-    onMove: (direction) => model.navigate(direction),
-  })
-
   // Bare Vim keys arrive as commands from the workbench dispatcher. Movement
   // counts resolve to one target index (one selection change / reveal); Left /
   // Right keep their structural meaning (collapse-then-parent, expand-then-
-  // child) and therefore apply once per stroke.
+  // child) and therefore apply once per stroke. Ctrl+J/K/H/L are deliberately
+  // not claimed: they keep their global workbench meaning (toggle panel / chord
+  // leader / replace / expand-line-selection), and movement uses the bare keys
+  // above or the arrow keys.
   useVimSurface({
     id: vimSurfaceKey,
     kind: 'list',

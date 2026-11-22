@@ -1,7 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ctrlNavigationRegistry — one window-capture listener per document that routes
- *  the Ctrl movement aliases (Ctrl+J/K/H/L) to the innermost active list surface.
+ *  the Ctrl movement aliases (Ctrl+J/K/H/L) to the active menu, dialog, overlay
+ *  or config-bar surface.
+ *
+ *  Pure view lists and trees deliberately do not register a layer: they use the
+ *  bare Vim keys or the arrow keys, so Ctrl+J/K/H/L keep their global workbench
+ *  meaning (toggle panel / chord leader / replace / expand-line-selection). Only
+ *  pickers whose focus lives in an editable input, menus with virtual focus,
+ *  dialogs and the config bar need the aliases.
  *
  *  A listener per component does not work here. Menus paint with virtual focus
  *  (`aria-activedescendant`), so DOM focus stays on the tree or list underneath;
@@ -17,7 +24,7 @@
  *  window-capture listener runs early enough to turn those strokes into list
  *  movement. Ctrl+P/N are deliberately absent: they stay with Quick Open / New
  *  File everywhere, including list surfaces. The price, accepted by design:
- *  while a list/menu/overlay owns the keyboard, Ctrl+K chords are unavailable.
+ *  while a menu/overlay/dialog owns the keyboard, Ctrl+K chords are unavailable.
  *
  *  Vim no longer lives in this file. The workbench installs one provider via
  *  `setVimKeyHandlerProvider`; it runs after the Ctrl aliases and returns true

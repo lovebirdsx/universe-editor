@@ -9,16 +9,14 @@
  *  and payload caching are preserved. Only the listed navigation keys are
  *  handled (and prevented) — everything else bubbles up untouched.
  *
- *  Ctrl+J/K are the same down/up movement, claimed by the shared
- *  `ctrlNavigationRegistry` while the graph container holds focus. Ctrl+P/N
- *  stay with the global Quick Open / New File commands.
+ *  Ctrl+J/K/H/L are deliberately not claimed: they keep their global workbench
+ *  meaning, and graph movement uses the bare Vim keys or the arrow keys.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, type KeyboardEvent, type RefObject } from 'react'
 import {
   isContextMenuKey,
   scrollViewportByRows,
-  useCtrlNavigationLayer,
   useVimSurface,
   useVimSurfaceKey,
 } from '@universe-editor/workbench-ui'
@@ -81,28 +79,10 @@ export function useGraphKeyboardNav({
     [rows, select, scrollRef, rowAttribute, scrollToRow],
   )
 
-  // From no selection, down starts at the first row and up at the last — the
-  // same convention the arrow keys have always used.
-  const moveBy = useCallback(
-    (delta: 1 | -1) => {
-      if (rows.length === 0) return
-      const currentKey = selectionRef.current[0]
-      const currentIndex = currentKey === undefined ? -1 : rows.indexOf(currentKey)
-      moveTo(currentIndex < 0 ? (delta > 0 ? 0 : rows.length - 1) : currentIndex + delta)
-    },
-    [moveTo, rows, selectionRef],
-  )
-
-  useCtrlNavigationLayer({
-    kind: 'list',
-    directions: ['up', 'down'],
-    getElement: () => scrollRef.current,
-    onMove: (direction) => moveBy(direction === 'down' ? 1 : -1),
-  })
-
   // Bare Vim keys (j/k, gg/G, Ctrl+d/u, Enter, m) arrive as commands from the
   // workbench dispatcher. A count resolves to one target row so `5j` scrolls
   // and selects once; paging clamps at the ends like the arrow-key handler.
+  // Ctrl+J/K/H/L stay global (toggle panel / chord leader / replace / select-line).
   const pageSize = (): number =>
     Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 0) / rowHeight))
 

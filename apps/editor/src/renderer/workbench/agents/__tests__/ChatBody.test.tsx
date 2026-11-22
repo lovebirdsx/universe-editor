@@ -526,7 +526,7 @@ describe('ChatBody — click to focus a timeline item', () => {
     }
   })
 
-  it('moves with Ctrl+J/K while the timeline holds focus', () => {
+  it('does not claim Ctrl+J/K', () => {
     const { container } = renderChat(makeSession('s1', items))
     const scroll = container.querySelector<HTMLElement>(
       '[data-testid="acp-timeline"]',
@@ -536,19 +536,15 @@ describe('ChatBody — click to focus a timeline item', () => {
     })
     expect(container.ownerDocument.activeElement).toBe(scroll)
 
-    fireEvent.keyDown(scroll, { key: 'k', ctrlKey: true })
-    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
-    expect(slotEl(container, 'm:b').className).not.toContain(focusedClass)
-
-    fireEvent.keyDown(scroll, { key: 'j', ctrlKey: true })
+    // The registry no longer claims these strokes; they reach the global
+    // dispatcher (Toggle Panel / chord leader / Replace / select-line).
+    expect(fireEvent.keyDown(scroll, { key: 'k', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(scroll, { key: 'j', ctrlKey: true })).toBe(true)
     expect(slotEl(container, 'm:b').className).toContain(focusedClass)
-
-    // Claimed even at the boundary so quick open does not fire behind the chat.
-    expect(fireEvent.keyDown(scroll, { key: 'j', ctrlKey: true })).toBe(false)
-    expect(slotEl(container, 'm:b').className).toContain(focusedClass)
+    expect(slotEl(container, 'm:a').className).not.toContain(focusedClass)
   })
 
-  it('leaves Ctrl+J/K to an editable control inside the timeline', () => {
+  it('does not claim Ctrl+J/K even inside an editable control', () => {
     const { container } = renderChat(makeSession('s1', items))
     const scroll = container.querySelector<HTMLElement>(
       '[data-testid="acp-timeline"]',
