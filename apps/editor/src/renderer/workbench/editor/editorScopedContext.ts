@@ -95,6 +95,10 @@ export function editorScopedContextValues(
     hasActiveEditor: editor !== undefined,
     isAuxiliaryEditorWindow: !group.part.isMain,
     isInDiffEditor: editor instanceof DiffEditorInput,
+    // Mirrors the root key the compare-editor actions gate on. Menu `when`
+    // resolves against this scoped service, so without it the title-bar
+    // next/previous buttons silently vanish.
+    textCompareEditorVisible: editor instanceof DiffEditorInput,
     diffEditorHasOpenableFile:
       editor instanceof DiffEditorInput && editor.openableResource !== undefined,
     activeEditorGroupLocked: group.isLocked,

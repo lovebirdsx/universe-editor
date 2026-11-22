@@ -423,6 +423,7 @@ describe('ContextKeyContribution', () => {
       undefined,
     )
     expect(ctx.get('isInDiffEditor')).toBe(true)
+    expect(ctx.get('textCompareEditorVisible')).toBe(true)
     expect(ctx.get('diffEditorHasOpenableFile')).toBe(true)
     ctx.dispose()
   })
@@ -450,11 +451,13 @@ describe('ContextKeyContribution', () => {
       undefined,
     )
     expect(ctx.get('isInDiffEditor')).toBe(true)
+    expect(ctx.get('textCompareEditorVisible')).toBe(true)
     expect(ctx.get('diffEditorHasOpenableFile')).toBe(false)
 
     // Switching back to a plain file clears it rather than leaving it stuck on.
     editor.activeEditor.set({ id: 'file:///repo/a.ts' }, undefined)
     expect(ctx.get('isInDiffEditor')).toBe(false)
+    expect(ctx.get('textCompareEditorVisible')).toBe(false)
     expect(ctx.get('diffEditorHasOpenableFile')).toBe(false)
     ctx.dispose()
   })

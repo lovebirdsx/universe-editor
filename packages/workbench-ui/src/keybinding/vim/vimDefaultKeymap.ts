@@ -64,6 +64,25 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
   { id: 'list.delete', keys: ['d', 'd'], command: 'list.delete', surfaces: LIST_LIKE },
   { id: 'surface.escape', keys: ['escape'], command: 'surface.escape', surfaces: LIST_LIKE },
 
+  // A diff previewed from a view keeps focus in the list, so the editor
+  // surface's `]c` / `[c` never sees the stroke there. Route them to the
+  // compare editor while one is visible; the commands navigate hunks without
+  // stealing focus back.
+  {
+    id: 'list.nextChange',
+    keys: [']', 'c'],
+    command: 'workbench.action.compareEditor.nextChange',
+    surfaces: ['list'],
+    when: 'textCompareEditorVisible',
+  },
+  {
+    id: 'list.previousChange',
+    keys: ['[', 'c'],
+    command: 'workbench.action.compareEditor.previousChange',
+    surfaces: ['list'],
+    when: 'textCompareEditorVisible',
+  },
+
   // -- running before the generic list entries so the first `when` match wins -
   // Settings rows and TOC: `/` hands focus to the settings search box.
   {

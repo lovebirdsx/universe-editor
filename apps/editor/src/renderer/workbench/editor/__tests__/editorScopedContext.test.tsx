@@ -12,6 +12,7 @@ import {
   type IDisposable,
 } from '@universe-editor/platform'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
+import { DiffEditorInput } from '../../../services/editor/DiffEditorInput.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { editorScopedContextValues } from '../editorScopedContext.js'
 import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
@@ -77,6 +78,33 @@ describe('editorScopedContextValues', () => {
     expect(values['activeEditorGroupEmpty']).toBe(false)
     expect(values['activeEditorIsFirstInGroup']).toBe(false)
     expect(values['activeEditorIsLastInGroup']).toBe(true)
+  })
+
+  it('marks the target editor as a text compare editor', () => {
+    const file = new FileEditorInput(URI.file('/repo/a.ts'), {} as never)
+    disposables.push(file)
+    const plain = groupsWith(file)
+    expect(
+      editorScopedContextValues(plain.activeGroup, plain.activeGroup.activeEditor)[
+        'textCompareEditorVisible'
+      ],
+    ).toBe(false)
+
+    const resource = URI.file('/repo/a.ts')
+    const diff = new DiffEditorInput(
+      resource,
+      'head',
+      'working',
+      undefined,
+      resource,
+      false,
+      {} as never,
+    )
+    disposables.push(diff)
+    const groups = groupsWith(diff)
+    const values = editorScopedContextValues(groups.activeGroup, groups.activeGroup.activeEditor)
+    expect(values['isInDiffEditor']).toBe(true)
+    expect(values['textCompareEditorVisible']).toBe(true)
   })
 
   it('seeds explicit empty values for an empty group instead of falling back to root', () => {

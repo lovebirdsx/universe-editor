@@ -148,7 +148,7 @@ Swarm 审核列表的「跳到 Swarm 更改」占用 `Ctrl+Shift+Enter`，因此
 | 重新打开已关闭的编辑器                 | `Ctrl+Shift+T`                              |
 | 打开下一个 / 上一个编辑器              | `Ctrl+PageDown` / `Ctrl+PageUp`             |
 | 把编辑器移到左 / 右一组                | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` |
-| 上一处 / 下一处更改（文件有改动时）    | `Alt+PageUp` / `Alt+PageDown`               |
+| 上一处 / 下一处更改（文件有改动或对比编辑器时） | `Alt+PageUp` / `Alt+PageDown`               |
 | 最近使用的编辑器和视图（MRU）          | `Ctrl+Tab` / `Ctrl+Shift+Tab`               |
 | 向右拆分编辑器                         | `Ctrl+\`                                    |
 | 切换自动换行                           | `Alt+Z`                                     |

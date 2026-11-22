@@ -423,9 +423,14 @@ export class GoToNextDifferenceAction extends Action2 {
       title: localize2('action.diffEditor.nextChange.title', 'Go to Next Difference'),
       category: localize2('command.category.diffEditor', 'Diff Editor'),
       icon: 'diff-next-change',
-      keybinding: { primary: 'alt+f5' },
-      precondition: 'isInDiffEditor',
-      menu: [{ id: MenuId.EditorTitle, group: 'navigation', order: 3, when: 'isInDiffEditor' }],
+      // Alt+PageDown mirrors the dirty-diff / VSCode navigation key, so a diff
+      // previewed from a view that keeps focus (Commit Changes, SCM) can still
+      // walk hunks without focusing the editor.
+      keybinding: [{ primary: 'alt+f5' }, { primary: 'alt+pagedown' }],
+      precondition: 'textCompareEditorVisible',
+      menu: [
+        { id: MenuId.EditorTitle, group: 'navigation', order: 3, when: 'textCompareEditorVisible' },
+      ],
       f1: true,
     })
   }
@@ -444,9 +449,11 @@ export class GoToPreviousDifferenceAction extends Action2 {
       title: localize2('action.diffEditor.previousChange.title', 'Go to Previous Difference'),
       category: localize2('command.category.diffEditor', 'Diff Editor'),
       icon: 'diff-previous-change',
-      keybinding: { primary: 'shift+alt+f5' },
-      precondition: 'isInDiffEditor',
-      menu: [{ id: MenuId.EditorTitle, group: 'navigation', order: 2, when: 'isInDiffEditor' }],
+      keybinding: [{ primary: 'shift+alt+f5' }, { primary: 'alt+pageup' }],
+      precondition: 'textCompareEditorVisible',
+      menu: [
+        { id: MenuId.EditorTitle, group: 'navigation', order: 2, when: 'textCompareEditorVisible' },
+      ],
       f1: true,
     })
   }

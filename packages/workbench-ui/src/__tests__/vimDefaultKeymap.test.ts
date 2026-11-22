@@ -85,6 +85,19 @@ describe('VIM_DEFAULT_KEYMAP', () => {
     }
   })
 
+  it('navigates compare-editor hunks from a list while a diff is visible', () => {
+    for (const [keys, command] of [
+      [[']', 'c'], 'workbench.action.compareEditor.nextChange'],
+      [['[', 'c'], 'workbench.action.compareEditor.previousChange'],
+    ] as const) {
+      const entry = entriesFor('list', keys).find((candidate) => candidate.command === command)
+      expect(entry, keys.join(' ')).toBeDefined()
+      expect(entry?.when).toBe('textCompareEditorVisible')
+      expect(commandFor('menu', keys)).toBeUndefined()
+      expect(commandFor('editor', keys)).toBeUndefined()
+    }
+  })
+
   it('scrolls list/overlay viewports with Ctrl+e/y but leaves menus alone', () => {
     for (const kind of ['list', 'overlay'] as const) {
       expect(commandFor(kind, ['ctrl+e'])).toBe('list.scrollViewportDown')

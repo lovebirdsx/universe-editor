@@ -7,9 +7,10 @@
  *
  *  - the native key keeps doing what this editor made it do (the "keys the
  *    workbench claims" table in docs/user/zh-CN/reference/editor-shortcuts.md).
- *    For the two scroll entries that takeover is conditional: the workbench only
- *    claims Alt+PageUp/PageDown while the file has changes, so there the
- *    alternative is about a key that is stable either way, not a dead one.
+ *    For the two scroll entries that takeover is conditional: the workbench
+ *    claims Alt+PageUp/PageDown while the file has changes or the active editor
+ *    is a text compare editor, so there the alternative is about a key that is
+ *    stable either way, not a dead one.
  *  - the alternative gives the core command a key monaco holds no primary on.
  *
  *  A monaco *secondary* on the same key is shadowed all the same, and that is
@@ -76,14 +77,15 @@ export const MONACO_COMPAT_KEYBINDINGS: readonly IMonacoCompatKeybinding[] = [
     key: 'shift+alt+pageup',
     when: EDITOR_TEXT_FOCUS,
     nativeKey: 'alt+pageup',
-    takenBy: 'workbench.action.editor.previousChange',
+    takenBy:
+      'workbench.action.editor.previousChange / workbench.action.compareEditor.previousChange',
   },
   {
     id: 'scrollPageDown',
     key: 'shift+alt+pagedown',
     when: EDITOR_TEXT_FOCUS,
     nativeKey: 'alt+pagedown',
-    takenBy: 'workbench.action.editor.nextChange',
+    takenBy: 'workbench.action.editor.nextChange / workbench.action.compareEditor.nextChange',
   },
   {
     id: 'editor.action.formatDocument',

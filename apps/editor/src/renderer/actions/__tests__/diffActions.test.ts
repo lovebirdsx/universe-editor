@@ -11,6 +11,7 @@ import {
   IUriIdentityService,
   IWorkspaceService,
   InstantiationService,
+  MenuId,
   ServiceCollection,
   URI,
   registerAction2,
@@ -19,6 +20,7 @@ import {
 } from '@universe-editor/platform'
 import { OpenDiffAction, OpenWebviewDiffAction, type OpenDiffPayload } from '../diffActions.js'
 import { GoToNextDifferenceAction, OpenDiffSourceFileAction } from '../diffActions.js'
+import { GoToPreviousDifferenceAction } from '../diffActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
@@ -551,5 +553,32 @@ describe('diff title actions follow the { groupId } of a non-active group', () =
 
     expect(calls).toEqual(['next'])
     expect(g2.editors).toEqual([other])
+  })
+
+  it('binds both navigation keys behind textCompareEditorVisible', () => {
+    expect(new GoToNextDifferenceAction().desc).toMatchObject({
+      precondition: 'textCompareEditorVisible',
+      keybinding: [{ primary: 'alt+f5' }, { primary: 'alt+pagedown' }],
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          group: 'navigation',
+          order: 3,
+          when: 'textCompareEditorVisible',
+        },
+      ],
+    })
+    expect(new GoToPreviousDifferenceAction().desc).toMatchObject({
+      precondition: 'textCompareEditorVisible',
+      keybinding: [{ primary: 'shift+alt+f5' }, { primary: 'alt+pageup' }],
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          group: 'navigation',
+          order: 2,
+          when: 'textCompareEditorVisible',
+        },
+      ],
+    })
   })
 })

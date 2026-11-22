@@ -106,7 +106,7 @@
 
 菜单挂在编辑器组标题栏时,以下 key 在组作用域内**覆盖**全局同名键,反映该组自己的活动编辑器:
 
-`activeEditorId`、`activeEditorType`、`activeEditorLanguageId`、`hasActiveEditor`、`isInDiffEditor`、`activeEditorGroupLocked`、`resourceScheme`、`resourceScmProvider`、`scmActiveResourceHasChanges`(布尔,活动编辑器资源有脏 diff 或 SCM 变更)、`diffEditorHasOpenableFile`、`activeEditorHasJsonSchema`(布尔,活动 JSON 编辑器匹配了 schema)。
+`activeEditorId`、`activeEditorType`、`activeEditorLanguageId`、`hasActiveEditor`、`isInDiffEditor`、`textCompareEditorVisible`、`activeEditorGroupLocked`、`resourceScheme`、`resourceScmProvider`、`scmActiveResourceHasChanges`(布尔,活动编辑器资源有脏 diff 或 SCM 变更)、`diffEditorHasOpenableFile`、`activeEditorHasJsonSchema`(布尔,活动 JSON 编辑器匹配了 schema)。
 
 ## 各视图作用域
 

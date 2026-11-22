@@ -125,6 +125,7 @@ useVimSurface({
 - 用户 `vim.keymap` 在服务里按 `id` 覆盖内置条目、其余追加；编辑器内核的 Normal 键不受该表覆盖。
 - 编辑器专属 leader 条目（`editor.*`）带 `surfaces: ['editor']`，不会出现在列表 / 标签栏等 surface 的有效 keymap 里。
 - 编辑器内核的裸键（`g` / `[` / `]` / `>` / `<` / `z` 前缀，以及 `K`、`%`、`*`、`#`、`o`、`O`、`c` operator、`H/M/L` 等）由 `vimKeymap.ts` 的 reducer 直接产出，不进 keymap 表；因此 `vim.keymap` 只能覆盖 leader 别名。Monaco 动作走 `editor.trigger`，workbench 命令（`]c` / `[c`）走 `createVimEditorController` 的 `executeCommand` 回调（`FileEditor` / `DiffEditor` 注入 `ICommandService`）。
+- **`]c` / `[c` 在列表 surface 上也生效**：焦点在 Explorer / Commit Changes 等列表中、且活动编辑器是对比编辑器时，`vimDefaultKeymap.ts` 的 `list.nextChange` / `list.previousChange` 把序列路由到 `workbench.action.compareEditor.*Change`（`when: textCompareEditorVisible`）。命令只移动 diff 光标与视口、不抢焦点，所以可以从列表里连续预览上下一个改动。
 
 ### 编辑器滚动命令（`vimEditorController`）
 

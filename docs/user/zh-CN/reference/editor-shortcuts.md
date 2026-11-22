@@ -186,7 +186,7 @@ Normal 模式：
 | 括号匹配 | `%` |
 | 搜索光标下单词 | `*` 向前 / `#` 向后（整词匹配，Vim `\<...\>` 语义） |
 | 下一个 / 上一个问题（跨文件） | `]d` / `[d` |
-| 下一处 / 上一处更改 | `]c` / `[c` |
+| 下一处 / 上一处更改 | `]c` / `[c`；焦点在列表 / 树中时，只要活动编辑器是对比编辑器也同样生效 |
 | 上方 / 下方新行并进入 Insert | `O` / `o` |
 | 修改（删除后进入 Insert） | `cc`（整行）、`cw` / `c$` / `c0` / `cb` / `ce` 等；`C` 同 `c$` |
 | 替换字符（删除后进入 Insert） | `s`；`S` 同 `cc` |
@@ -386,7 +386,7 @@ Mac 只做 `Ctrl` → `Cmd`、`Alt` → `Option` 的换算。**Linux 不同**，
 | --- | --- | --- | --- |
 | `Alt+↑` / `Alt+↓` | 查找光标处单词的上一处 / 下一处 | 上移 / 下移行 | `Ctrl+Shift+↑` / `Ctrl+Shift+↓` |
 | `Ctrl+K Ctrl+L` | 把选区添加到已有 Agent 聊天 | 切换折叠 | `Ctrl+Shift+Alt+F` |
-| `Alt+PageUp` / `Alt+PageDown` | 文件有未提交改动时：上一处 / 下一处更改；没有改动时是滚动一页 | 滚动一页 | `Shift+Alt+PageUp` / `Shift+Alt+PageDown` |
+| `Alt+PageUp` / `Alt+PageDown` | 文件有未提交改动或活动编辑器是文本对比编辑器时：上一处 / 下一处更改；否则是滚动一页 | 滚动一页 | `Shift+Alt+PageUp` / `Shift+Alt+PageDown` |
 | `Ctrl+Shift+↑` / `Ctrl+Shift+↓` | 上移 / 下移行（本编辑器补的备选键占用了内核的次要键位） | 按行扩展选区（Windows）、在下方 / 上方加光标（Linux）——两者都还有主键 | — |
 | `Ctrl+0` … `Ctrl+9` | 跳转到编号书签 | — | — |
 | `Ctrl+Shift+I` | 打开开发者工具（Linux 上这会挡住「格式化文档」） | — | Linux 上用 `Shift+Alt+F` 格式化 |
