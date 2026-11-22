@@ -2,7 +2,7 @@
  *  Tests for apps/editor/src/renderer/services/explorer/ExplorerTreeService.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   InstantiationService,
   URI,
@@ -392,6 +392,20 @@ describe('ExplorerTreeService', () => {
     expect(ok).toBe(true)
     expect(tree.selectedResource?.toString()).toBe(target.toString())
     expect(tree.isExpanded(root)).toBe(true)
+  })
+
+  it('reveal requests centered scrolling (relativeTop 0.5)', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const target = URI.joinPath(root, 'README.md')
+    const onReveal = vi.fn()
+    tree.model.onReveal(onReveal)
+    const ok = await tree.reveal(target)
+    expect(ok).toBe(true)
+    // Only the anchor-carrying event fires; setSelection's nearest-edge reveal
+    // is suppressed by TreeModel.reveal.
+    expect(onReveal).toHaveBeenCalledTimes(1)
+    expect(onReveal).toHaveBeenCalledWith({ id: target.toString(), relativeTop: 0.5 })
   })
 
   it('reveal expands every ancestor before selecting', async () => {

@@ -542,6 +542,29 @@ describe('TreeModel', () => {
     expect(onReveal).toHaveBeenCalledWith({ id: 'a1b1' })
   })
 
+  it('reveal forwards relativeTop in the onReveal payload', async () => {
+    const leaf: N = { id: 'a1b1' }
+    const root: N = { id: 'a', children: [{ id: 'a1', children: [leaf] }] }
+    const model = new TreeModel({ dataSource: eagerSource([root]) })
+    const onReveal = vi.fn()
+    model.onReveal(onReveal)
+    await model.reveal(leaf, 0.5)
+    // setSelection's own nearest-edge reveal is suppressed so the requested
+    // anchor is the only scroll applied.
+    expect(onReveal).toHaveBeenCalledTimes(1)
+    expect(onReveal).toHaveBeenCalledWith({ id: 'a1b1', relativeTop: 0.5 })
+  })
+
+  it('reveal keeps relativeTop 0 instead of dropping it', async () => {
+    const leaf: N = { id: 'a1b1' }
+    const root: N = { id: 'a', children: [{ id: 'a1', children: [leaf] }] }
+    const model = new TreeModel({ dataSource: eagerSource([root]) })
+    const onReveal = vi.fn()
+    model.onReveal(onReveal)
+    await model.reveal(leaf, 0)
+    expect(onReveal).toHaveBeenCalledWith({ id: 'a1b1', relativeTop: 0 })
+  })
+
   it('reveal fires onReveal even when the target is already the sole selection', async () => {
     const leaf: N = { id: 'a1b1' }
     const root: N = { id: 'a', children: [{ id: 'a1', children: [leaf] }] }

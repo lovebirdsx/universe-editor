@@ -476,15 +476,17 @@ export class ExplorerTreeService extends Disposable {
   }
 
   /**
-   * Expand every ancestor of `target`, set it as the focused row + sole selection,
-   * and fire a dom event so the row can scroll into view. Returns false when
-   * there is no workspace open or the target lies outside it.
+   * Expand every ancestor of `target`, set it as the focused row + sole
+   * selection, and ask the view to reveal it. Matches VSCode's ExplorerView: a
+   * row that is not fully visible is centered (`relativeTop` 0.5); a fully
+   * visible row only updates the selection and does not scroll. Returns false
+   * when there is no workspace open or the target lies outside it.
    */
   async reveal(target: URI): Promise<boolean> {
     if (!this._root) return false
     const normalized = normalizeUri(target)
     if (!isDescendant(this._root, normalized)) return false
-    await this._model.reveal(this._leafEntry(normalized))
+    await this._model.reveal(this._leafEntry(normalized), 0.5)
     return true
   }
 

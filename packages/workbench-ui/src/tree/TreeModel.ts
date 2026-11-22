@@ -32,6 +32,20 @@ export interface ITreeModelOptions<T> {
   readonly defaultExpanded?: (element: T, depth: number) => boolean
 }
 
+/**
+ * onReveal payload.
+ *
+ * `relativeTop` follows VSCode's `List.reveal` anchor semantics: 0 aligns the
+ * row's top with the viewport top, 1 its bottom with the viewport bottom, and
+ * 0.5 centers it. Omitting it scrolls the minimum needed (nearest edge). The
+ * view skips scrolling entirely when the row is already fully visible, so
+ * callers may request an anchor unconditionally.
+ */
+export interface ITreeRevealEvent {
+  readonly id: string
+  readonly relativeTop?: number
+}
+
 export interface ISetSelectionOptions {
   /**
    * Fire onReveal for the new focus so the view scrolls it into view
@@ -113,8 +127,8 @@ export class TreeModel<T> extends Disposable {
   readonly onDidChangeExpansion: Event<{ element: T; expanded: boolean }> =
     this._onDidChangeExpansion.event
 
-  private readonly _onReveal = this._register(new Emitter<{ id: string }>())
-  readonly onReveal: Event<{ id: string }> = this._onReveal.event
+  private readonly _onReveal = this._register(new Emitter<ITreeRevealEvent>())
+  readonly onReveal: Event<ITreeRevealEvent> = this._onReveal.event
 
   constructor(options: ITreeModelOptions<T>) {
     super()
@@ -653,12 +667,17 @@ export class TreeModel<T> extends Disposable {
    * Expand every ancestor of `element` (requires getParent), make it the sole
    * selection + focus, and fire onReveal so the view can scroll it into view.
    *
-   * onReveal fires unconditionally at the end: setSelection early-returns
-   * (and skips onReveal) when the target is already the sole selection + focus,
-   * but "Reveal in Explorer" on an already-selected row that the user scrolled
-   * off-screen must still scroll it back into view.
+   * `relativeTop` uses VSCode's List.reveal anchor: omitted scrolls the minimum
+   * needed (nearest edge); 0..1 places the row that fraction down the viewport
+   * (0.5 centers it). The view treats a fully-visible row as a no-op, so callers
+   * can request centering unconditionally.
+   *
+   * The selection write passes `reveal: false` so this method always fires
+   * exactly one reveal event — the one carrying `relativeTop`. Otherwise
+   * setSelection would fire its own nearest-edge reveal first, and the requested
+   * anchor would only win where React batches the two state updates.
    */
-  async reveal(element: T): Promise<void> {
+  async reveal(element: T, relativeTop?: number): Promise<void> {
     const getParent = this._dataSource.getParent
     if (getParent) {
       const chain: T[] = []
@@ -672,8 +691,9 @@ export class TreeModel<T> extends Disposable {
       }
     }
     const id = this._dataSource.getId(element)
-    this.setSelection([id])
-    this._onReveal.fire({ id })
+    this.setSelection([id], undefined, { reveal: false })
+    // exactOptionalPropertyTypes: omit the key rather than writing undefined.
+    this._onReveal.fire({ id, ...(relativeTop !== undefined ? { relativeTop } : {}) })
   }
 
   // --- internals -----------------------------------------------------------

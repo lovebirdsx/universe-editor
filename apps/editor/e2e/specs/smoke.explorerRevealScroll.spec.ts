@@ -94,4 +94,79 @@ test.describe('@p1 explorer reveal scroll', () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
+
+  test('Reveal in Explorer centers a row that is not fully visible', async ({
+    workbench,
+    page,
+  }) => {
+    // VSCode semantics: an off-screen row is revealed with relativeTop 0.5, so
+    // its vertical middle lands on the tree viewport's middle. Use a middle row
+    // (not the last one) — the browser clamps a centered last row to the bottom,
+    // which is indistinguishable from nearest-edge scrolling.
+    const tmpDir = mkTempDir('ue2-reveal-center-')
+    await Promise.all(
+      Array.from({ length: FILE_COUNT }, (_, i) =>
+        fs.writeFile(path.join(tmpDir, `file-${String(i).padStart(3, '0')}.txt`), 'x'),
+      ),
+    )
+
+    await workbench.waitForRestored()
+    await workbench.openWorkspace(tmpDir)
+
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('sideBarVisible'), { timeout: 5000 })
+      .toBe(true)
+
+    const rows = page.locator('[role="treeitem"]')
+    await expect(rows.first()).toBeVisible({ timeout: 5000 })
+    await expect.poll(() => rows.count(), { timeout: 5000 }).toBeGreaterThan(30)
+
+    const targetName = `file-${String(Math.floor(FILE_COUNT / 2)).padStart(3, '0')}.txt`
+    const targetUri = path.join(tmpDir, targetName)
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), targetUri)
+
+    const targetRow = page.locator('[role="treeitem"]', { hasText: targetName })
+    await expect(targetRow).toHaveAttribute('aria-selected', 'true', { timeout: 5000 })
+
+    const tree = page.locator('[role="tree"]').first()
+    // Scroll to the top until the (still-selected) row leaves the viewport;
+    // keep re-asserting because the reveal effect can re-run on structure
+    // changes from the watcher's initial refresh.
+    await expect
+      .poll(
+        async () => {
+          await tree.evaluate((el) => {
+            el.scrollTop = 0
+          })
+          const r = await targetRow.evaluate((el) => {
+            const rect = el.getBoundingClientRect()
+            return { top: rect.top, bottom: rect.bottom, vh: window.innerHeight }
+          })
+          return r.bottom <= 0 || r.top >= r.vh
+        },
+        { timeout: 5000 },
+      )
+      .toBe(true)
+
+    await workbench.runCommand('revealInExplorer', { resource: targetUri })
+
+    // Row centre must sit on the viewport centre (a few px of layout slack).
+    await expect
+      .poll(
+        () =>
+          targetRow.evaluate((el) => {
+            const row = el.getBoundingClientRect()
+            const scroller = el.closest('[role="tree"]') as HTMLElement | null
+            if (!scroller) return Number.POSITIVE_INFINITY
+            const treeRect = scroller.getBoundingClientRect()
+            const rowCenter = (row.top + row.bottom) / 2
+            const viewportCenter = treeRect.top + scroller.clientHeight / 2
+            return Math.abs(rowCenter - viewportCenter)
+          }),
+        { timeout: 5000 },
+      )
+      .toBeLessThanOrEqual(3)
+
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  })
 })

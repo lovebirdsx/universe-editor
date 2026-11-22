@@ -27,7 +27,9 @@
 
 ## 3. reveal 只滚自己的 scroller，禁用 `scrollIntoView`
 
-`Tree` 的 reveal（`setSelection` 带 `reveal: true`）从行几何算出最小滚动量，直接赋值给自己那个滚动容器，**从不调用 `element.scrollIntoView`**——那个 API 会滚**所有**可滚动祖先，`overflow: hidden` 的盒子也不例外（脚本照样能滚）。后果有两层：一是选中一行会顺带把外层容器或文档挪走；二是「滚动位移 + 同帧内容变化」正是残影最容易出现的组合（外层动了、已经栅格好的区域没动，两帧叠在一起）。
+`Tree` 的 reveal（`setSelection` 带 `reveal: true`）从行几何算出滚动量，直接赋值给自己那个滚动容器，**从不调用 `element.scrollIntoView`**——那个 API 会滚**所有**可滚动祖先，`overflow: hidden` 的盒子也不例外（脚本照样能滚）。后果有两层：一是选中一行会顺带把外层容器或文档挪走；二是「滚动位移 + 同帧内容变化」正是残影最容易出现的组合（外层动了、已经栅格好的区域没动，两帧叠在一起）。
+
+对齐策略默认是「最小滚动」（目标在上方贴顶、下方贴底）；`TreeModel.reveal(element, relativeTop)` 可传 VSCode 语义的锚点（0 贴顶、0.5 居中、1 贴底），Explorer 的 Reveal Active File 传 0.5。两种模式在目标**已完整可见**时都不滚动。
 
 几何算法同时覆盖了窗口化分支（目标行还没被渲染、取不到 DOM 元素）——这是它取代 `scrollIntoView` 的第二个理由。它假设 scroller 自身无 padding（每个宿主都是无 padding 的 flex 列、唯一子节点是 spacer）；给某个 tree 容器加 `padding-top` 会让所有 reveal 偏移同样的距离。
 
@@ -91,8 +93,8 @@ document.querySelector('#root').style.opacity = '0.999'
 
 | 约定 | 护栏 |
 |---|---|
-| reveal 只滚自己的 scroller | `packages/workbench-ui/src/__tests__/Tree.revealScroll.test.tsx` —— spy `Element.prototype.scrollIntoView` 断言从未被调用、且外层 scroller 不动。**把实现换回 `scrollIntoView` 即变红**，这是唯一能证伪该约定的用例 |
-| reveal 在真浏览器里仍然有效 | `apps/editor/e2e/specs/smoke.explorerRevealScroll.spec.ts`（滚动到顶后 reveal 把已选中的行带回来） |
+| reveal 只滚自己的 scroller | `packages/workbench-ui/src/__tests__/Tree.revealScroll.test.tsx` —— spy `Element.prototype.scrollIntoView` 断言从未被调用、且外层 scroller 不动；同时锁定默认最小滚动与 `relativeTop: 0.5` 居中（含下界 clamp、完整可见不滚）。**把实现换回 `scrollIntoView` 即变红** |
+| reveal 在真浏览器里仍然有效 | `apps/editor/e2e/specs/smoke.explorerRevealScroll.spec.ts`（滚动到顶后 reveal 把已选中的行带回来；中间行居中到视口中心） |
 | 行定位 / spacer 形状 | `packages/workbench-ui/src/__tests__/VirtualList.test.tsx`（`top` 断言、spacer 契约） |
 | 列表重排后仍是「一摞不重叠的行」 | `apps/editor/src/renderer/workbench/swarm/__tests__/SwarmReviewsView.test.tsx` 的 soft refresh 用例（key 唯一、offset 严格递增、换选中不调 `scrollIntoView`）；`extensions/perforce/e2e/specs/swarmReview.spec.ts` 的 dashboard journey 补了真布局版（行矩形互不重叠、`End` 把最后一行底对齐） |
 | 同一实体跨两个父节点时行 id 仍唯一 | 同文件的 `duplicate review across groups` 用例（同一 review 同时在 Needs My Action 与 Authored by Me，逐个折叠后断言 treeitem 数量、key 唯一、无孤儿 review 行、`top` 严格递增）。**这是真复现**：修复前折叠后 DOM 会多出一行 |

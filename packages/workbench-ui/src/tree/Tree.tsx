@@ -281,12 +281,23 @@ export function Tree<T>(props: ITreeProps<T>) {
   useScrollRestore(scrollStateKey, getScrollElement, scrollStatePersister)
 
   // Reveal: defer scroll to after commit.
-  const [revealRequest, setRevealRequest] = useState<{ id: string; tick: number } | null>(null)
+  const [revealRequest, setRevealRequest] = useState<{
+    id: string
+    tick: number
+    relativeTop?: number
+  } | null>(null)
   useEffect(() => {
     // Singleton for the same reason as useTreeModel: a page-reload unmount runs
     // before passive cleanup flushes, which would otherwise leak-report this.
     const d = markAsSingleton(
-      model.onReveal(({ id }) => setRevealRequest((prev) => ({ id, tick: (prev?.tick ?? 0) + 1 }))),
+      model.onReveal(({ id, relativeTop }) =>
+        setRevealRequest((prev) => ({
+          id,
+          tick: (prev?.tick ?? 0) + 1,
+          // exactOptionalPropertyTypes: omit the key rather than writing undefined.
+          ...(relativeTop !== undefined ? { relativeTop } : {}),
+        })),
+      ),
     )
     return () => d.dispose()
   }, [model])
@@ -302,15 +313,20 @@ export function Tree<T>(props: ITreeProps<T>) {
     return (node && resolve?.(node)) ?? fallback
   })
 
-  // Reveal scrolls this tree's own container by the minimum needed, computed
-  // from row geometry rather than delegated to `element.scrollIntoView`. That
-  // call also scrolls every ancestor scroller — `overflow: hidden` boxes
-  // included, since script may scroll them — so selecting a row could shift an
-  // outer container or the document and leave the region the compositor had
-  // already rastered behind (double-exposed rows). Geometry also covers the
-  // windowed case, where the target row has no element to call it on.
+  // Reveal scrolls this tree's own container. By default it moves the minimum
+  // needed (nearest edge); a caller-supplied relativeTop (Explorer's
+  // VSCode-parity reveal) instead places the row that fraction down the
+  // viewport (0.5 = center). Both modes are no-ops when the row is already
+  // fully visible. Geometry is computed from row offsets rather than delegated
+  // to `element.scrollIntoView`, which also scrolls every ancestor scroller —
+  // `overflow: hidden` boxes included, since script may scroll them — so
+  // selecting a row could shift an outer container or the document and leave
+  // the region the compositor had already rastered behind (double-exposed
+  // rows). Geometry also covers the windowed case, where the target row has no
+  // element to call it on.
   useLayoutEffect(() => {
     if (!revealRequest) return
+    const { id, relativeTop } = revealRequest
     // The attempt can run before this frame's layout is computed (remount on a
     // container switch, reveal fired mid-commit): the scroller then still
     // reports a pre-layout clientHeight (up to the full content height), the
@@ -336,7 +352,7 @@ export function Tree<T>(props: ITreeProps<T>) {
       attempt += 1
       const scroller = containerRef.current
       if (!scroller) return
-      const idx = visibleRef.current.findIndex((n) => n.id === revealRequest.id)
+      const idx = visibleRef.current.findIndex((n) => n.id === id)
       if (idx < 0) return
       // Uniform-height trees (the overwhelming majority) get the O(1) offset;
       // only a per-row resolver forces the accumulating walk.
@@ -360,10 +376,10 @@ export function Tree<T>(props: ITreeProps<T>) {
         return
       }
       const visibleBottom = visibleTop + viewport
-      let next: number | null = null
-      if (rowTop < visibleTop) next = Math.max(0, rowTop)
-      else if (rowTop + height > visibleBottom) next = rowTop + height - viewport
-      if (next === null) {
+      // VSCode's ExplorerView only reveals a row that is NOT fully visible;
+      // check this before the relativeTop branch so centering never nudges a
+      // row that is already entirely on screen.
+      if (rowTop >= visibleTop && rowTop + height <= visibleBottom) {
         // No scroll this attempt. If the viewport spans the whole content the
         // scroller is pre-layout (a real viewport is smaller); retry on the next
         // frame when layout has settled. A genuinely visible row confirms when
@@ -374,6 +390,19 @@ export function Tree<T>(props: ITreeProps<T>) {
         }
         settle()
         return
+      }
+      let next: number
+      if (relativeTop === undefined) {
+        // Default (selection gestures, SCM, ChangesTree): nearest edge.
+        next = rowTop < visibleTop ? Math.max(0, rowTop) : rowTop + height - viewport
+      } else {
+        // Explorer reveal: clamp the anchor to [0,1] and place the row that
+        // fraction down the viewport (0.5 centers it). The lower bound is
+        // explicit because happy-dom stores negative scrollTop verbatim; the
+        // upper bound is the browser's job (scrollTop clamps to
+        // scrollHeight - clientHeight), since scrollHeight is 0 in tests.
+        const anchor = Math.min(1, Math.max(0, relativeTop))
+        next = Math.max(0, rowTop + (height - viewport) * anchor)
       }
       scroller.scrollTop = next
       settle()

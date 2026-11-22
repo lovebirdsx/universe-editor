@@ -66,6 +66,17 @@ const reveal = async (model: TreeModel<Node>, id: string): Promise<void> => {
   })
 }
 
+/** Reveal through TreeModel.reveal so the relativeTop anchor is forwarded. */
+const revealNode = async (
+  model: TreeModel<Node>,
+  id: string,
+  relativeTop?: number,
+): Promise<void> => {
+  await act(async () => {
+    await model.reveal({ id }, relativeTop)
+  })
+}
+
 let scrollIntoViewSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
@@ -110,6 +121,69 @@ describe('Tree — reveal scrolls only its own scroller', () => {
     await reveal(model, 'r6')
 
     expect(root.scrollTop).toBe(100)
+  })
+
+  it('relativeTop 0.5 centers a row below the viewport', async () => {
+    const model = makeModel(40)
+    const { root } = renderTree(model)
+
+    // Row 20 spans [440, 462); centering puts its middle (451) at the viewport
+    // middle (scrollTop + 110) → scrollTop = 440 - 99 = 341.
+    await revealNode(model, 'r20', 0.5)
+
+    expect(root.scrollTop).toBe(341)
+  })
+
+  it('relativeTop 0.5 centers a row above the viewport and clamps at 0', async () => {
+    const model = makeModel(40)
+    const { root } = renderTree(model)
+    root.scrollTop = 300
+
+    // Row 2 spans [44, 66) → 44 - 99 = -55, clamped to 0.
+    await revealNode(model, 'r2', 0.5)
+
+    expect(root.scrollTop).toBe(0)
+  })
+
+  it('relativeTop does not scroll a fully visible row', async () => {
+    const model = makeModel(40)
+    const { root } = renderTree(model)
+    // Pin a real content height so the pre-layout retry path is not taken.
+    Object.defineProperty(root, 'scrollHeight', {
+      configurable: true,
+      get: () => 40 * ROW_HEIGHT,
+    })
+    root.scrollTop = 100
+
+    // Row 6 spans [132, 154) ⊂ [100, 320) — VSCode never recenters a visible row.
+    await revealNode(model, 'r6', 0.5)
+
+    expect(root.scrollTop).toBe(100)
+  })
+
+  it('relativeTop 0.5 retries on the next frame when the viewport is pre-layout', async () => {
+    const model = makeModel(40)
+    const { root } = renderTree(model)
+    let laidOut = false
+    Object.defineProperty(root, 'clientHeight', {
+      configurable: true,
+      get: () => (laidOut ? VIEWPORT : 40 * ROW_HEIGHT),
+    })
+    Object.defineProperty(root, 'scrollHeight', {
+      configurable: true,
+      get: () => 40 * ROW_HEIGHT,
+    })
+
+    await revealNode(model, 'r20', 0.5)
+    // First attempt saw the content-sized viewport and judged the row visible.
+    expect(root.scrollTop).toBe(0)
+
+    laidOut = true
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+    })
+
+    expect(root.scrollTop).toBe(341)
   })
 
   it('does not scroll when the revealed id is not a visible row', async () => {
