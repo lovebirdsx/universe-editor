@@ -100,9 +100,10 @@ test.describe('@p1 explorer reveal scroll', () => {
     page,
   }) => {
     // VSCode semantics: an off-screen row is revealed with relativeTop 0.5, so
-    // its vertical middle lands on the tree viewport's middle. Use a middle row
-    // (not the last one) — the browser clamps a centered last row to the bottom,
-    // which is indistinguishable from nearest-edge scrolling.
+    // its vertical middle lands on the middle of the area below the pinned
+    // father-folder stack. Use a middle row (not the last one) — the browser
+    // clamps a centered last row to the bottom, which is indistinguishable from
+    // nearest-edge scrolling.
     const tmpDir = mkTempDir('ue2-reveal-center-')
     await Promise.all(
       Array.from({ length: FILE_COUNT }, (_, i) =>
@@ -150,7 +151,10 @@ test.describe('@p1 explorer reveal scroll', () => {
 
     await workbench.runCommand('revealInExplorer', { resource: targetUri })
 
-    // Row centre must sit on the viewport centre (a few px of layout slack).
+    // Row centre must sit on the centre of what the pinned father-folder stack
+    // leaves visible (a few px of layout slack): reveal reserves that band, so
+    // relativeTop 0.5 anchors the row inside [stackBottom, viewportBottom]
+    // rather than on the raw viewport centre.
     await expect
       .poll(
         () =>
@@ -159,9 +163,16 @@ test.describe('@p1 explorer reveal scroll', () => {
             const scroller = el.closest('[role="tree"]') as HTMLElement | null
             if (!scroller) return Number.POSITIVE_INFINITY
             const treeRect = scroller.getBoundingClientRect()
+            const stackBottom = Math.max(
+              treeRect.top,
+              ...[...scroller.querySelectorAll<HTMLElement>('[data-testid="tree-sticky-row"]')].map(
+                (sticky) => sticky.getBoundingClientRect().bottom,
+              ),
+            )
             const rowCenter = (row.top + row.bottom) / 2
-            const viewportCenter = treeRect.top + scroller.clientHeight / 2
-            return Math.abs(rowCenter - viewportCenter)
+            const visibleCenter =
+              stackBottom + (treeRect.top + scroller.clientHeight - stackBottom) / 2
+            return Math.abs(rowCenter - visibleCenter)
           }),
         { timeout: 5000 },
       )
