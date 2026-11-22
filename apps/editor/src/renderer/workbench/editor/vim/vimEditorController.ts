@@ -18,7 +18,12 @@ import type { IVimModeService } from '../../../services/vim/vimModeService.js'
 import type { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
 import type { monaco } from '../monaco/MonacoLoader.js'
 import { reduceVimKey } from './vimKeymap.js'
-import { clampNormalPosition, firstNonBlankColumn, resolveMotion } from './vimMotions.js'
+import {
+  clampNormalPosition,
+  firstNonBlankColumn,
+  lineLength,
+  resolveMotion,
+} from './vimMotions.js'
 import { linewiseRange, resolveOperatorRange } from './vimOperators.js'
 import { getVimRegister, setVimRegister } from './vimRegisters.js'
 import {
@@ -266,24 +271,146 @@ export function createVimEditorController(
     return typeof height === 'number' && height > 0 ? height : 20
   }
 
+  const FOLDING_CONTRIBUTION_ID = 'editor.contrib.folding'
+
+  interface FoldingRegionLike {
+    readonly startLineNumber: number
+    readonly endLineNumber: number
+    readonly isCollapsed: boolean
+  }
+
+  interface FoldingModelLike {
+    getAllRegionsAtLine(lineNumber: number): readonly FoldingRegionLike[]
+  }
+
+  interface FoldingControllerLike extends monaco.editor.IEditorContribution {
+    readonly foldingModel?: FoldingModelLike | null
+  }
+
+  /**
+   * Monaco exposes no public hidden-range accessor, and `getVisibleRanges()`
+   * only covers the viewport. The folding controller is the one source that
+   * also knows about folds below the viewport; feature-detect it so a Monaco
+   * upgrade degrades to the old model-line behaviour instead of throwing.
+   */
+  function foldingModel(): FoldingModelLike | null {
+    const controller = editor.getContribution?.<FoldingControllerLike>(FOLDING_CONTRIBUTION_ID)
+    const model = controller?.foldingModel
+    return typeof model?.getAllRegionsAtLine === 'function' ? model : null
+  }
+
+  /**
+   * A collapsed fold hides `(start, end]`; its start line stays visible. Take
+   * the outermost collapsed ancestor so nested folds count as one screen row
+   * and the snapped target is guaranteed visible.
+   */
+  function hiddenFoldAt(model: FoldingModelLike | null, line: number): FoldingRegionLike | null {
+    if (model === null) return null
+    const regions = model.getAllRegionsAtLine(line)
+    for (let index = regions.length - 1; index >= 0; index--) {
+      const region = regions[index]!
+      if (region.isCollapsed && line > region.startLineNumber) return region
+    }
+    return null
+  }
+
+  /**
+   * Vim counts a closed fold as one screen row. A fold reaching EOF has no row
+   * below it, so a downward step stays on the fold start instead of escaping.
+   */
+  function advanceVisibleLines(
+    model: FoldingModelLike | null,
+    line: number,
+    delta: 1 | -1,
+    steps: number,
+    lineCount: number,
+  ): number {
+    // Keep the common no-folds case O(1); large counts must not loop.
+    if (model === null) return Math.max(1, Math.min(lineCount, line + delta * steps))
+    const hidden = hiddenFoldAt(model, line)
+    let current = hidden === null ? line : hidden.startLineNumber
+    for (let index = 0; index < steps; index++) {
+      if (delta > 0) {
+        if (current >= lineCount) break
+        const fold = hiddenFoldAt(model, current + 1)
+        if (fold === null) current += 1
+        else if (fold.endLineNumber < lineCount) current = fold.endLineNumber + 1
+        else break
+      } else {
+        if (current <= 1) break
+        const fold = hiddenFoldAt(model, current - 1)
+        current = fold === null ? current - 1 : fold.startLineNumber
+      }
+    }
+    return current
+  }
+
+  /** A hidden cursor is displayed on the fold start; normalize before moving. */
+  function normalizeHiddenPosition(
+    model: FoldingModelLike | null,
+    position: VimPosition,
+  ): VimPosition {
+    const fold = hiddenFoldAt(model, position.line)
+    return fold === null ? position : { line: fold.startLineNumber, column: position.column }
+  }
+
+  /**
+   * A motion landing inside a closed fold is displayed on its start line. The
+   * one exception is moving forward from that start line: snapping back would
+   * stall, so escape to the first visible line after the fold.
+   */
+  function snapHiddenMotionTarget(
+    model: FoldingModelLike | null,
+    from: VimPosition,
+    target: VimPosition,
+    motion: VimMotion,
+    lines: readonly string[],
+  ): VimPosition {
+    const fold = hiddenFoldAt(model, target.line)
+    if (fold === null) return target
+    const line =
+      target.line >= from.line &&
+      fold.startLineNumber <= from.line &&
+      fold.endLineNumber < lines.length
+        ? fold.endLineNumber + 1
+        : fold.startLineNumber
+    if (motion === 'gg' || motion === 'G') {
+      return { line, column: firstNonBlankColumn(lines[line - 1] ?? '') }
+    }
+    if (motion === '{' || motion === '}') return { line, column: 1 }
+    const length = lineLength(lines, line)
+    return { line, column: length === 0 ? 1 : Math.max(1, Math.min(length, from.column)) }
+  }
+
   function resolveVisualMotion(
     lines: readonly string[],
     from: VimPosition,
     motion: VimMotion,
     count: number,
   ): VimPosition | null {
-    const visible = visibleRowCount()
+    const folding = foldingModel()
+    const clampColumn = (line: number, column: number): VimPosition => {
+      const length = lineLength(lines, line)
+      return { line, column: length === 0 ? 1 : Math.max(1, Math.min(length, column)) }
+    }
+    const step = (delta: 1 | -1, rows: number): VimPosition =>
+      clampColumn(advanceVisibleLines(folding, from.line, delta, rows, lines.length), from.column)
+
     switch (motion) {
       case 'pageDown':
-        return resolveMotion(lines, from, 'j', visible)
+        return step(1, visibleRowCount())
       case 'pageUp':
-        return resolveMotion(lines, from, 'k', visible)
+        return step(-1, visibleRowCount())
       case 'halfPageDown':
-        return resolveMotion(lines, from, 'j', Math.max(1, Math.floor(visible / 2)))
+        return step(1, Math.max(1, Math.floor(visibleRowCount() / 2)))
       case 'halfPageUp':
-        return resolveMotion(lines, from, 'k', Math.max(1, Math.floor(visible / 2)))
-      default:
-        return resolveMotion(lines, from, motion, count)
+        return step(-1, Math.max(1, Math.floor(visibleRowCount() / 2)))
+      default: {
+        const origin = normalizeHiddenPosition(folding, from)
+        const target = resolveMotion(lines, origin, motion, count)
+        if (target === null) return null
+        return snapHiddenMotionTarget(folding, origin, target, motion, lines)
+      }
     }
   }
 
@@ -315,12 +442,25 @@ export function createVimEditorController(
       case '^':
         return { line: from.line, column: firstNonBlankColumn(model.getLineContent(from.line)) }
       case 'j':
-        return clampColumn(Math.min(model.getLineCount(), from.line + steps), from.column)
+        return clampColumn(
+          advanceVisibleLines(foldingModel(), from.line, 1, steps, model.getLineCount()),
+          from.column,
+        )
       case 'k':
-        return clampColumn(Math.max(1, from.line - steps), from.column)
+        return clampColumn(
+          advanceVisibleLines(foldingModel(), from.line, -1, steps, model.getLineCount()),
+          from.column,
+        )
       case 'enter': {
-        if (from.line >= model.getLineCount()) return from
-        const targetLine = Math.min(model.getLineCount(), from.line + steps)
+        const targetLine = advanceVisibleLines(
+          foldingModel(),
+          from.line,
+          1,
+          steps,
+          model.getLineCount(),
+        )
+        // A fold reaching EOF has no next screen row: the motion fails.
+        if (targetLine === from.line) return from
         return { line: targetLine, column: firstNonBlankColumn(model.getLineContent(targetLine)) }
       }
       default:
@@ -950,10 +1090,13 @@ export function createVimEditorController(
     if (!model) return
 
     if (command.type === 'reveal-line') {
-      const targetLine = Math.max(
+      const requested = Math.max(
         1,
         Math.min(model.getLineCount(), command.line ?? primaryPosition().line),
       )
+      // A collapsed fold displays only its start line; scrolling to a hidden
+      // line would make Monaco unfold it 200 ms later.
+      const targetLine = hiddenFoldAt(foldingModel(), requested)?.startLineNumber ?? requested
       if (command.at === 'center') {
         editor.trigger('vim', 'revealLine', { lineNumber: targetLine - 1, at: 'center' })
       } else if (command.at === 'top') {

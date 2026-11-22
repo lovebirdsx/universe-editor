@@ -140,6 +140,8 @@ useVimSurface({
 
 粘性滚动默认开启（`editor.stickyScroll.enabled`），它是不透明 overlay，`getVisibleRanges()` 仍会算上被盖住的行。控制器通过 `getContribution('store.contrib.stickyScrollController').stickyScrollWidgetHeight` 取实际高度：`zt` 从 `scrollTop` 里减掉它，`H`/`M` 的可见行索引起点也跳过这些行。`H/M/L` 遍历可见 ranges 而不是直接做 `first + count` 算术，折叠造成的空洞不会成为目标行。
 
+移动类 motion（`j/k`、`Enter`、`w/b/e`、`gg/G`、`{/}`、翻页）同样以**屏幕行**计数：闭合折叠只占起始行，控制器从 `getContribution('editor.contrib.folding').foldingModel` 的 `getAllRegionsAtLine()` 取 `(start, end]` 隐藏区，落点隐藏时吸附到折叠起始行（向前且从起始行出发时取 `end+1`），因此不会触发 Monaco 200ms 的自动展开。搜索、`%`、undo 不在吸附范围内——它们本就属于 Vim 默认 `'foldopen'` 的展开场景。
+
 待定 operator 时按 `H/M/L/z` 会取消 operator 并吞键（`dH`、`dz*` 等组合明确不支持）。自动换行下 `H/M/L` 与 `zt/zb` 按逻辑行近似；`Ctrl+E/Y` 用 `wrappedLine` 不受影响。
 
 ### Output 面板（受限 surface）

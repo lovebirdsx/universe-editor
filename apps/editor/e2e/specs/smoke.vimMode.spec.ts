@@ -40,6 +40,10 @@ const text = (page: Page) => page.evaluate(() => window.__E2E__!.getActiveEditor
 const cursor = (page: Page) => page.evaluate(() => window.__E2E__!.getActiveEditorCursor())
 const firstVisibleLine = (page: Page) =>
   page.evaluate(() => window.__E2E__!.getActiveEditorFirstVisibleLine())
+const foldingState = (page: Page) =>
+  page.evaluate(() => window.__E2E__!.getActiveEditorFoldingState())
+const visibleLineCount = (page: Page) =>
+  page.evaluate(() => window.__E2E__!.getActiveEditorVisibleLineCount())
 
 async function setText(page: Page, body: string): Promise<void> {
   await expect
@@ -82,6 +86,21 @@ async function openEditor(
   writeFileSync(filePath, body, 'utf8')
   await workbench.openWorkspace(dir)
   await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')))
+    .toBe(true)
+}
+
+/** JSON has a folding provider; plain text has none. */
+async function openJsonEditor(page: Page, workbench: WorkbenchLike, body: string): Promise<void> {
+  const dir = mkTempDir('universe-editor-e2e-vim-fold-')
+  const filePath = join(dir, 'fold.json')
+  writeFileSync(filePath, body, 'utf8')
+  await workbench.openWorkspace(dir)
+  await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('activeEditorLanguageId')))
+    .toBe('json')
   await expect
     .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')))
     .toBe(true)
@@ -470,6 +489,54 @@ test.describe('@p1 vim mode', () => {
       await expect.poll(() => statusIcon(page)).toBe('vim-normal')
       await page.evaluate((p) => window.__E2E__!.openFileUri(p), fileB)
       await expect.poll(() => statusIcon(page)).toBe('vim-normal')
+    })
+  })
+
+  test('j/k across a collapsed fold keep it closed @regression', async ({ page, workbench }) => {
+    test.slow()
+    const body = '{\n  "fold": {\n    "a": 1,\n    "b": 2\n  },\n  "after": 3\n}'
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await openJsonEditor(page, workbench, body)
+
+    // JSON folding ranges arrive asynchronously; folding before they land is a
+    // silent no-op.
+    await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(2, 1))
+    await expect
+      .poll(() => foldingState(page), { timeout: 20_000 })
+      .toMatchObject({ regionAtCursor: true })
+    await page.keyboard.press('Control+Shift+Alt+f')
+    await expect.poll(() => foldingState(page)).toMatchObject({ collapsedCount: 1 })
+    // The JSON provider's exact region boundaries are not the contract here;
+    // only that rows are hidden and stay hidden after the Vim motions.
+    const foldedVisibleLines = (await visibleLineCount(page)) ?? 0
+    expect(foldedVisibleLines).toBeLessThan(7)
+
+    await setVimModeEnabled(page, true)
+    await expect.poll(() => statusIcon(page)).toBe('vim-normal')
+
+    await test.step('j skips the fold and leaves it collapsed', async () => {
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
+      await page.keyboard.press('j')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 2, column: 1 })
+      await page.keyboard.press('j')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 5, column: 1 })
+
+      // Monaco unfolds a hidden cursor 200 ms after the move; poll at t=0 would
+      // pass before the regression can fire.
+      await page.waitForTimeout(400)
+      expect(await foldingState(page)).toMatchObject({ collapsedCount: 1 })
+      expect(await visibleLineCount(page)).toBe(foldedVisibleLines)
+      expect(await text(page)).toBe(body)
+    })
+
+    await test.step('k skips the fold in the other direction', async () => {
+      await page.keyboard.press('k')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 2, column: 1 })
+      await page.waitForTimeout(400)
+      expect(await foldingState(page)).toMatchObject({ collapsedCount: 1 })
+      expect(await visibleLineCount(page)).toBe(foldedVisibleLines)
+      expect(await text(page)).toBe(body)
     })
   })
 })

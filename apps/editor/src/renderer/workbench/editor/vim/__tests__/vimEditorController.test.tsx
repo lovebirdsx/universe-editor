@@ -41,6 +41,12 @@ function createFakeConfig(initial: Record<string, unknown>): FakeConfig {
   }
 }
 
+interface FakeFoldRegion {
+  readonly startLineNumber: number
+  readonly endLineNumber: number
+  readonly isCollapsed: boolean
+}
+
 function createFakeEditor(lines: string[], doc: Document = document) {
   let selection: VimRange = {
     startLineNumber: 1,
@@ -150,7 +156,12 @@ function createFakeEditor(lines: string[], doc: Document = document) {
     decorationClears: () => decorationClears,
     setContribution: (
       id: string,
-      contribution: monaco.editor.IEditorContribution & { stickyScrollWidgetHeight?: number },
+      contribution: monaco.editor.IEditorContribution & {
+        stickyScrollWidgetHeight?: number
+        foldingModel?: {
+          getAllRegionsAtLine(lineNumber: number): readonly FakeFoldRegion[]
+        } | null
+      },
     ) => {
       contributions.set(id, contribution)
     },
@@ -223,6 +234,42 @@ describe('createVimEditorController', () => {
     })
     fake.focus()
     return { fake, vim, controller }
+  }
+
+  function fold(
+    startLineNumber: number,
+    endLineNumber: number,
+    isCollapsed = true,
+  ): FakeFoldRegion {
+    return { startLineNumber, endLineNumber, isCollapsed }
+  }
+
+  function setFolding(
+    fake: ReturnType<typeof createFakeEditor>,
+    regions: readonly FakeFoldRegion[],
+  ): void {
+    fake.setContribution('editor.contrib.folding', {
+      dispose: () => {},
+      foldingModel: {
+        getAllRegionsAtLine: (line) =>
+          regions.filter(
+            (region) => region.startLineNumber <= line && line <= region.endLineNumber,
+          ),
+      },
+    })
+  }
+
+  function expectVisible(
+    fake: ReturnType<typeof createFakeEditor>,
+    regions: readonly FakeFoldRegion[],
+  ): void {
+    const line = fake.selection().startLineNumber
+    expect(
+      regions.some(
+        (region) =>
+          region.isCollapsed && line > region.startLineNumber && line <= region.endLineNumber,
+      ),
+    ).toBe(false)
   }
 
   it('does nothing while disabled', () => {
@@ -1498,5 +1545,272 @@ describe('createVimEditorController', () => {
     controller.handleKeyDown(key('t'))
     expect(fake.editor.trigger).not.toHaveBeenCalled()
     controller.dispose()
+  })
+
+  describe('folding-aware motions', () => {
+    const lines = (count: number): string[] =>
+      Array.from({ length: count }, (_, index) => `word${index + 1}`)
+
+    function setCursor(fake: ReturnType<typeof createFakeEditor>, line: number, column = 1): void {
+      fake.editor.setPosition({ lineNumber: line, column }, 'vim')
+    }
+
+    it('treats a closed fold as one screen row for j/k', () => {
+      const regions = [fold(10, 20)]
+      const { fake, controller } = createNormalHarness(lines(30))
+      setFolding(fake, regions)
+      setCursor(fake, 9)
+
+      controller.handleKeyDown(key('j'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+      expectVisible(fake, regions)
+
+      controller.handleKeyDown(key('j'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 21 })
+      expectVisible(fake, regions)
+
+      controller.handleKeyDown(key('k'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+      controller.handleKeyDown(key('k'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 9 })
+      expectVisible(fake, regions)
+      controller.dispose()
+    })
+
+    it('counts screen rows rather than model lines', () => {
+      const regions = [fold(2, 10)]
+      const { fake, controller } = createNormalHarness(lines(30))
+      setFolding(fake, regions)
+      setCursor(fake, 1)
+
+      controller.handleKeyDown(key('4'))
+      controller.handleKeyDown(key('j'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 13 })
+      expectVisible(fake, regions)
+
+      setCursor(fake, 11)
+      controller.handleKeyDown(key('2'))
+      controller.handleKeyDown(key('k'))
+      // 11 -> fold start 2 (one screen row) -> 1.
+      expect(fake.selection()).toMatchObject({ startLineNumber: 1 })
+      expectVisible(fake, regions)
+      controller.dispose()
+    })
+
+    it('stops on the fold start when the fold reaches EOF', () => {
+      const regions = [fold(10, 20)]
+      const { fake, controller } = createNormalHarness(lines(20))
+      setFolding(fake, regions)
+
+      setCursor(fake, 10)
+      controller.handleKeyDown(key('j'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+
+      setCursor(fake, 9)
+      controller.handleKeyDown(key('j'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+
+      setCursor(fake, 10)
+      controller.handleKeyDown(key('k'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 9 })
+      expectVisible(fake, regions)
+      controller.dispose()
+    })
+
+    it('uses the outermost collapsed fold for nested ranges', () => {
+      const regions = [fold(5, 25), fold(10, 15)]
+      const { fake, controller } = createNormalHarness(lines(30))
+      setFolding(fake, regions)
+      setCursor(fake, 4)
+
+      controller.handleKeyDown(key('j'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 5 })
+      controller.handleKeyDown(key('j'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 26 })
+      controller.handleKeyDown(key('k'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 5 })
+      expectVisible(fake, regions)
+      controller.dispose()
+    })
+
+    it('ignores expanded folds', () => {
+      const regions = [fold(10, 20, false)]
+      const { fake, controller } = createNormalHarness(lines(30))
+      setFolding(fake, regions)
+      setCursor(fake, 9)
+
+      controller.handleKeyDown(key('j'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+      controller.handleKeyDown(key('j'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 11 })
+      controller.dispose()
+    })
+
+    it('moves Enter onto the first non-blank screen row after a fold', () => {
+      const regions = [fold(2, 3)]
+      const { fake, controller } = createNormalHarness(['top', '  hidden1', '  hidden2', '  end'])
+      setFolding(fake, regions)
+      setCursor(fake, 2)
+
+      controller.handleKeyDown(key('Enter'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 4, startColumn: 3 })
+
+      controller.handleKeyDown(key('Enter'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 4, startColumn: 3 })
+      controller.dispose()
+    })
+
+    it('counts page motions by visible screen rows', () => {
+      const regions = [fold(20, 60)]
+      const { fake, controller } = createNormalHarness(lines(100))
+      setFolding(fake, regions)
+      fake.editor.getVisibleRanges = () => [
+        { startLineNumber: 10, startColumn: 1, endLineNumber: 20, endColumn: 1 },
+        { startLineNumber: 61, startColumn: 1, endLineNumber: 80, endColumn: 1 },
+      ]
+
+      setCursor(fake, 10)
+      controller.handleKeyDown(key('PageDown'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 81 })
+      expectVisible(fake, regions)
+
+      controller.handleKeyDown(key('PageUp'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+      expectVisible(fake, regions)
+
+      setCursor(fake, 10)
+      controller.handleKeyDown(key('d', { ctrlKey: true }))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 65 })
+      expectVisible(fake, regions)
+
+      controller.handleKeyDown(key('u', { ctrlKey: true }))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+      expectVisible(fake, regions)
+      controller.dispose()
+    })
+
+    it('snaps word motions that land in a closed fold', () => {
+      const regions = [fold(10, 20)]
+      const { fake, controller } = createNormalHarness(lines(30))
+      setFolding(fake, regions)
+      setCursor(fake, 10)
+
+      controller.handleKeyDown(key('w'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 21 })
+      expectVisible(fake, regions)
+
+      controller.handleKeyDown(key('b'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+      expectVisible(fake, regions)
+
+      setCursor(fake, 9)
+      controller.handleKeyDown(key('w'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+      expectVisible(fake, regions)
+      controller.dispose()
+    })
+
+    it('snaps paragraph motions to the fold start', () => {
+      const regions = [fold(10, 20)]
+      const body = lines(30)
+      body[14] = ''
+      const { fake, controller } = createNormalHarness(body)
+      setFolding(fake, regions)
+
+      setCursor(fake, 1)
+      controller.handleKeyDown(key('}'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10, startColumn: 1 })
+      expectVisible(fake, regions)
+
+      controller.handleKeyDown(key('}'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 21, startColumn: 1 })
+      expectVisible(fake, regions)
+
+      setCursor(fake, 25)
+      controller.handleKeyDown(key('{'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10, startColumn: 1 })
+      expectVisible(fake, regions)
+      controller.dispose()
+    })
+
+    it('snaps gg/G targets and keeps their first non-blank column', () => {
+      const regions = [fold(10, 20)]
+      const body = lines(30)
+      body[9] = '  fold-start'
+      const { fake, controller } = createNormalHarness(body)
+      setFolding(fake, regions)
+
+      setCursor(fake, 1)
+      controller.handleKeyDown(key('1'))
+      controller.handleKeyDown(key('5'))
+      controller.handleKeyDown(key('G'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10, startColumn: 3 })
+      expectVisible(fake, regions)
+
+      setCursor(fake, 21)
+      controller.handleKeyDown(key('1'))
+      controller.handleKeyDown(key('5'))
+      controller.handleKeyDown(key('G'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10, startColumn: 3 })
+      expectVisible(fake, regions)
+
+      setCursor(fake, 1)
+      controller.handleKeyDown(key('2'))
+      controller.handleKeyDown(key('5'))
+      controller.handleKeyDown(key('G'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 25 })
+      controller.dispose()
+    })
+
+    it('normalizes a hidden starting line before moving', () => {
+      const regions = [fold(10, 20)]
+      const { fake, controller } = createNormalHarness(lines(30))
+      setFolding(fake, regions)
+      setCursor(fake, 15)
+
+      controller.handleKeyDown(key('j'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 21 })
+      expectVisible(fake, regions)
+
+      setCursor(fake, 15)
+      controller.handleKeyDown(key('k'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 9 })
+      expectVisible(fake, regions)
+      controller.dispose()
+    })
+
+    it('snaps zt/zz/zb targets to the fold start', () => {
+      const regions = [fold(10, 20)]
+      const { fake, controller } = createNormalHarness(lines(30))
+      setFolding(fake, regions)
+      setCursor(fake, 1)
+
+      controller.handleKeyDown(key('1'))
+      controller.handleKeyDown(key('5'))
+      controller.handleKeyDown(key('z'))
+      controller.handleKeyDown(key('t'))
+      expect(fake.editor.setScrollTop).toHaveBeenLastCalledWith(180)
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10, startColumn: 1 })
+
+      setCursor(fake, 1)
+      controller.handleKeyDown(key('1'))
+      controller.handleKeyDown(key('5'))
+      controller.handleKeyDown(key('z'))
+      controller.handleKeyDown(key('z'))
+      expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'revealLine', {
+        lineNumber: 9,
+        at: 'center',
+      })
+
+      setCursor(fake, 1)
+      controller.handleKeyDown(key('1'))
+      controller.handleKeyDown(key('5'))
+      controller.handleKeyDown(key('z'))
+      controller.handleKeyDown(key('b'))
+      expect(fake.editor.setScrollTop).toHaveBeenLastCalledWith(170)
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10 })
+      expectVisible(fake, regions)
+      controller.dispose()
+    })
   })
 })
