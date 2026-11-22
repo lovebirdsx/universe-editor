@@ -11,6 +11,7 @@ import {
   deriveToolCallDisplay,
   humanizeMcpTool,
   isKeepPlanning,
+  isSubagentRunActive,
   keepPlanningFeedback,
   subagentRequest,
   subagentTaskTitle,
@@ -115,6 +116,36 @@ describe('isKeepPlanning', () => {
     expect(isKeepPlanning(makeCall({ kind: 'switch_mode', status: 'failed' }))).toBe(true)
     expect(isKeepPlanning(makeCall({ kind: 'switch_mode', status: 'completed' }))).toBe(false)
     expect(isKeepPlanning(makeCall({ kind: 'execute', status: 'failed' }))).toBe(false)
+  })
+})
+
+describe('isSubagentRunActive', () => {
+  it('is true while the card itself is pending or running', () => {
+    expect(isSubagentRunActive(makeCall({ status: 'pending' }))).toBe(true)
+    expect(isSubagentRunActive(makeCall({ status: 'in_progress' }))).toBe(true)
+  })
+
+  it('keeps a settled spawn card running while its anchor has no duration', () => {
+    // The spawning item settles in milliseconds; the fork's run anchor is the
+    // only signal that the sub-agent is still working.
+    expect(
+      isSubagentRunActive(makeCall({ status: 'completed', subagentRunStartedAt: 5_000 })),
+    ).toBe(true)
+  })
+
+  it('is false once the run duration arrives or the card never ran', () => {
+    expect(
+      isSubagentRunActive(
+        makeCall({ status: 'completed', subagentRunStartedAt: 5_000, durationMs: 12_000 }),
+      ),
+    ).toBe(false)
+    // A zero span still means the run has a duration; only `undefined` is "still running".
+    expect(
+      isSubagentRunActive(
+        makeCall({ status: 'completed', subagentRunStartedAt: 5_000, durationMs: 0 }),
+      ),
+    ).toBe(false)
+    expect(isSubagentRunActive(makeCall({ status: 'completed' }))).toBe(false)
   })
 })
 

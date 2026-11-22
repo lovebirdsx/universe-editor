@@ -19,7 +19,7 @@ import type {
 } from '../../services/acp/session/acpSession.js'
 import { firstLineSummary, stripCodeFence } from '../../services/acp/session/acpSessionContent.js'
 import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
-import { deriveToolCallDisplay, isSyntheticDenial } from './toolCallDisplay.js'
+import { deriveToolCallDisplay, isSubagentRunActive, isSyntheticDenial } from './toolCallDisplay.js'
 import {
   hidesNestedContent,
   isAlwaysKeptToolCall,
@@ -249,9 +249,31 @@ export function getHiddenActivity(
 }
 
 /**
- * The same tail hint for a running sub-agent card: its own last child, when the
- * mode hides it. A visible tail (message, nested sub-agent card that renders its
- * own hint) yields null, mirroring the top-level rule.
+ * The latest step of a sub-agent timeline: the last thought or tool call,
+ * skipping the agent's own prose. Mirrors the phone projection
+ * (`projectSubagentTail`) so both surfaces agree on what "current step" means.
+ */
+function latestSubagentStep(
+  children: readonly AcpChildItem[] | undefined,
+): AcpChildItem | undefined {
+  if (children === undefined) return undefined
+  for (let i = children.length - 1; i >= 0; i--) {
+    const child = children[i]
+    if (child === undefined) continue
+    if (child.kind !== 'message') return child
+    if (child.message.role === 'thought') return child
+    // Agent prose is not a step; keep looking back for the last thought/tool.
+  }
+  return undefined
+}
+
+/**
+ * The activity row for a running sub-agent card. `onlyMessage` mirrors the phone:
+ * the row stays mounted for the whole run — a placeholder while no step is known
+ * yet, the latest thought/tool otherwise — so parallel cards do not jump as their
+ * tails churn. `hideThinking` keeps its original rule: only a trailing hidden
+ * thought surfaces a hint; a visible tail (agent reply, tool card) must not grow a
+ * second line next to content already on screen.
  */
 export function getSubagentHiddenActivity(
   call: AcpToolCall,
@@ -259,6 +281,16 @@ export function getSubagentHiddenActivity(
   suppressed: boolean,
 ): HiddenActivity | null {
   if (suppressed || !hidesNestedContent(mode) || !isSubagentCall(call)) return null
+
+  if (mode === 'onlyMessage') {
+    if (!isSubagentRunActive(call)) return null
+    // Always-kept cards are still the latest step: the card may be collapsed,
+    // where this row is the only visible progress. Repeating one when expanded
+    // is deliberate — hiding it would reintroduce tail-driven height changes.
+    const step = latestSubagentStep(call.children)
+    return step === undefined ? { kind: 'thinking' } : activityForHiddenTail(step, mode)
+  }
+
   if (call.status !== 'pending' && call.status !== 'in_progress') return null
   const tail = call.children?.[call.children.length - 1]
   if (tail === undefined || isChildItemVisible(tail, mode)) return null

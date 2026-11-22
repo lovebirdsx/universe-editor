@@ -15,6 +15,7 @@ import type { AcpSubagentStats, AcpToolCall } from '../../services/acp/session/a
 import { useElapsedTime } from './elapsedTime.js'
 import { useUsdToCnyRate } from './useExchangeRate.js'
 import { formatCny, formatTokens } from './SessionCostIndicator.js'
+import { isSubagentRunActive } from './toolCallDisplay.js'
 import styles from './agents.module.css'
 
 const FALLBACK_RATE = 7.2
@@ -72,10 +73,7 @@ export function SubagentStatsBadge({ call }: { call: AcpToolCall }) {
  * nothing to show — e.g. a replayed card the fork reported no span for.
  */
 function useRunDuration(call: AcpToolCall): string | null {
-  const running =
-    call.status === 'pending' ||
-    call.status === 'in_progress' ||
-    (call.subagentRunStartedAt !== undefined && call.durationMs === undefined)
+  const running = isSubagentRunActive(call)
   return useElapsedTime(running, call.subagentRunStartedAt ?? call.startedAt, call.durationMs)
 }
 

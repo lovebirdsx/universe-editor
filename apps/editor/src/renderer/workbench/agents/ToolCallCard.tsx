@@ -418,6 +418,8 @@ export const ToolCallCard = memo(function ToolCallCard({
 
   // onlyMessage hides a running sub-agent's tools; surface its current step on
   // the card itself — under the header when folded, below the children when open.
+  // Under onlyMessage the row stays mounted for the whole run (placeholder while
+  // no step is known yet) so tail churn never changes the card height.
   const mode = subtreeCollapse?.collapse.mode
   const activitySuppressed = subtreeCollapse?.activitySuppressed === true
   const hiddenActivity = useMemo(

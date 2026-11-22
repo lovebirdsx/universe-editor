@@ -2745,6 +2745,59 @@ describe('ChatBody — display modes', () => {
     expect(queryByTestId('acp-subagent-hidden-activity')).toBeNull()
   })
 
+  it('keeps a running sub-agent activity row while it has no step yet', () => {
+    const task: TimelineItem = {
+      kind: 'toolCall',
+      id: 'task',
+      call: {
+        ...makeTaskCall('task', []),
+        subagent: true,
+        status: 'in_progress',
+      },
+    }
+    const session = makeSession('s1', [roleMessage('u', 'user', 'question'), task], {
+      status: 'running',
+    })
+    const { queryByTestId, getByTestId } = renderChat(session)
+    act(() => session.setCollapseMode('onlyMessage'))
+    expect(queryByTestId('acp-timeline-hidden-activity')).toBeNull()
+    expect(getByTestId('acp-subagent-hidden-activity-primary').textContent).toBe('Thinking…')
+    expect(getByTestId('acp-subagent-hidden-activity-detail').textContent).toBe('')
+  })
+
+  it('skips trailing sub-agent prose back to the last tool step', () => {
+    const task: TimelineItem = {
+      kind: 'toolCall',
+      id: 'task',
+      call: {
+        ...makeTaskCall('task', [
+          {
+            kind: 'toolCall',
+            id: 'inner-read',
+            call: {
+              id: 'inner-read',
+              title: 'inner-read',
+              kind: 'read',
+              status: 'in_progress',
+              text: '',
+              blocks: [],
+              diffs: [],
+            },
+          },
+          childMessage('sm-agent', 'done reading'),
+        ]),
+        subagent: true,
+        status: 'in_progress',
+      },
+    }
+    const session = makeSession('s1', [roleMessage('u', 'user', 'question'), task], {
+      status: 'running',
+    })
+    const { getByTestId } = renderChat(session)
+    act(() => session.setCollapseMode('onlyMessage'))
+    expect(getByTestId('acp-subagent-hidden-activity-primary').textContent).toBe('inner-read')
+  })
+
   it('keyboard navigation skips slots hidden by the display mode', () => {
     const session = makeSession('s1', [
       roleMessage('u', 'user', 'question'),

@@ -157,31 +157,8 @@ interface CardExtras {
   activitySuppressed?: boolean
 }
 
-function renderCard(
-  call: AcpToolCall,
-  config: Record<string, unknown> = {},
-  extras: CardExtras = {},
-) {
-  const services = new ServiceCollection()
-  services.set(IEditorService, {
-    _serviceBrand: undefined,
-    openEditor: vi.fn().mockResolvedValue(undefined),
-  } as unknown as IEditorServiceType)
-  services.set(IConfigurationService, {
-    _serviceBrand: undefined,
-    get: (key: string) => config[key],
-  } as unknown as IConfigurationServiceType)
-  const groups = makeGroupsService()
-  services.set(IEditorGroupsService, groups)
-  services.set(IEditorResolverService, {
-    _serviceBrand: undefined,
-    openEditor: vi.fn((resource: unknown, options: unknown) => {
-      resolvedOpens.push({ resource, options })
-      return Promise.resolve(undefined)
-    }),
-  } as unknown as IEditorResolverServiceType)
-  const inst = new InstantiationService(services)
-  const view = render(
+function cardElement(call: AcpToolCall, extras: CardExtras, inst: InstantiationService) {
+  return (
     <ServicesContext.Provider value={inst}>
       <ul>
         <ToolCallCard
@@ -215,9 +192,36 @@ function renderCard(
           {...(extras.collapsed !== undefined ? { collapsed: extras.collapsed } : {})}
         />
       </ul>
-    </ServicesContext.Provider>,
+    </ServicesContext.Provider>
   )
-  return { view, groups }
+}
+
+function renderCard(
+  call: AcpToolCall,
+  config: Record<string, unknown> = {},
+  extras: CardExtras = {},
+) {
+  const services = new ServiceCollection()
+  services.set(IEditorService, {
+    _serviceBrand: undefined,
+    openEditor: vi.fn().mockResolvedValue(undefined),
+  } as unknown as IEditorServiceType)
+  services.set(IConfigurationService, {
+    _serviceBrand: undefined,
+    get: (key: string) => config[key],
+  } as unknown as IConfigurationServiceType)
+  const groups = makeGroupsService()
+  services.set(IEditorGroupsService, groups)
+  services.set(IEditorResolverService, {
+    _serviceBrand: undefined,
+    openEditor: vi.fn((resource: unknown, options: unknown) => {
+      resolvedOpens.push({ resource, options })
+      return Promise.resolve(undefined)
+    }),
+  } as unknown as IEditorResolverServiceType)
+  const inst = new InstantiationService(services)
+  const view = render(cardElement(call, extras, inst))
+  return { view, groups, inst }
 }
 
 describe('ToolCallCard', () => {
@@ -506,6 +510,141 @@ describe('ToolCallCard', () => {
 
     expect(screen.getByTestId('acp-subagent-hidden-activity-primary').textContent).toBe('Read file')
     expect(screen.getByTestId('acp-subagent-hidden-activity-detail').textContent).toBe('')
+  })
+
+  it('keeps the activity row while a running sub-agent has no step yet', () => {
+    const running = makeCall({
+      kind: 'think',
+      subagent: true,
+      status: 'in_progress',
+      title: 'Explore the repo',
+      children: [],
+    })
+    for (const collapsed of [true, false]) {
+      renderCard(running, {}, { collapseMode: 'onlyMessage', collapsed })
+      expect(screen.getByTestId('acp-subagent-hidden-activity-primary').textContent).toBe(
+        'Thinking…',
+      )
+      expect(screen.getByTestId('acp-subagent-hidden-activity-detail').textContent).toBe('')
+      cleanup()
+    }
+  })
+
+  it('skips trailing sub-agent prose back to the last tool step', () => {
+    renderCard(
+      makeCall({
+        kind: 'think',
+        subagent: true,
+        status: 'in_progress',
+        title: 'Explore the repo',
+        children: [
+          {
+            kind: 'toolCall',
+            id: 'sc-read',
+            call: makeCall({
+              id: 'sc-read',
+              kind: 'read',
+              title: 'Read file',
+              status: 'in_progress',
+              locations: [{ path: 'src/a.ts' }],
+            }),
+          },
+          { kind: 'message', id: 'sm-agent', message: makeChildMessage('done reading') },
+        ],
+      }),
+      {},
+      { collapseMode: 'onlyMessage', collapsed: true },
+    )
+
+    expect(screen.getByTestId('acp-subagent-hidden-activity-primary').textContent).toBe('Read file')
+    expect(screen.getByTestId('acp-subagent-hidden-activity-detail').textContent).toContain(
+      'src/a.ts',
+    )
+  })
+
+  it('keeps the activity row mounted while the sub-agent tail churns', () => {
+    const extras: CardExtras = { collapseMode: 'onlyMessage', collapsed: true }
+    const toolTail = makeCall({
+      kind: 'think',
+      subagent: true,
+      status: 'in_progress',
+      title: 'Explore the repo',
+      children: [
+        {
+          kind: 'toolCall',
+          id: 'sc-read',
+          call: makeCall({
+            id: 'sc-read',
+            kind: 'read',
+            title: 'Read file',
+            status: 'in_progress',
+          }),
+        },
+      ],
+    })
+    const { view, inst } = renderCard(toolTail, {}, extras)
+    const before = screen.getByTestId('acp-subagent-hidden-activity')
+
+    view.rerender(
+      cardElement(
+        makeCall({
+          kind: 'think',
+          subagent: true,
+          status: 'in_progress',
+          title: 'Explore the repo',
+          children: [
+            { kind: 'message', id: 'sm-agent', message: makeChildMessage('done reading') },
+          ],
+        }),
+        extras,
+        inst,
+      ),
+    )
+    expect(screen.getByTestId('acp-subagent-hidden-activity')).toBe(before)
+    expect(screen.getByTestId('acp-subagent-hidden-activity-primary').textContent).toBe('Thinking…')
+
+    view.rerender(
+      cardElement(
+        makeCall({
+          kind: 'think',
+          subagent: true,
+          status: 'in_progress',
+          title: 'Explore the repo',
+          children: [],
+        }),
+        extras,
+        inst,
+      ),
+    )
+    expect(screen.getByTestId('acp-subagent-hidden-activity')).toBe(before)
+    expect(screen.getByTestId('acp-subagent-hidden-activity-primary').textContent).toBe('Thinking…')
+  })
+
+  it('keeps the row on a settled spawn card while its sub-agent run is anchored', () => {
+    const anchored = makeCall({
+      kind: 'think',
+      subagent: true,
+      status: 'completed',
+      subagentRunStartedAt: 5_000,
+      title: 'Explore the repo',
+      children: [
+        {
+          kind: 'message',
+          id: 'sm-thought',
+          message: { ...makeChildMessage('working'), role: 'thought' },
+        },
+      ],
+    })
+    renderCard(anchored, {}, { collapseMode: 'onlyMessage', collapsed: true })
+    expect(screen.getByTestId('acp-subagent-hidden-activity-detail').textContent).toBe('working')
+    cleanup()
+
+    renderCard(
+      { ...anchored, durationMs: 12_000 },
+      {},
+      { collapseMode: 'onlyMessage', collapsed: true },
+    )
+    expect(screen.queryByTestId('acp-subagent-hidden-activity')).toBeNull()
   })
 
   it('hides the sub-agent timeline while the parent card is collapsed', () => {

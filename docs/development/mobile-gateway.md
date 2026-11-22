@@ -212,9 +212,9 @@ v25 增加 `usage_changed` 增量（`usage?` 全量替换，缺省表示清空�
 v26 把触发器判决枚举收敛为 `info` / `escalate`：`MobileSessionSummary.automation.verdict?` 与 PC 历史同口径，旧的 `auto-approve` / `reject` 不再下发。
 v27 增加子 Agent 卡片的 `subagentTail?`：运行中子 Agent 的最近一步（从末尾回溯、跳过 agent 文本的
 思考或工具 child），PC 下发其压缩形态（思考首行摘要，或工具的标题 / 状态 / 首个路径 / 秒表 / 失败原因
-字段），手机端在卡片底部显示该子 Agent 的当前进展。与桌面 `getSubagentHiddenActivity` 不同：手机不渲染
-任何 child，所以末尾是可见内容时不清空；该行在运行期间常驻（尚无步骤时显示「正在思考…」占位），避免多个
-并行子 Agent 卡片随 tail 变化反复增减高度而抖动。
+字段），手机端在卡片底部显示该子 Agent 的当前进展。该行在运行期间常驻（尚无步骤时显示「正在思考…」占位），
+避免多个并行子 Agent 卡片随 tail 变化反复增减高度而抖动；桌面 `getSubagentHiddenActivity` 与手机同语义，
+并额外用 `subagentRunStartedAt` 锚点覆盖「spawn 卡已 settle、子 Agent 仍在运行」的场景。
 v28 增加会话重建帧 `session_restarting { ref }` / `session_replaced { ref, next }`（MCP 变更的「关闭+替换」不再被手机当成会话关闭，见 §4「会话重建」）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回

@@ -501,9 +501,9 @@ describe('getSubagentHiddenActivity', () => {
   const task = (children: readonly AcpChildItem[], overrides: Partial<AcpToolCall> = {}) =>
     call({ id: 'task', subagent: true, status: 'in_progress', children, ...overrides })
 
-  it('reports the hidden running tool at the tail of a running sub-agent', () => {
+  it('reports the latest thought or tool, skipping trailing agent prose', () => {
     const t = task([
-      childMessage(message('m', 'agent', 'looking')),
+      childMessage(message('th', 'thought', 'plan the read')),
       childTool({
         id: 'read',
         title: 'Read file',
@@ -512,6 +512,7 @@ describe('getSubagentHiddenActivity', () => {
         locations: [{ path: 'src/a.ts', line: 3 }],
         startedAt: 500,
       }),
+      childMessage(message('m', 'agent', 'done reading')),
     ])
     expect(getSubagentHiddenActivity(t, 'onlyMessage', false)).toEqual({
       kind: 'tool',
@@ -529,7 +530,7 @@ describe('getSubagentHiddenActivity', () => {
     })
   })
 
-  it('summarizes a hidden thought only under onlyMessage', () => {
+  it('summarizes a trailing thought only under onlyMessage', () => {
     const t = task([childMessage(message('th', 'thought', 'plan the read', { streaming: true }))])
     expect(getSubagentHiddenActivity(t, 'onlyMessage', false)).toEqual({
       kind: 'thinking',
@@ -538,24 +539,77 @@ describe('getSubagentHiddenActivity', () => {
     expect(getSubagentHiddenActivity(t, 'hideThinking', false)).toEqual({ kind: 'thinking' })
   })
 
-  it('returns null when the tail is visible or is a nested sub-agent card', () => {
-    const visible = task([childMessage(message('m', 'agent', 'done reading'))])
-    expect(getSubagentHiddenActivity(visible, 'onlyMessage', false)).toBe(null)
-    const nested = task([childTool({ id: 'inner', subagent: true, status: 'in_progress' })])
-    expect(getSubagentHiddenActivity(nested, 'onlyMessage', false)).toBe(null)
-    const readUnderHideThinking = task([
-      childTool({ id: 'r', kind: 'read', status: 'in_progress' }),
-    ])
-    expect(getSubagentHiddenActivity(readUnderHideThinking, 'hideThinking', false)).toBe(null)
+  it('keeps a placeholder row while the run has no step yet', () => {
+    expect(getSubagentHiddenActivity(task([]), 'onlyMessage', false)).toEqual({ kind: 'thinking' })
+    const proseOnly = task([childMessage(message('m', 'agent', 'looking'))])
+    expect(getSubagentHiddenActivity(proseOnly, 'onlyMessage', false)).toEqual({
+      kind: 'thinking',
+    })
   })
 
-  it('returns null for settled, suppressed, empty or folding-mode cards', () => {
+  it('describes an always-kept trailing card as the latest step', () => {
+    const plan = task([
+      childTool({
+        id: 'plan',
+        title: 'Exit plan mode',
+        kind: 'switch_mode',
+        status: 'in_progress',
+      }),
+    ])
+    expect(getSubagentHiddenActivity(plan, 'onlyMessage', false)).toMatchObject({
+      kind: 'tool',
+      title: 'Exit plan mode',
+    })
+
+    const nested = task([
+      childTool({ id: 'inner', title: 'Explore', subagent: true, status: 'in_progress' }),
+    ])
+    expect(getSubagentHiddenActivity(nested, 'onlyMessage', false)).toMatchObject({
+      kind: 'tool',
+      title: 'Explore',
+    })
+  })
+
+  it('keeps the row while a settled spawn card anchors a running sub-agent', () => {
+    const anchored = task(
+      [childTool({ id: 'read', title: 'Read file', kind: 'read', durationMs: 900 })],
+      { status: 'completed', subagentRunStartedAt: 5_000 },
+    )
+    expect(getSubagentHiddenActivity(anchored, 'onlyMessage', false)).toMatchObject({
+      kind: 'settledTool',
+    })
+
+    const done = task(
+      [childTool({ id: 'read', title: 'Read file', kind: 'read', durationMs: 900 })],
+      { status: 'completed', subagentRunStartedAt: 5_000, durationMs: 12_000 },
+    )
+    expect(getSubagentHiddenActivity(done, 'onlyMessage', false)).toBe(null)
+  })
+
+  it('preserves hideThinking: only a hidden thought tail surfaces a hint', () => {
+    const thoughtTail = task([
+      childMessage(message('th', 'thought', 'planning', { streaming: true })),
+    ])
+    expect(getSubagentHiddenActivity(thoughtTail, 'hideThinking', false)).toEqual({
+      kind: 'thinking',
+    })
+
+    const toolTail = task([childTool({ id: 'read', kind: 'read', status: 'in_progress' })])
+    expect(getSubagentHiddenActivity(toolTail, 'hideThinking', false)).toBe(null)
+
+    const proseTail = task([childMessage(message('m', 'agent', 'done reading'))])
+    expect(getSubagentHiddenActivity(proseTail, 'hideThinking', false)).toBe(null)
+  })
+
+  it('returns null when suppressed, non-subagent, settled without an anchor, or a folding mode', () => {
     const children = [childTool({ id: 'read', kind: 'read', status: 'in_progress' })]
     expect(getSubagentHiddenActivity(task(children), 'onlyMessage', true)).toBe(null)
+    expect(getSubagentHiddenActivity(call({ status: 'in_progress' }), 'onlyMessage', false)).toBe(
+      null,
+    )
     expect(
       getSubagentHiddenActivity(task(children, { status: 'completed' }), 'onlyMessage', false),
     ).toBe(null)
-    expect(getSubagentHiddenActivity(task([]), 'onlyMessage', false)).toBe(null)
     expect(getSubagentHiddenActivity(task(children), 'default', false)).toBe(null)
   })
 })

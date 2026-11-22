@@ -142,6 +142,21 @@ export function isSyntheticDenial(call: AcpToolCall): boolean {
 }
 
 /**
+ * Whether the sub-agent behind this spawn card is still running. The card's own
+ * status is not enough: forks can settle the spawning item in milliseconds while
+ * the sub-agent keeps working, and then only the `subagentRunStartedAt` anchor
+ * without a duration reports the run. Shared with the activity row so it stays
+ * mounted for the whole run.
+ */
+export function isSubagentRunActive(call: AcpToolCall): boolean {
+  return (
+    call.status === 'pending' ||
+    call.status === 'in_progress' ||
+    (call.subagentRunStartedAt !== undefined && call.durationMs === undefined)
+  )
+}
+
+/**
  * 卡片头的 kind tooltip。子 agent 卡在 wire 上的 kind 仍是 `think`（claude）/
  * `other`（codex）——那是它从工具继承来的 kind，不是它的身份，照原样显示会误导；
  * 标记为「Sub Agent」，与输入行子 agent 模型选择器同词。
