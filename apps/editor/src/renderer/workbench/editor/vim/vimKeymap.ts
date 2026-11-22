@@ -35,6 +35,20 @@ const MOTION_KEYS = new Set<string>([
   '}',
 ])
 
+/** `z` + key fold commands that map straight to a Monaco editor action. */
+const Z_FOLD_COMMANDS = new Map<string, string>([
+  ['o', 'editor.unfold'],
+  ['O', 'editor.unfoldRecursively'],
+  ['c', 'editor.fold'],
+  ['C', 'editor.foldRecursively'],
+  ['a', 'editor.toggleFold'],
+  ['A', 'editor.toggleFoldRecursively'],
+  ['M', 'editor.foldAll'],
+  ['R', 'editor.unfoldAll'],
+  ['j', 'editor.gotoNextFold'],
+  ['k', 'editor.gotoPreviousFold'],
+])
+
 /**
  * `event.key` names for the navigation keys, mapped to their Vim equivalent.
  * Without this they would fall into the Normal-mode "swallow unexpected keys"
@@ -260,6 +274,9 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
         count: Math.max(1, state.count),
       })
     }
+    if (key === 'z') {
+      return emit(state, { type: 'fold-goto', edge: prefix === '[' ? 'start' : 'end' })
+    }
     if (isFunctionKeyName(key)) return { state: idle(state), command: null, handled: false }
     return { state: idle(state), command: null, handled: true }
   }
@@ -285,6 +302,10 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
         // A count is a line number (`[count]zt`), not a repetition.
         line: state.count > 0 ? state.count : null,
       })
+    }
+    const foldCommand = Z_FOLD_COMMANDS.get(key)
+    if (foldCommand !== undefined) {
+      return emit(state, { type: 'editor-command', commandId: foldCommand })
     }
     if (isFunctionKeyName(key)) return { state: idle(state), command: null, handled: false }
     return { state: idle(state), command: null, handled: true }

@@ -31,8 +31,8 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | `apps/editor/src/renderer/actions/terminalNormalActions.ts` | 终端 Normal 的进入 / 退出 / 滚动 / 选择 / 复制命令 |
 | `apps/editor/src/renderer/workbench/panel/terminal/terminalNormalMode.ts` | 终端 Normal 状态机（视口滚动 + 按行选择） |
 | `apps/editor/src/renderer/services/terminal/terminalNormalModeRegistry.ts` | 当前持有焦点的终端 controller 注册表 |
-| `apps/editor/src/renderer/workbench/editor/vim/vimKeymap.ts` | 编辑器 Normal/Insert reducer：裸键、计数、待定前缀（`g` / `[` / `]` / `>` / `<` / `z`）、operator、视口滚动 |
-| `apps/editor/src/renderer/workbench/editor/vim/vimEditorController.ts` | 把 reducer 的输出绑到 Monaco：动作执行、搜索、模式同步；`executeCommand` 回调仅用于 workbench 命令 |
+| `apps/editor/src/renderer/workbench/editor/vim/vimKeymap.ts` | 编辑器 Normal/Insert reducer：裸键、计数、待定前缀（`g` / `[` / `]` / `>` / `<` / `z`）、operator、折叠命令、视口滚动 |
+| `apps/editor/src/renderer/workbench/editor/vim/vimEditorController.ts` | 把 reducer 的输出绑到 Monaco：动作执行、搜索、折叠跳转、模式同步；`executeCommand` 回调仅用于 workbench 命令 |
 | `apps/editor/src/renderer/workbench/panel/output/outputVimKeymap.ts` | Output 只读编辑器的受限 reducer：仅 `j/k`、`Ctrl+E/Y/D/U/F/B`、`gg/G`，不产生任何编辑 / 搜索命令 |
 | `apps/editor/src/renderer/workbench/panel/output/outputVimController.ts` | 把受限 reducer 绑到 Output 的 Monaco 实例；只跟踪 text focus 与 blur 重置 |
 
@@ -124,7 +124,7 @@ useVimSurface({
 - `runMatches` 会先尝试带 `when` 的条目，再尝试默认条目，取第一条匹配；因此同一键的「视图专用含义」不会被注册顺序遮蔽。所有候选都不匹配时**消费但不执行**。
 - 用户 `vim.keymap` 在服务里按 `id` 覆盖内置条目、其余追加；编辑器内核的 Normal 键不受该表覆盖。
 - 编辑器专属 leader 条目（`editor.*`）带 `surfaces: ['editor']`，不会出现在列表 / 标签栏等 surface 的有效 keymap 里。
-- 编辑器内核的裸键（`g` / `[` / `]` / `>` / `<` / `z` 前缀，以及 `K`、`%`、`*`、`#`、`o`、`O`、`c` operator、`H/M/L` 等）由 `vimKeymap.ts` 的 reducer 直接产出，不进 keymap 表；因此 `vim.keymap` 只能覆盖 leader 别名。Monaco 动作走 `editor.trigger`，workbench 命令（`]c` / `[c`）走 `createVimEditorController` 的 `executeCommand` 回调（`FileEditor` / `DiffEditor` 注入 `ICommandService`）。
+- 编辑器内核的裸键（`g` / `[` / `]` / `>` / `<` / `z` 前缀，以及 `K`、`%`、`*`、`#`、`o`、`O`、`c` operator、`H/M/L`、`zz/zt/zb` 视口与 `zc/zo/za/zM/zR/zj/zk` 折叠等）由 `vimKeymap.ts` 的 reducer 直接产出，不进 keymap 表；因此 `vim.keymap` 只能覆盖 leader 别名。Monaco 动作走 `editor.trigger`，workbench 命令（`]c` / `[c`）走 `createVimEditorController` 的 `executeCommand` 回调（`FileEditor` / `DiffEditor` 注入 `ICommandService`）。
 - **`]c` / `[c` 在列表 surface 上也生效**：焦点在 Explorer / Commit Changes 等列表中、且活动编辑器是对比编辑器时，`vimDefaultKeymap.ts` 的 `list.nextChange` / `list.previousChange` 把序列路由到 `workbench.action.compareEditor.*Change`（`when: textCompareEditorVisible`）。命令只移动 diff 光标与视口、不抢焦点，所以可以从列表里连续预览上下一个改动。
 
 ### 编辑器滚动命令（`vimEditorController`）
@@ -144,6 +144,17 @@ useVimSurface({
 移动类 motion（`j/k`、`Enter`、`w/b/e`、`gg/G`、`{/}`、翻页）同样以**屏幕行**计数：闭合折叠只占起始行，控制器从 `getContribution('editor.contrib.folding').foldingModel` 的 `getAllRegionsAtLine()` 取 `(start, end]` 隐藏区，落点隐藏时吸附到折叠起始行（向前且从起始行出发时取 `end+1`），因此不会触发 Monaco 200ms 的自动展开。搜索、`%`、undo 不在吸附范围内——它们本就属于 Vim 默认 `'foldopen'` 的展开场景。
 
 待定 operator 时按 `H/M/L/z` 会取消 operator 并吞键（`dH`、`dz*` 等组合明确不支持）。自动换行下 `H/M/L` 与 `zt/zb` 按逻辑行近似；`Ctrl+E/Y` 用 `wrappedLine` 不受影响。
+
+### 编辑器折叠命令（`vimEditorController`）
+
+`z` 前缀下的折叠开关直接映射 Monaco 编辑器动作；`[z` / `]z` 因 Monaco 没有「跳到折叠结尾」命令而由控制器自算：
+
+| 命令 | 键 | Monaco 参数 | 语义 |
+| --- | --- | --- | --- |
+| `editor-command` | `zc` / `zC` / `zo` / `zO` / `za` / `zA` / `zM` / `zR` / `zj` / `zk` | `editor.fold` / `editor.foldRecursively` / `editor.unfold` / `editor.unfoldRecursively` / `editor.toggleFold` / `editor.toggleFoldRecursively` / `editor.foldAll` / `editor.unfoldAll` / `editor.gotoNextFold` / `editor.gotoPreviousFold` | 编辑器动作经 `editor.trigger` 执行 |
+| `fold-goto` | `[z`（start） / `]z`（end） | 控制器内 `setPosition` | 从 `getAllRegionsAtLine()` 的「最内层 → 最外层」中取第一个该边不等于当前行的折叠，跳到它的起始/结尾行，列取首个非空白字符。**只对打开的折叠生效**（关闭折叠的内部不可见），因此不会触发 Monaco 200ms 的自动展开 |
+
+`<leader>z` 是 `editor.gotoParentFold` 的可发现别名（Monaco 原生命令，列是第 1 列）；`[z` / `]z` 严格按 Vim 语义移到第一个非空白列。`zm` / `zr` 未实现：Monaco 只有绝对层级 `editor.foldLevel1`~`7`，与 Vim 相对增减的 foldlevel 语义不一致。
 
 ### Output 面板（受限 surface）
 

@@ -1115,6 +1115,25 @@ export function createVimEditorController(
     const model = editor.getModel()
     if (!model) return
 
+    if (command.type === 'fold-goto') {
+      const folding = foldingModel()
+      if (folding === null) return
+      const line = primaryPosition().line
+      // Vim only operates on open folds: a closed fold's inner lines are not
+      // visible, so the cursor can only sit on its start line.
+      const regions = folding.getAllRegionsAtLine(line).filter((region) => !region.isCollapsed)
+      const target = regions.find((region) =>
+        command.edge === 'start' ? region.startLineNumber !== line : region.endLineNumber !== line,
+      )
+      if (target === undefined) return
+      const targetLine = command.edge === 'start' ? target.startLineNumber : target.endLineNumber
+      editor.setPosition(
+        { lineNumber: targetLine, column: firstNonBlankColumn(model.getLineContent(targetLine)) },
+        'vim',
+      )
+      return
+    }
+
     if (command.type === 'reveal-line') {
       const requested = Math.max(
         1,

@@ -494,6 +494,36 @@ describe('reduceVimKey', () => {
     expect(press(counted, 't').command).toEqual({ type: 'reveal-line', at: 'top', line: 4 })
   })
 
+  it('maps z fold commands to Monaco editor actions', () => {
+    const z = press(INITIAL_VIM_STATE, 'z').state
+    const expected: ReadonlyArray<readonly [string, string]> = [
+      ['o', 'editor.unfold'],
+      ['O', 'editor.unfoldRecursively'],
+      ['c', 'editor.fold'],
+      ['C', 'editor.foldRecursively'],
+      ['a', 'editor.toggleFold'],
+      ['A', 'editor.toggleFoldRecursively'],
+      ['M', 'editor.foldAll'],
+      ['R', 'editor.unfoldAll'],
+      ['j', 'editor.gotoNextFold'],
+      ['k', 'editor.gotoPreviousFold'],
+    ]
+    for (const [key, commandId] of expected) {
+      expect(press(z, key).command).toEqual({ type: 'editor-command', commandId })
+    }
+  })
+
+  it('maps [z / ]z to fold start/end jumps', () => {
+    expect(press(press(INITIAL_VIM_STATE, '[').state, 'z').command).toEqual({
+      type: 'fold-goto',
+      edge: 'start',
+    })
+    expect(press(press(INITIAL_VIM_STATE, ']').state, 'z').command).toEqual({
+      type: 'fold-goto',
+      edge: 'end',
+    })
+  })
+
   it('clears a dangling z and lets function keys through', () => {
     const swallowed = press(press(INITIAL_VIM_STATE, 'z').state, 'x')
     expect(swallowed.state.pendingZ).toBe(false)

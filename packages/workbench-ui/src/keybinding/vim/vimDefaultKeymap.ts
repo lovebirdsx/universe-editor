@@ -532,4 +532,10 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
     command: 'workbench.action.goForward',
     surfaces: ['editor'],
   },
+  {
+    id: 'editor.gotoParentFold',
+    keys: ['<leader>', 'z'],
+    command: 'editor.gotoParentFold',
+    surfaces: ['editor'],
+  },
 ]

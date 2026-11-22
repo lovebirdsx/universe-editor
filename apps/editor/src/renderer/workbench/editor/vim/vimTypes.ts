@@ -148,6 +148,8 @@ export type VimCommand =
       readonly at: 'top' | 'middle' | 'bottom'
       readonly count: number
     }
+  /** `[z` / `]z`: jump to the start/end of the current or enclosing fold. */
+  | { readonly type: 'fold-goto'; readonly edge: 'start' | 'end' }
 
 export interface VimKeyInput {
   readonly key: string

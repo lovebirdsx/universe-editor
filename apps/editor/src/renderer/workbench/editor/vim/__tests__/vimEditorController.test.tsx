@@ -1831,5 +1831,107 @@ describe('createVimEditorController', () => {
       expectVisible(fake, regions)
       controller.dispose()
     })
+
+    it('jumps [z to the current/ancestor fold start with first non-blank column', () => {
+      const body = lines(30)
+      body[9] = '  fold-start'
+      body[4] = '    parent-start'
+      const regions = [fold(10, 20, false), fold(5, 25, false)]
+      const { fake, controller } = createNormalHarness(body)
+      setFolding(fake, regions)
+
+      setCursor(fake, 15)
+      controller.handleKeyDown(key('['))
+      controller.handleKeyDown(key('z'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10, startColumn: 3 })
+
+      setCursor(fake, 10)
+      controller.handleKeyDown(key('['))
+      controller.handleKeyDown(key('z'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 5, startColumn: 5 })
+
+      controller.dispose()
+    })
+
+    it('jumps ]z to the current/ancestor fold end with first non-blank column', () => {
+      const body = lines(30)
+      body[19] = '  fold-end'
+      body[24] = '    parent-end'
+      const regions = [fold(10, 20, false), fold(5, 25, false)]
+      const { fake, controller } = createNormalHarness(body)
+      setFolding(fake, regions)
+
+      setCursor(fake, 15)
+      controller.handleKeyDown(key(']'))
+      controller.handleKeyDown(key('z'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 20, startColumn: 3 })
+
+      setCursor(fake, 20)
+      controller.handleKeyDown(key(']'))
+      controller.handleKeyDown(key('z'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 25, startColumn: 5 })
+
+      controller.dispose()
+    })
+
+    it('ignores closed folds for [z / ]z', () => {
+      const regions = [fold(10, 20, true)]
+      const { fake, controller } = createNormalHarness(lines(30))
+      setFolding(fake, regions)
+      setCursor(fake, 10)
+
+      controller.handleKeyDown(key('['))
+      controller.handleKeyDown(key('z'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10, startColumn: 1 })
+
+      controller.handleKeyDown(key(']'))
+      controller.handleKeyDown(key('z'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 10, startColumn: 1 })
+
+      controller.dispose()
+    })
+
+    it('does nothing for [z / ]z when the cursor is outside any fold', () => {
+      const { fake, controller } = createNormalHarness(lines(30))
+      setFolding(fake, [fold(10, 20, false)])
+      setCursor(fake, 1)
+
+      controller.handleKeyDown(key('['))
+      controller.handleKeyDown(key('z'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+
+      controller.handleKeyDown(key(']'))
+      controller.handleKeyDown(key('z'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+
+      controller.dispose()
+    })
+
+    it('maps z fold commands to Monaco editor actions', () => {
+      const { fake, controller } = createNormalHarness(lines(30))
+      setFolding(fake, [fold(10, 20, false)])
+      setCursor(fake, 15)
+
+      const expected: ReadonlyArray<readonly [string, string]> = [
+        ['o', 'editor.unfold'],
+        ['O', 'editor.unfoldRecursively'],
+        ['c', 'editor.fold'],
+        ['C', 'editor.foldRecursively'],
+        ['a', 'editor.toggleFold'],
+        ['A', 'editor.toggleFoldRecursively'],
+        ['M', 'editor.foldAll'],
+        ['R', 'editor.unfoldAll'],
+        ['j', 'editor.gotoNextFold'],
+        ['k', 'editor.gotoPreviousFold'],
+      ]
+      for (const [foldKey, commandId] of expected) {
+        vi.mocked(fake.editor.trigger).mockClear()
+        controller.handleKeyDown(key('z'))
+        controller.handleKeyDown(key(foldKey))
+        expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', commandId, null)
+      }
+
+      controller.dispose()
+    })
   })
 })
