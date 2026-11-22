@@ -45,6 +45,7 @@ function makeModel(): TreeModel<Node> {
 interface RenderOptions {
   sticky?: boolean
   maxStickyRows?: number
+  getRowHeight?: (node: IVisibleNode<Node>) => number | undefined
 }
 
 function renderTree(model: TreeModel<Node>, options: RenderOptions = {}) {
@@ -53,6 +54,7 @@ function renderTree(model: TreeModel<Node>, options: RenderOptions = {}) {
       model={model}
       rowHeight={ROW_HEIGHT}
       {...(options.maxStickyRows !== undefined ? { maxStickyRows: options.maxStickyRows } : {})}
+      {...(options.getRowHeight !== undefined ? { getRowHeight: options.getRowHeight } : {})}
       {...(options.sticky === false
         ? {}
         : {
@@ -85,6 +87,12 @@ const scrollTo = async (root: HTMLElement, top: number): Promise<void> => {
   root.scrollTop = top
   root.dispatchEvent(new Event('scroll'))
   await flush()
+}
+
+const reveal = async (model: TreeModel<Node>, id: string): Promise<void> => {
+  await act(async () => {
+    model.setSelection([id], id)
+  })
 }
 
 const stickyLabels = (): string[] =>
@@ -142,7 +150,7 @@ describe('Tree — sticky scroll', () => {
     model.dispose()
   })
 
-  it('scrolls back to the pinned row when it is clicked', async () => {
+  it('scrolls the clicked pinned row below the stack, not onto the top edge', async () => {
     const model = makeModel()
     const root = renderTree(model)
     await flush()
@@ -154,7 +162,168 @@ describe('Tree — sticky scroll', () => {
     expect(pinnedA).toBeDefined()
     fireEvent.click(pinnedA!)
 
+    // A's real row sits just below the pinned root; top-aligning it (22) would
+    // hide it under the 22px stack.
+    expect(root.scrollTop).toBe(0)
+    model.dispose()
+  })
+
+  it('reveals a row above the viewport below the pinned band', async () => {
+    const model = makeModel()
+    const root = renderTree(model)
+    await flush()
+    // Top edge is f2 (depth 3): the band is root + A + B = 66px.
+    await scrollTo(root, 5 * ROW_HEIGHT)
+
+    // f0 spans [66, 88); top-aligning it would put it under the 66px band.
+    await reveal(model, 'f0')
+
+    expect(root.scrollTop).toBe(0)
+    model.dispose()
+  })
+
+  it('reveals a row that is already inside the pinned band', async () => {
+    const model = makeModel()
+    const root = renderTree(model)
+    await flush()
+    // Band covers [110, 176): f3 ([132, 154)) is on screen but hidden.
+    await scrollTo(root, 5 * ROW_HEIGHT)
+
+    await reveal(model, 'f3')
+
+    // Top-align f3 just below the band at the new top edge (f0, band 66).
+    expect(root.scrollTop).toBe(3 * ROW_HEIGHT)
+    model.dispose()
+  })
+
+  it('recomputes the band when a deeper subtree sits above the target', async () => {
+    // root → A → { B → f0..f9, C }: C is shallow, but the row above the landing
+    // spot is a deep descendant of B, so its band is taller than C's ancestors.
+    const children = new Map<string, Node[]>([
+      ['root', [{ id: 'A' }]],
+      ['A', [{ id: 'B' }, { id: 'C' }]],
+      ['B', Array.from({ length: 10 }, (_, i) => ({ id: `f${i}` }))],
+    ])
+    const dataSource: ITreeDataSource<Node> = {
+      getId: (n) => n.id,
+      hasChildren: (n) => (children.get(n.id)?.length ?? 0) > 0,
+      getChildren: (n) => children.get(n.id) ?? [],
+      getRoots: () => [{ id: 'root' }],
+    }
+    const model = new TreeModel<Node>({ dataSource, defaultExpanded: () => true })
+    const root = renderTree(model)
+    await flush()
+    await scrollTo(root, 13 * ROW_HEIGHT)
+
+    await reveal(model, 'C')
+
+    // 242 reserves C's own 44px band, but the top row there (f8) pins 66px;
+    // scrolling one row further (220) clears it.
+    expect(root.scrollTop).toBe(10 * ROW_HEIGHT)
+    model.dispose()
+  })
+
+  it('does not scroll when the row is already below the pinned band', async () => {
+    const model = makeModel()
+    const root = renderTree(model)
+    Object.defineProperty(root, 'scrollHeight', {
+      configurable: true,
+      get: () => 13 * ROW_HEIGHT,
+    })
+    await flush()
+    await scrollTo(root, 5 * ROW_HEIGHT)
+
+    // f5 spans [176, 198), fully below the 66px band and inside [110, 330).
+    await reveal(model, 'f5')
+
+    expect(root.scrollTop).toBe(5 * ROW_HEIGHT)
+    model.dispose()
+  })
+
+  it('shrinks the reserved band with maxStickyRows', async () => {
+    const model = makeModel()
+    const root = renderTree(model, { maxStickyRows: 2 })
+    await flush()
+    await scrollTo(root, 5 * ROW_HEIGHT)
+
+    // With two pinned rows the band is A + B = 44, so f0 lands at 22.
+    await reveal(model, 'f0')
+
     expect(root.scrollTop).toBe(ROW_HEIGHT)
+    model.dispose()
+  })
+
+  it('reserves the band for per-row heights too', async () => {
+    const heights = new Map<string, number>([
+      ['root', 22],
+      ['A', 40],
+      ['B', 22],
+      ['f0', 40],
+      ['f1', 40],
+      ['f2', 40],
+      ['f3', 40],
+      ['f4', 40],
+      ['f5', 40],
+      ['f6', 40],
+      ['f7', 40],
+      ['f8', 40],
+      ['f9', 40],
+      ['C', 40],
+    ])
+    const children = new Map<string, Node[]>([
+      ['root', [{ id: 'A' }]],
+      ['A', [{ id: 'B' }, { id: 'C' }]],
+      ['B', Array.from({ length: 10 }, (_, i) => ({ id: `f${i}` }))],
+    ])
+    const dataSource: ITreeDataSource<Node> = {
+      getId: (n) => n.id,
+      hasChildren: (n) => (children.get(n.id)?.length ?? 0) > 0,
+      getChildren: (n) => children.get(n.id) ?? [],
+      getRoots: () => [{ id: 'root' }],
+    }
+    const model = new TreeModel<Node>({ dataSource, defaultExpanded: () => true })
+    const root = renderTree(model, { getRowHeight: (node) => heights.get(node.id) })
+    await flush()
+    // C starts at 22 + 40 + 22 + 10 * 40 = 484.
+    await scrollTo(root, 484)
+
+    await reveal(model, 'C')
+
+    // The band above C is A + root = 62; at 422 the top row (f8) pins 84, so
+    // the landing spot is 400 (C top at 84, exactly the f-row band).
+    expect(root.scrollTop).toBe(400)
+    model.dispose()
+  })
+
+  it('retries against a laid-out viewport with sticky enabled', async () => {
+    // The reveal's pre-layout retry must survive the band gate: a content-sized
+    // clientHeight is not a viewport, so no band is reserved on the first try.
+    const roots: Node[] = Array.from({ length: 40 }, (_, i) => ({ id: `r${i}` }))
+    const dataSource: ITreeDataSource<Node> = {
+      getId: (n) => n.id,
+      hasChildren: () => false,
+      getChildren: () => [],
+      getRoots: () => roots,
+    }
+    const model = new TreeModel<Node>({ dataSource })
+    const root = renderTree(model)
+    let laidOut = false
+    Object.defineProperty(root, 'clientHeight', {
+      configurable: true,
+      get: () => (laidOut ? VIEWPORT : 40 * ROW_HEIGHT),
+    })
+    Object.defineProperty(root, 'scrollHeight', {
+      configurable: true,
+      get: () => 40 * ROW_HEIGHT,
+    })
+
+    await reveal(model, 'r39')
+    expect(root.scrollTop).toBe(0)
+
+    laidOut = true
+    await flush()
+
+    expect(root.scrollTop).toBe(40 * ROW_HEIGHT - VIEWPORT)
     model.dispose()
   })
 

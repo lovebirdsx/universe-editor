@@ -64,10 +64,11 @@
 
 `Tree` 支持 VSCode 式的粘性滚动：视口顶边那一行的**祖先链**钉在列表顶部，每个深度一行。几何由 `Tree` 自己算（`visibleNodes` 的 depth + `scrollTop`，与 reveal 同一套行高公式），视图只负责画。
 
-两个非显然约束：
+三个非显然约束：
 
-- **钉住的行必须走 `renderStickyRow`，不要复用 `renderRow`**：复用会让同一个 `data-row-key` 在 DOM 里出现两次，违反本文开头的「每格一行、key 唯一」不变量（`findRowElement` 的键盘右键菜单、e2e 的行选择器都会撞上）；钉住的行只喂给 `Tree` 的点击外壳，点击 = 把真实行滚回顶部。
+- **钉住的行必须走 `renderStickyRow`，不要复用 `renderRow`**：复用会让同一个 `data-row-key` 在 DOM 里出现两次，违反本文开头的「每格一行、key 唯一」不变量（`findRowElement` 的键盘右键菜单、e2e 的行选择器都会撞上）；钉住的行只喂给 `Tree` 的点击外壳，点击 = 把真实行滚到钉住栈下方。
 - **钉住的内容是纯展示**：`Tree` 把它放进 `inert` 容器并设 `pointer-events: none`（布局上用零高度 sticky 子节点 + 绝对定位栈，与聊天时间线的 `StickyScrollOverlay` 同构）。所以视图给的 `renderStickyRow` 不要挂 `role` / `aria-*` / 事件处理器，也不要有可聚焦控件。背景必须不透明（§1）——行会从它下面滚过。
+- **reveal 必须为钉住栈预留 band**：栈是不透明覆盖层，顶对齐的目标行会落在它下面（聚焦行「消失」）。`Tree` 的 reveal 以「视口顶边行的祖先链高度」为 band，把目标行滚到 band 下方；VSCode 的 `reveal(..., paddingTop = nodePositionTopBelowWidget)` 是同一思路。注意本仓库的栈钉的是**顶边行的祖先链**（没有 VSCode 的 early-stop/push-up 收缩），目标上方若压着更深的兄弟子树，落点处的 band 会比目标自身祖先链更高，所以预留是**迭代求解**（`scrollTopBelowSticky`），不是单次相减。
 
 ## 排查套路
 
@@ -95,6 +96,7 @@ document.querySelector('#root').style.opacity = '0.999'
 |---|---|
 | reveal 只滚自己的 scroller | `packages/workbench-ui/src/__tests__/Tree.revealScroll.test.tsx` —— spy `Element.prototype.scrollIntoView` 断言从未被调用、且外层 scroller 不动；同时锁定默认最小滚动与 `relativeTop: 0.5` 居中（含下界 clamp、完整可见不滚）。**把实现换回 `scrollIntoView` 即变红** |
 | reveal 在真浏览器里仍然有效 | `apps/editor/e2e/specs/smoke.explorerRevealScroll.spec.ts`（滚动到顶后 reveal 把已选中的行带回来；中间行居中到视口中心） |
+| 聚焦行不被 sticky 栈遮住 | `packages/workbench-ui/src/__tests__/Tree.stickyScroll.test.tsx`（目标在视口上方 / 已在 band 内 / 更深子树使 band 变高 / 异高行 / `maxStickyRows` 收缩 / 预布局重试 / 点击钉住行落位）；`apps/editor/e2e/specs/smoke.explorerStickyReveal.spec.ts`（真布局） |
 | 行定位 / spacer 形状 | `packages/workbench-ui/src/__tests__/VirtualList.test.tsx`（`top` 断言、spacer 契约） |
 | 列表重排后仍是「一摞不重叠的行」 | `apps/editor/src/renderer/workbench/swarm/__tests__/SwarmReviewsView.test.tsx` 的 soft refresh 用例（key 唯一、offset 严格递增、换选中不调 `scrollIntoView`）；`extensions/perforce/e2e/specs/swarmReview.spec.ts` 的 dashboard journey 补了真布局版（行矩形互不重叠、`End` 把最后一行底对齐） |
 | 同一实体跨两个父节点时行 id 仍唯一 | 同文件的 `duplicate review across groups` 用例（同一 review 同时在 Needs My Action 与 Authored by Me，逐个折叠后断言 treeitem 数量、key 唯一、无孤儿 review 行、`top` 严格递增）。**这是真复现**：修复前折叠后 DOM 会多出一行 |

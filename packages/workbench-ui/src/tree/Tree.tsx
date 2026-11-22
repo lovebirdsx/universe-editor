@@ -193,7 +193,7 @@ export interface ITreeProps<T> {
    * "one element per row key" invariant) and drag it into row handlers the
    * pin must not run. Render a presentation-only row — no `data-row-key`, no
    * `role`/`aria-*`, no drag or click handlers. Clicking a pinned row scrolls
-   * its real row back to the top edge.
+   * its real row just below the pinned stack.
    */
   readonly renderStickyRow?: (ctx: ITreeStickyRowRenderContext<T>) => ReactNode
   /** Cap on simultaneously pinned rows (default 5); also capped at half the viewport. */
@@ -313,6 +313,128 @@ export function Tree<T>(props: ITreeProps<T>) {
     return (node && resolve?.(node)) ?? fallback
   })
 
+  const watchSticky = renderStickyRow !== undefined
+  const maxStickyRowsRef = useRef(maxStickyRows)
+  maxStickyRowsRef.current = maxStickyRows
+
+  // Sticky geometry, shared by the pinned stack and reveal. The stack pins the
+  // ancestor chain of the row at the viewport's top edge, so a revealed row has
+  // to be scrolled below that band — top-aligning it puts it underneath the
+  // pinned rows (VSCode's `reveal(..., paddingTop = nodePositionTopBelowWidget)`).
+  const rowIndexAtOffset = useStableCallback((offset: number): number => {
+    const nodes = visibleRef.current
+    if (nodes.length === 0) return 0
+    const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
+    if (resolve === undefined) {
+      return Math.min(nodes.length - 1, Math.max(0, Math.floor(offset / fallback)))
+    }
+    let accumulated = 0
+    for (let i = 0; i < nodes.length; i++) {
+      const size = sizeAt(i)
+      if (accumulated + size > offset) return i
+      accumulated += size
+    }
+    return nodes.length - 1
+  })
+
+  /** Ancestor row indices of `index`, outermost first (root … parent). */
+  const ancestorChain = useStableCallback((index: number): number[] => {
+    const nodes = visibleRef.current
+    const chain: number[] = []
+    let wantDepth = (nodes[index]?.depth ?? 0) - 1
+    for (let i = index - 1; i >= 0 && wantDepth >= 0; i--) {
+      if (nodes[i]?.depth === wantDepth) {
+        chain.unshift(i)
+        wantDepth -= 1
+      }
+    }
+    return chain
+  })
+
+  /**
+   * The part of `chain` the overlay actually pins: innermost rows first, under
+   * the row-count cap and the half-viewport cap. Returned outermost first.
+   */
+  const constrainPinned = useStableCallback(
+    (chain: readonly number[], viewport: number): number[] => {
+      const picked: number[] = []
+      let height = 0
+      const limit = Math.max(1, maxStickyRowsRef.current)
+      for (let i = chain.length - 1; i >= 0; i--) {
+        if (picked.length >= limit) break
+        const index = chain[i]!
+        const size = sizeAt(index)
+        if (picked.length > 0 && height + size > viewport / 2) break
+        picked.unshift(index)
+        height += size
+      }
+      return picked
+    },
+  )
+
+  const pinnedHeightForIndex = useStableCallback((index: number, viewport: number): number => {
+    let height = 0
+    for (const ancestor of constrainPinned(ancestorChain(index), viewport)) {
+      height += sizeAt(ancestor)
+    }
+    return height
+  })
+
+  /**
+   * Whether the pinned band exists at all — off for sticky-disabled trees, a
+   * collapsed pane, or a pre-layout viewport (clientHeight spans the content).
+   */
+  const stickyBandAvailable = useStableCallback((viewport: number): boolean => {
+    if (!watchSticky || viewport <= 0 || visibleRef.current.length === 0) return false
+    const scroller = containerRef.current
+    return scroller !== null && hasTrustworthyViewport(scroller)
+  })
+
+  const stickyBandHeight = useStableCallback((scrollTop: number, viewport: number): number =>
+    stickyBandAvailable(viewport) ? pinnedHeightForIndex(rowIndexAtOffset(scrollTop), viewport) : 0,
+  )
+
+  /**
+   * Scroll offset that puts `rowTop` below the pinned band. VSCode reserves the
+   * target's own ancestor band; ours can be taller when a deeper subtree sits
+   * above the target (the stack pins the top-edge row's chain), so recompute
+   * against the band at the landing position until the row is clear of it.
+   * Scrolling to the first row is always safe — its depth is 0, so nothing pins
+   * there.
+   */
+  const scrollTopBelowSticky = useStableCallback(
+    (
+      rowTop: number,
+      height: number,
+      index: number,
+      viewport: number,
+      relativeTop?: number | undefined,
+    ): number => {
+      const anchor = relativeTop === undefined ? undefined : Math.min(1, Math.max(0, relativeTop))
+      // VSCode's List.reveal: nearest-edge mode lands the row just below the
+      // band; relativeTop anchors it that fraction down the area the pinned rows
+      // leave visible (0.5 centers it in what remains).
+      const place = (band: number): number =>
+        anchor === undefined
+          ? Math.max(0, rowTop - band)
+          : Math.max(0, rowTop - band - (viewport - height - band) * anchor)
+      if (!stickyBandAvailable(viewport)) {
+        return anchor === undefined
+          ? Math.max(0, rowTop)
+          : Math.max(0, rowTop + (height - viewport) * anchor)
+      }
+      let next = place(pinnedHeightForIndex(index, viewport))
+      for (let i = 0; i < 16 && next > 0; i++) {
+        const band = stickyBandHeight(next, viewport)
+        if (rowTop - next >= band) break
+        const candidate = place(band)
+        if (candidate >= next) break
+        next = candidate
+      }
+      return next
+    },
+  )
+
   // Reveal scrolls this tree's own container. By default it moves the minimum
   // needed (nearest edge); a caller-supplied relativeTop (Explorer's
   // VSCode-parity reveal) instead places the row that fraction down the
@@ -376,10 +498,14 @@ export function Tree<T>(props: ITreeProps<T>) {
         return
       }
       const visibleBottom = visibleTop + viewport
+      // The pinned stack paints over the top of the viewport, so a row under it
+      // is not visible even when its rect is inside the scroll box.
+      const band = stickyBandHeight(visibleTop, viewport)
+      const visibleTopUnderBand = visibleTop + band
       // VSCode's ExplorerView only reveals a row that is NOT fully visible;
       // check this before the relativeTop branch so centering never nudges a
       // row that is already entirely on screen.
-      if (rowTop >= visibleTop && rowTop + height <= visibleBottom) {
+      if (rowTop >= visibleTopUnderBand && rowTop + height <= visibleBottom) {
         // No scroll this attempt. If the viewport spans the whole content the
         // scroller is pre-layout (a real viewport is smaller); retry on the next
         // frame when layout has settled. A genuinely visible row confirms when
@@ -391,19 +517,18 @@ export function Tree<T>(props: ITreeProps<T>) {
         settle()
         return
       }
-      let next: number
-      if (relativeTop === undefined) {
-        // Default (selection gestures, SCM, ChangesTree): nearest edge.
-        next = rowTop < visibleTop ? Math.max(0, rowTop) : rowTop + height - viewport
-      } else {
-        // Explorer reveal: clamp the anchor to [0,1] and place the row that
-        // fraction down the viewport (0.5 centers it). The lower bound is
-        // explicit because happy-dom stores negative scrollTop verbatim; the
-        // upper bound is the browser's job (scrollTop clamps to
-        // scrollHeight - clientHeight), since scrollHeight is 0 in tests.
-        const anchor = Math.min(1, Math.max(0, relativeTop))
-        next = Math.max(0, rowTop + (height - viewport) * anchor)
-      }
+      // Top-aligning the row would leave it underneath the pinned band, so both
+      // modes reserve the band; relativeTop then anchors the row inside what
+      // the band leaves visible. The lower bound is explicit because happy-dom
+      // stores negative scrollTop verbatim; the upper bound is the browser's
+      // job (scrollTop clamps to scrollHeight - clientHeight, since
+      // scrollHeight is 0 in tests).
+      const next =
+        relativeTop === undefined
+          ? rowTop < visibleTopUnderBand
+            ? scrollTopBelowSticky(rowTop, height, idx, viewport)
+            : rowTop + height - viewport
+          : scrollTopBelowSticky(rowTop, height, idx, viewport, relativeTop)
       scroller.scrollTop = next
       settle()
     }
@@ -414,7 +539,15 @@ export function Tree<T>(props: ITreeProps<T>) {
     }
     // sizeAt 身份恒定后必须显式依赖 structureVersion：只被展开带出来的目标行要等结构变化重跑；
     // 同一 id 的重复 reveal 仍由 revealRequest 里的 tick 触发。
-  }, [revealRequest, structureVersion, sizeAt, rowHeight, getRowHeight])
+  }, [
+    revealRequest,
+    structureVersion,
+    sizeAt,
+    rowHeight,
+    getRowHeight,
+    stickyBandHeight,
+    scrollTopBelowSticky,
+  ])
 
   // Visible-window reporting (see `onVisibleNodesChange`). The geometry is
   // derived here rather than read off the virtualizer: in the non-windowed mode
@@ -498,8 +631,6 @@ export function Tree<T>(props: ITreeProps<T>) {
   const [stickyIds, setStickyIds] = useState<readonly string[]>([])
   const stickyKeyRef = useRef('')
   const stickyFrameRef = useRef<OwnerFrame | undefined>(undefined)
-  const maxStickyRowsRef = useRef(maxStickyRows)
-  maxStickyRowsRef.current = maxStickyRows
 
   const measureSticky = useStableCallback((): void => {
     const scroller = containerRef.current
@@ -510,44 +641,10 @@ export function Tree<T>(props: ITreeProps<T>) {
     if (scroller && nodes.length > 0 && hasTrustworthyViewport(scroller)) {
       const viewport = scroller.clientHeight
       if (viewport > 0) {
-        const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
-        const top = scroller.scrollTop
-        let first = nodes.length - 1
-        if (resolve === undefined) {
-          first = Math.min(nodes.length - 1, Math.max(0, Math.floor(top / fallback)))
-        } else {
-          let offset = 0
-          for (let i = 0; i < nodes.length; i++) {
-            const size = sizeAt(i)
-            if (offset + size > top) {
-              first = i
-              break
-            }
-            offset += size
-          }
-        }
-        const chain: number[] = []
-        let wantDepth = (nodes[first]?.depth ?? 0) - 1
-        for (let i = first - 1; i >= 0 && wantDepth >= 0; i--) {
-          const candidate = nodes[i]
-          if (candidate !== undefined && candidate.depth === wantDepth) {
-            chain.unshift(i)
-            wantDepth -= 1
-          }
-        }
-        // Shrink from the outermost end: when the stack has to fit, the nearest
-        // ancestors are the ones answering "where am I".
-        const picked: number[] = []
-        let height = 0
-        const limit = Math.max(1, maxStickyRowsRef.current)
-        for (let i = chain.length - 1; i >= 0; i--) {
-          if (picked.length >= limit) break
-          const index = chain[i]!
-          const size = sizeAt(index)
-          if (picked.length > 0 && height + size > viewport / 2) break
-          picked.unshift(index)
-          height += size
-        }
+        const picked = constrainPinned(
+          ancestorChain(rowIndexAtOffset(scroller.scrollTop)),
+          viewport,
+        )
         next = picked.flatMap((index) => {
           const node = nodes[index]
           return node === undefined ? [] : [node.id]
@@ -569,8 +666,6 @@ export function Tree<T>(props: ITreeProps<T>) {
       measureSticky()
     })
   })
-
-  const watchSticky = renderStickyRow !== undefined
 
   useEffect(() => {
     if (!watchSticky) return
@@ -611,7 +706,9 @@ export function Tree<T>(props: ITreeProps<T>) {
       top = 0
       for (let i = 0; i < index; i++) top += sizeAt(i)
     }
-    scroller.scrollTop = top
+    // Land below the pinned stack instead of on the top edge, where the stack
+    // would cover the real row.
+    scroller.scrollTop = scrollTopBelowSticky(top, sizeAt(index), index, scroller.clientHeight)
   })
 
   useEffect(() => {
