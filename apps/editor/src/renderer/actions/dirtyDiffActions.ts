@@ -20,6 +20,8 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
+import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { invocationOpenTarget } from '../services/editor/openTarget.js'
@@ -41,6 +43,12 @@ const WHEN = "editorTextFocus && !isInDiffEditor && quickDiffDecorationCount != 
 function goToChange(accessor: ServicesAccessor, direction: 'next' | 'previous'): void {
   const group = accessor.get(IEditorGroupsService).activeGroup
   const active = group.activeEditor
+  // Vim's `]c` / `[c` reach this command for both editor kinds; a diff has no
+  // dirty-diff regions, so navigate its hunks instead.
+  if (active instanceof DiffEditorInput) {
+    DiffEditorRegistry.get(active, group.id)?.goToDiff(direction)
+    return
+  }
   if (!(active instanceof FileEditorInput)) return
   const editor = FileEditorRegistry.get(active, group.id)
   if (!editor) return

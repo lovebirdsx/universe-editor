@@ -15,7 +15,13 @@ import {
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
-import { OpenChangesAction } from '../dirtyDiffActions.js'
+import {
+  GoToNextChangeAction,
+  GoToPreviousChangeAction,
+  OpenChangesAction,
+} from '../dirtyDiffActions.js'
+import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
+import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -77,7 +83,44 @@ async function runActionWithServices(
 
 afterEach(() => {
   FileEditorRegistry._resetForTests()
+  DiffEditorRegistry._resetForTests()
   scmViewState.setSelectedRepo(undefined)
+})
+
+describe('goToChange — diff editors', () => {
+  function openDiff() {
+    const groups = new EditorGroupsService()
+    const instantiationService = new InstantiationService(
+      new ServiceCollection([IEditorGroupsService, groups]),
+    )
+    const resource = URI.file('D:/repo/file.ts')
+    const input = instantiationService.createInstance(
+      DiffEditorInput,
+      resource,
+      'before',
+      'after',
+      undefined,
+      resource,
+      false,
+    )
+    groups.activeGroup.openEditor(input)
+    const calls: string[] = []
+    DiffEditorRegistry.register(
+      input,
+      { goToDiff: (target: string) => calls.push(target) } as never,
+      groups.activeGroup.id,
+    )
+    return { instantiationService, calls }
+  }
+
+  it('navigates diff hunks for next / previous change', () => {
+    const { instantiationService, calls } = openDiff()
+
+    instantiationService.invokeFunction((accessor) => new GoToNextChangeAction().run(accessor))
+    instantiationService.invokeFunction((accessor) => new GoToPreviousChangeAction().run(accessor))
+
+    expect(calls).toEqual(['next', 'previous'])
+  })
 })
 
 describe('OpenChangesAction', () => {
