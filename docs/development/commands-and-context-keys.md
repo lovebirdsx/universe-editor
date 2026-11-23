@@ -62,9 +62,9 @@ React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keyb
 - **唯一 window-capture 入口**是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts`：先仲裁菜单 / 浮层 / 对话框 / 配置栏的 `Ctrl+J/K/H/L` 别名（`menu > dialog > overlay > list`），其余交给 `setVimKeyHandlerProvider` 注入的 `VimDispatcher`。不要在组件里另装 window 监听。
 - **活跃 surface** 由 `getActiveVimSurface` 按 `menu > overlay > list > terminal > editor > chrome` 解析。编辑器 Normal 下把 `handleStroke` 交给 `vimEditorController`，只有 leader 与已在途的序列例外（走共享序列引擎）。**不要用 `editor.addCommand`**——standalone Monaco 的 keybinding service 跨实例共享，会吞掉其它编辑器的键。
 - **必须让行的六种情况**：chord pending、模态对话框（`[data-renderer-dialog]`）、Quick Input（`quickInputVisible`）、IME 组合、Webview 焦点、普通可编辑控件（editor / terminal 除外）。非保留键存在 weight ≥ `User` 的键位时 Vim 也让行；保留集由 `vim.reservedKeys` 配置。
-- **`Ctrl+H/J/K/L` 不走 Vim**：Normal 下菜单 / 浮层 / 对话框 / 配置栏仍把它们当方向别名，纯列表 / 树保持全局含义；Vim 只认领 `Ctrl+F/B/D/U`。Insert 模式完全放行。
-- **上下文键**：`vimMode` / `vimNormalMode` / `vimEnabled` / `vimSurface` / `vimSurfaceId` / `vimTerminalNormalMode` 由 `IVimModeService` 写；`vimNormalMode` 同时是全局分发器 paging 安全网的放行条件。状态栏 `vim-mode` 条目只在有活跃 surface 且 `vim.showStatusBar` 开启时存在。
-- **IME 与 Vim 搜索**：Normal 模式切英文输入法的实现（窗口级共享状态、`vim.autoSwitchInputMethod`）与 `/ ? n N` 搜索框的 `vimSearchFocused` / sticky scroll / 大小写优先级，见 [Vim 模式](vim-mode.md) 与 `workbench/editor/vim/` 目录内实现。
+- **`Ctrl+H/J/K/L` 不走 Vim**：Normal 下菜单 / 浮层 / 对话框 / 配置栏仍把它们当方向别名，纯列表 / 树保持全局含义；Vim 只认领 `Ctrl+F/B/D/U`。Insert 模式只认 `Esc` 与 `Ctrl+[`（回 Normal），其余放行。
+- **上下文键**：`vimMode` / `vimNormalMode` / `vimEnabled` / `vimVisualMode` / `vimSurface` / `vimSurfaceId` / `vimTerminalNormalMode` 由 `IVimModeService` 写；`vimNormalMode` 同时是全局分发器 paging 安全网的放行条件。状态栏 `vim-mode` 条目只在有活跃 surface 且 `vim.showStatusBar` 开启时存在。
+- **IME 与 Vim 搜索**：Normal 模式切英文输入法的实现（owner 模型的窗口级共享状态、`vim.autoSwitchInputMethod`）与 `/ ? n N` 搜索框的 `vimSearchFocused` / sticky scroll / 大小写优先级，见 [Vim 模式](vim-mode.md) 与 `workbench/editor/vim/` 目录内实现。
 
 ## 焦点类上下文键：一律 DOM 派生
 
