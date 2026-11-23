@@ -8,9 +8,9 @@
  *  submit.
  *
  *  Bounded, because a draft is not small: an attached image is a base64 string the
- *  prompt UI allows up to `acp.prompt.image.maxSizeMB` (5MB by default), and with no
- *  cap one entry per session ever touched kept every one of them resident for the
- *  life of the window.
+ *  prompt UI allows up to `acp.prompt.image.maxSizeMB` (5MB by default) and
+ *  `acp.prompt.image.maxCount` (20 by default), and with no cap one entry per
+ *  session ever touched kept every one of them resident for the life of the window.
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, type Event } from '@universe-editor/platform'

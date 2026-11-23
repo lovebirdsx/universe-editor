@@ -3,6 +3,7 @@ import type {
   MobilePromptRefSuggestion,
   ResolvePromptRefResult,
 } from '@universe-editor/mobile-protocol'
+import { MAX_IMAGE_ATTACHMENTS_PER_PROMPT } from '@universe-editor/mobile-protocol'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { strings } from '../../strings.js'
@@ -235,6 +236,21 @@ describe('Composer', () => {
     })
 
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith(expect.any(File), 'file'))
+  })
+
+  it('accepts up to 20 images and rejects the 21st', async () => {
+    const { onUploadAttachment, onNotice } = renderComposer()
+    const input = screen.getByTestId('composer-attachment-input')
+    const files = Array.from(
+      { length: MAX_IMAGE_ATTACHMENTS_PER_PROMPT + 1 },
+      (_, index) => new File(['abc'], `shot-${index}.png`, { type: 'image/png' }),
+    )
+    fireEvent.change(input, { target: { files } })
+
+    await waitFor(() =>
+      expect(onUploadAttachment).toHaveBeenCalledTimes(MAX_IMAGE_ATTACHMENTS_PER_PROMPT),
+    )
+    expect(onNotice).toHaveBeenCalledWith(strings.attachmentTooManyImages)
   })
 
   it('limits remote sessions to images and rejects other files', () => {

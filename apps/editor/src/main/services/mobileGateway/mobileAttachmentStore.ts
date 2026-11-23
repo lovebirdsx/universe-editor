@@ -14,6 +14,7 @@ import {
   MAX_ATTACHMENT_MIME_LENGTH,
   MAX_ATTACHMENTS_PER_PROMPT,
   MAX_FILE_ATTACHMENT_BYTES,
+  MAX_FILE_ATTACHMENTS_PER_PROMPT,
   MAX_IMAGE_ATTACHMENTS_PER_PROMPT,
   MAX_IMAGE_ATTACHMENT_BYTES,
   isMobileAttachmentKind,
@@ -30,7 +31,7 @@ import { writeBytesAtomic } from '../jsonConfig/atomicFile.js'
 export const ATTACHMENT_PENDING_TTL_MS = 60 * 60 * 1000
 export const ATTACHMENT_SENT_TTL_MS = 7 * 24 * 60 * 60 * 1000
 export const ATTACHMENT_SWEEP_INTERVAL_MS = 10 * 60 * 1000
-export const MAX_PENDING_ATTACHMENTS_PER_DEVICE = 32
+export const MAX_PENDING_ATTACHMENTS_PER_DEVICE = 64
 export const MAX_ATTACHMENT_BYTES_PER_DEVICE = 256 * 1024 * 1024
 
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9._-]+$/
@@ -218,6 +219,7 @@ export class MobileAttachmentStore
     const held: string[] = []
     const resolved: MobileBridgePromptAttachment[] = []
     let imageCount = 0
+    let fileCount = 0
     let totalBytes = 0
     try {
       for (const id of ids) {
@@ -257,6 +259,10 @@ export class MobileAttachmentStore
             dataBase64: bytes.toString('base64'),
           })
         } else {
+          fileCount += 1
+          if (fileCount > MAX_FILE_ATTACHMENTS_PER_PROMPT) {
+            throw new MobileAttachmentError('bad_request', 'too many file attachments')
+          }
           try {
             await access(entry.path)
           } catch {

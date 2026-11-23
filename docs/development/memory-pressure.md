@@ -26,7 +26,7 @@
 
 ### 一、IPC 帧闸门（`packages/platform/src/ipc/ipcFrameGuard.ts`）
 
-- **阈值**：警戒 32 MiB（`IPC_FRAME_WARN_BYTES`）、硬上限 128 MiB（`IPC_FRAME_MAX_BYTES`）。取值依据是合法大帧的上界——fileSearch 清单 ≈8MB、ACP stdout 行 16MB（`sdkHostStream.ts` 硬顶）、ACP 图片 prompt 默认 ≈34MB——留 3.6× 余量，同时把最坏 decode 峰值压在 cage 可承受范围。
+- **阈值**：警戒 32 MiB（`IPC_FRAME_WARN_BYTES`）、硬上限 128 MiB（`IPC_FRAME_MAX_BYTES`）。取值依据是合法大帧的上界——fileSearch 清单 ≈8MB、ACP stdout 行 16MB（`sdkHostStream.ts` 硬顶）、ACP 图片 prompt 压缩后 ≈20–30MB（20 张 × 约 1MB base64）——留 4× 余量，同时把最坏 decode 峰值压在 cage 可承受范围。
 - **三处 codec 全部内联检查**（`defaultCodec` / `createJsonCodec` / `createBinaryCodec`）：`ChannelClient/Server` 的 `autoDispatch` 路径绕过 `ChannelPair`，只有在 codec 内部查才零遗漏。二进制 codec 的 decode 在**信任表头之前**查（`attachmentCount`/长度来自 wire）。
 - **发送侧降级**，而不是挂死 promise：
   - 超限的 **request** → `ChannelClient._send` 用 guard 错误 reject 调用方；

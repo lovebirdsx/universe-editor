@@ -169,7 +169,7 @@ const stubConfigurationService: IConfigurationServiceType = {
   _serviceBrand: undefined,
   get: ((key: string) => {
     if (key === 'acp.prompt.image.maxSizeMB') return 5
-    if (key === 'acp.prompt.image.maxCount') return 5
+    if (key === 'acp.prompt.image.maxCount') return 20
     return 0
   }) as never,
   onDidChangeConfiguration: Event.None,
@@ -1156,7 +1156,7 @@ describe('PromptInput — short first message confirm', () => {
     get: ((key: string) => {
       if (key === 'acp.prompt.confirmShortFirstMessageLength') return 20
       if (key === 'acp.prompt.image.maxSizeMB') return 5
-      if (key === 'acp.prompt.image.maxCount') return 5
+      if (key === 'acp.prompt.image.maxCount') return 20
       return 0
     }) as never,
   } as unknown as IConfigurationServiceType

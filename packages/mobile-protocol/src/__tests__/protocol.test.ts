@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ClientFrame, ParseErrorCode, Result, ServerFrame } from '../index.js'
 import {
+  MAX_ATTACHMENTS_PER_PROMPT,
   MAX_CLIENT_FRAME_BYTES,
   MAX_ID_LENGTH,
   MAX_IMAGES_PER_MESSAGE,
@@ -536,7 +537,7 @@ describe('parseClientFrame', () => {
         payload: {
           ref: REF,
           text: '',
-          attachmentIds: Array.from({ length: 9 }, (_, i) => `a${i}`),
+          attachmentIds: Array.from({ length: MAX_ATTACHMENTS_PER_PROMPT + 1 }, (_, i) => `a${i}`),
         },
       },
       { kind: 'sendPrompt', payload: { ref: REF, text: '', attachmentIds: [''] } },

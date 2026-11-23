@@ -869,16 +869,20 @@ base64 塞进 `sendPrompt` 会在重连重发时放大内存与耗时。
 
 **存储与生命周期**：`<userData>/mobile/attachments/<deviceId>/<attachmentId>/<sanitized-name>`。
 附件是**传输缓冲区，不是会话历史**——网关启动清空整个目录；pending 1 小时、已发送（`consume`）
-7 天，每 10 分钟 sweep；每设备 pending ≤ 32 个、总量 ≤ 256MB（满时拒绝新上传，不淘汰已发送
+7 天，每 10 分钟 sweep；每设备 pending ≤ 64 个、总量 ≤ 256MB（满时拒绝新上传，不淘汰已发送
 附件，避免旧缩略图随机 404）。`attachmentId` 服务端生成，文件名只用于显示与落盘且经
 `sanitizeAttachmentFileName` 清洗；所有读写按 hello 认证得到的 `deviceId` 隔离，跨设备与不存在
 统一 404，不泄露存在性。
 
-**发送链路**：`sendPrompt.payload.attachmentIds`（≤8 个，其中图片 ≤5 张、单图 ≤5MB、单文件
-≤25MB、单 prompt 合计 ≤50MB）→ hub 用设备身份解析 → 图片读盘转 base64（ACP `image` block），
+**发送链路**：`sendPrompt.payload.attachmentIds`（≤28 个，其中图片 ≤20 张、文件 ≤8 个、
+单图原图 ≤5MB、单文件 ≤25MB、单 prompt 合计 ≤50MB；图片在 PWA 侧上传前已压缩）→ hub 用设备
+身份解析 → 图片读盘转 base64（ACP `image` block），
 普通文件生成 PC 本机 `file:` URI（ACP `resource_link`，与桌面 @ 文件一致）→ renderer 桥映射为
 `PromptImage` / `PromptFileAttachment`。网关命令成功返回后才把附件标记 sent；网关报错 / 超时仍为
 pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）。
+
+> 附件上限是 PWA 与网关的共享契约：升级时两者需同版本发布/刷新。旧 PWA 会在本地按旧上限
+> 拦截（不影响已连接的请求），新网关对旧客户端的 ≤ 旧上限请求保持兼容。
 
 **能力门控**：`summary.imageSupported` 来自 agent handshake；为 false 时手机不产生图片附件
 （照片按普通文件处理），桥层也拒绝图片。远程会话（`summary.authority` 非空）不能发文件附件（agent 读不到 PC 本地

@@ -2,6 +2,14 @@
  * All user-visible copy for the M1 phone PWA. Keeping it in one module makes a
  * later i18n pass a mechanical replacement instead of a JSX crawl.
  */
+import {
+  MAX_ATTACHMENTS_PER_PROMPT,
+  MAX_ATTACHMENT_BYTES_PER_PROMPT,
+  MAX_FILE_ATTACHMENT_BYTES,
+  MAX_IMAGE_ATTACHMENTS_PER_PROMPT,
+  MAX_IMAGE_ATTACHMENT_BYTES,
+} from '@universe-editor/mobile-protocol'
+
 export const strings = {
   appName: 'Universe 遥控',
   appTagline: '在手机上查看并遥控 PC 编辑器里的 agent 会话',
@@ -343,11 +351,11 @@ export const strings = {
   attachmentRemove: '移除附件',
   attachmentImageAlt: '图片附件',
   attachmentImageLoadFailed: '图片加载失败',
-  attachmentTooMany: '最多添加 8 个附件',
-  attachmentTooManyImages: '最多添加 5 张图片',
-  attachmentImageTooLarge: '单张图片不能超过 5 MB',
-  attachmentFileTooLarge: '单个文件不能超过 25 MB',
-  attachmentTotalTooLarge: '附件总大小不能超过 50 MB',
+  attachmentTooMany: `最多添加 ${MAX_ATTACHMENTS_PER_PROMPT} 个附件`,
+  attachmentTooManyImages: `最多添加 ${MAX_IMAGE_ATTACHMENTS_PER_PROMPT} 张图片`,
+  attachmentImageTooLarge: `单张图片不能超过 ${MAX_IMAGE_ATTACHMENT_BYTES / 1024 / 1024} MB`,
+  attachmentFileTooLarge: `单个文件不能超过 ${MAX_FILE_ATTACHMENT_BYTES / 1024 / 1024} MB`,
+  attachmentTotalTooLarge: `附件总大小不能超过 ${MAX_ATTACHMENT_BYTES_PER_PROMPT / 1024 / 1024} MB`,
   attachmentUnsupportedImage: '仅支持 PNG、JPEG、WebP、GIF 图片',
   draftImageFallbackName: '电脑端图片',
   draftImageOpen: '预览电脑端草稿图片',

@@ -370,9 +370,9 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
           },
           'acp.prompt.image.maxCount': {
             type: 'number',
-            default: 5,
+            default: 20,
             minimum: 1,
-            maximum: 20,
+            maximum: 50,
             description: localize(
               'settings.acp.prompt.image.maxCount',
               'Maximum number of images that can be attached to a single prompt.',

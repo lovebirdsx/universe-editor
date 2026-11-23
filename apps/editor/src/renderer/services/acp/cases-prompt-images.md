@@ -7,7 +7,7 @@
 - 三入口：Ctrl+V 粘贴（EditContext 下由主进程剪贴板兜底 `acceptClipboardImage`）/ OS 拖入图片文件（`acceptImageFiles`）/ 应用内拖入图片 URI（`acceptImageUris`）。渲染侧本来就支持（`MessageContent` 的 ImageBlock 渲染），本功能**只补输入侧**；整条管线镜像 SelectionContext 套路。
 - 核心纯函数集中 `services/acp/promptImage.ts`：`PromptImage` / `ImageLimits` / `validateImage`（→ `ImageRejectReason`：`unsupported-type` / `too-large` / `too-many`）/ `composeImageBlocks` / `blobToPromptImage`（OS File）/ `bytesToPromptImage`（URI 读取）/ `mimeTypeForFileName` / `isSupportedImageMime`（`SUPPORTED_IMAGE_MIME`）。发送链路 `sendPrompt(text, refs, contexts, images)`。
 - 能力降级：agent `promptCapabilities.image !== true` → 三入口禁用 + Info 通知（`acp.image.unsupported`）。observable `session.imageSupported` 在 `session/acpSession.ts` 从 initialize 响应里 `caps?.image === true` 缓存。
-- 限额可配：`acp.prompt.image.maxSizeMB`（默认 5）/ `acp.prompt.image.maxCount`（默认 5），`PromptInput.tsx` 读成 `ImageLimits`（`maxBytes` / `maxCount`）。一批多文件按「接受即增长」的计数裁剪（快照起始数、逐个 accepted 增长），超限只报**一条** Warning（第一个拒绝原因），不逐条刷屏。
+- 限额可配：`acp.prompt.image.maxSizeMB`（默认 5）/ `acp.prompt.image.maxCount`（默认 20、最大 50），`PromptInput.tsx` 读成 `ImageLimits`（`maxBytes` / `maxCount`）。一批多文件按「接受即增长」的计数裁剪（快照起始数、逐个 accepted 增长），超限只报**一条** Warning（第一个拒绝原因），不逐条刷屏。限额针对**原图**；通过后先经 `promptImageCompression.ts` 压缩（长边 1568、WebP 0.82，超目标再按 1024 / 0.7 重压；GIF 跳过），压缩后的字节才进入 state 与 wire，MIME 也随之改为压缩产物（PNG 截图可能变 WebP）。
 
 ## 拖拽落输入框：两个必踩坑
 

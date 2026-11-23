@@ -36,6 +36,7 @@ import { commandErrorText, formatAttachmentSize, strings } from '../strings.js'
 import { ComposerAttachmentChip } from './ComposerAttachmentChip.js'
 import { ComposerQuickTabs, type ComposerQuickTrigger } from './ComposerQuickTabs.js'
 import { pastedImageFiles } from './pastedImages.js'
+import { downscaleImage } from './imageCompression.js'
 import { PROMPT_REF_LIST_ID, PromptRefPanel, promptRefOptionId } from './PromptRefPanel.js'
 import {
   applyTextEdit,
@@ -1137,7 +1138,7 @@ export function Composer({
     attachmentInputRef.current?.click()
   }
 
-  const acceptFiles = (files: readonly File[]): void => {
+  const acceptFiles = async (files: readonly File[]): Promise<void> => {
     if (files.length === 0) return
     if (disabled || attaching) return
     let count = attachments.length
@@ -1170,13 +1171,16 @@ export function Composer({
         onNotice(strings.attachmentFileTooLarge)
         continue
       }
-      if (totalBytes + file.size > MAX_ATTACHMENT_BYTES_PER_PROMPT) {
+      // Limits above apply to the picked file; the stored/uploaded bytes are
+      // downscaled so a 20-image prompt stays under the per-prompt budget.
+      const stored = kind === 'image' ? await compressImageFile(file) : file
+      if (totalBytes + stored.size > MAX_ATTACHMENT_BYTES_PER_PROMPT) {
         onNotice(strings.attachmentTotalTooLarge)
         continue
       }
-      accepted.push({ file, kind })
+      accepted.push({ file: stored, kind })
       count += 1
-      totalBytes += file.size
+      totalBytes += stored.size
       if (kind === 'image') imageCount += 1
     }
     if (accepted.length === 0) return
@@ -1204,7 +1208,7 @@ export function Composer({
     // Clearing the input mutates the live FileList, so snapshot it first.
     const files = Array.from(input.files ?? [])
     input.value = ''
-    acceptFiles(files)
+    void acceptFiles(files)
   }
 
   const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
@@ -1214,7 +1218,7 @@ export function Composer({
     // An image paste carries nothing the textarea can insert; hand it to the
     // same validation/upload path as the system picker.
     event.preventDefault()
-    acceptFiles(files)
+    void acceptFiles(files)
   }
 
   const uploadAll = async (
@@ -1654,6 +1658,21 @@ export function writeDraft(
 
 export function clearDraft(sessionKey: string): void {
   writeDraft(sessionKey, '')
+}
+
+/** Downscale before upload; a failed compression falls back to the original
+ *  file (which still has to pass the size limits). */
+async function compressImageFile(file: File): Promise<File> {
+  try {
+    const compressed = await downscaleImage(file)
+    if (compressed === file) return file
+    return new File([compressed], file.name, {
+      type: compressed.type,
+      lastModified: file.lastModified,
+    })
+  } catch {
+    return file
+  }
 }
 
 function rememberPreviewUrl(urls: Set<string>, file: File): string {

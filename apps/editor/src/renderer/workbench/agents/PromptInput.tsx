@@ -68,13 +68,13 @@ import { useEventValue, useObservable, useOptionalService, useService } from '..
 import type { IAcpSession, SelectionContext } from '../../services/acp/session/acpSessionService.js'
 import {
   blobToPromptImage,
-  bytesToPromptImage,
   mimeTypeForFileName,
   validateImage,
   type ImageLimits,
   type ImageRejectReason,
   type PromptImage,
 } from '../../services/acp/promptImage.js'
+import { downscaleImage } from '../../services/acp/promptImageCompression.js'
 import type { PromptFileAttachment } from '../../services/acp/promptAttachment.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import {
@@ -821,7 +821,7 @@ export function PromptInput({
   const imageLimits = useMemo<ImageLimits>(
     () => ({
       maxBytes: (config.get<number>('acp.prompt.image.maxSizeMB') ?? 5) * 1024 * 1024,
-      maxCount: config.get<number>('acp.prompt.image.maxCount') ?? 5,
+      maxCount: config.get<number>('acp.prompt.image.maxCount') ?? 20,
     }),
     [config],
   )
@@ -854,6 +854,8 @@ export function PromptInput({
       // that exceeds maxCount is capped correctly.
       let count = images.length
       for (const file of fileList) {
+        // Limits apply to the original file; compression only shrinks the bytes
+        // that reach state and the wire.
         const reason = validateImage(
           { mimeType: file.type, byteSize: file.size },
           count,
@@ -864,7 +866,8 @@ export function PromptInput({
           continue
         }
         try {
-          accepted.push(await blobToPromptImage(file, generateUuid(), file.name || undefined))
+          const compressed = await downscaleImage(file)
+          accepted.push(await blobToPromptImage(compressed, generateUuid(), file.name || undefined))
           count++
         } catch {
           rejection ??= 'unsupported-type'
@@ -919,9 +922,9 @@ export function PromptInput({
         const fileName = uri.path.slice(uri.path.lastIndexOf('/') + 1)
         try {
           const bytes = await fileService.readFile(uri)
-          const image = bytesToPromptImage(bytes, generateUuid(), fileName)
+          const mimeType = mimeTypeForFileName(fileName)
           const reason = validateImage(
-            { mimeType: image.mimeType, byteSize: image.byteSize },
+            { mimeType, byteSize: bytes.byteLength },
             count,
             imageLimits,
           )
@@ -929,6 +932,15 @@ export function PromptInput({
             rejection ??= reason
             continue
           }
+          const raw = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mimeType })
+          // Compression may change the MIME (PNG → WebP), so derive it from the
+          // resulting blob rather than the file name.
+          const compressed = await downscaleImage(raw)
+          const image = await blobToPromptImage(
+            compressed,
+            generateUuid(),
+            fileName || undefined,
+          )
           accepted.push(image)
           count++
         } catch {
@@ -1844,7 +1856,7 @@ export function PromptInput({
   // Attach an image lifted off the OS clipboard by the main process (base64
   // PNG). Mirrors acceptImageFiles' gating + validation + one-shot rejection.
   const acceptClipboardImage = useCallback(
-    (image: { dataBase64: string; mimeType: string; byteSize: number }): void => {
+    async (image: { dataBase64: string; mimeType: string; byteSize: number }): Promise<void> => {
       if (!imageSupported) {
         notification.notify({
           severity: Severity.Info,
@@ -1855,6 +1867,8 @@ export function PromptInput({
         })
         return
       }
+      // Capture the version before the first await: the attach belongs to the
+      // moment the user pasted, not to when compression finishes.
       const reason = validateImage(
         { mimeType: image.mimeType, byteSize: image.byteSize },
         images.length,
@@ -1869,12 +1883,8 @@ export function PromptInput({
       }
       const altVersion = editorHandleRef.current?.getAlternativeVersionId()
       const undoGeneration = imageUndo.generation
-      const added: PromptImage = {
-        id: generateUuid(),
-        mimeType: image.mimeType,
-        dataBase64: image.dataBase64,
-        byteSize: image.byteSize,
-      }
+      const compressed = await downscaleImage(base64ToBlob(image.dataBase64, image.mimeType))
+      const added = await blobToPromptImage(compressed, generateUuid())
       commitImages((prev) => [...prev, added])
       imageUndo.recordAttach([added], altVersion, undoGeneration)
       syncImageUndoState()
@@ -1897,7 +1907,7 @@ export function PromptInput({
   const readClipboardImageFromHost = useCallback(async (): Promise<void> => {
     try {
       const image = await hostService.readClipboardImage()
-      if (image) acceptClipboardImage(image)
+      if (image) await acceptClipboardImage(image)
     } catch (err) {
       console.debug('[acp-prompt] host clipboard image read failed', err)
     }
@@ -2148,6 +2158,12 @@ function sameDraft(a: AcpPromptDraft | undefined, b: AcpPromptDraft | undefined)
     (a.files ?? []).map((file) => file.id).join('|') ===
     (b.files ?? []).map((file) => file.id).join('|')
   )
+}
+
+function base64ToBlob(dataBase64: string, mimeType: string): Blob {
+  const binary = atob(dataBase64)
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  return new Blob([bytes], { type: mimeType })
 }
 
 function refKey(draft: AcpPromptDraft): string {
