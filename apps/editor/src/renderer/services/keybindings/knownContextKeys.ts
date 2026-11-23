@@ -87,6 +87,7 @@ const SEEDED_CONTEXT_KEYS: readonly string[] = [
   'editorTextFocus',
   'vimMode',
   'vimNormalMode',
+  'vimVisualMode',
   'vimEnabled',
   'vimSurface',
   'vimSurfaceId',

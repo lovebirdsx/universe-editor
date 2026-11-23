@@ -9,8 +9,9 @@
  *  Order matters and mirrors the plan:
  *    defaultPrevented / IME / chord → pass
  *    vim.enabled off / webview / dialog / quick input → pass
- *    resolve surface (menu > overlay > list > terminal > editor > chrome)
- *    insert → only Esc; terminal insert → pass
+ *    resolve surface (menu > overlay > list/reader > terminal > editor > chrome)
+ *    surface switched off in settings → pass
+ *    insert → only Esc / Ctrl+[; terminal insert → pass
  *    user binding (weight ≥ User, not reserved) → yield
  *    sequence engine → command | pass | swallow
  *--------------------------------------------------------------------------------------------*/
@@ -36,14 +37,25 @@ import {
 import { recordPerfPhase } from '../../services/performance/perfPhases.js'
 import type { IKeyboardDebugService } from '../../services/keybinding/keyboardDebugService.js'
 import { buildKeyString } from '../keybindings/keyEventUtils.js'
-import type { IVimModeService } from '../../services/vim/vimModeService.js'
+import type { IVimModeService, IVimWhichKeyState } from '../../services/vim/vimModeService.js'
+import { resolveVimCommandTitle } from '../../services/vim/vimCommandTitle.js'
+import {
+  formatVimKeys,
+  formatVimPending as formatPendingKeys,
+} from '../../services/vim/vimKeyFormat.js'
+import { isWebviewFocus } from './webviewFocus.js'
+import { computeWhichKeyItems } from './vimWhichKeyItems.js'
 import {
   formatVimExecute,
   formatVimPassThrough,
   formatVimPending,
   formatVimSurface,
   formatVimUserShadow,
+  formatVimWhichKey,
 } from './vimDebugFormat.js'
+
+/** Pause after a prefix before the which-key overlay opens. */
+export const WHICH_KEY_DELAY_MS = 300
 
 const PRINTABLE_SWALLOW_KINDS: ReadonlySet<VimSurfaceKind> = new Set([
   'list',
@@ -65,14 +77,6 @@ export interface VimDispatcherOptions {
   readonly keyboardDebugService?: IKeyboardDebugService | undefined
 }
 
-function isWebviewFocus(doc: Document): boolean {
-  const active = doc.activeElement
-  if (active === null) return false
-  if (active.tagName.toUpperCase() === 'IFRAME') return true
-  const marked = active.closest?.('[data-vim-surface="webview"]')
-  return marked !== null && marked !== undefined
-}
-
 function hasRendererDialog(doc: Document): boolean {
   return doc.querySelector('[data-renderer-dialog]') !== null
 }
@@ -88,10 +92,32 @@ function whenExpression(when: string): ContextKeyExpression | undefined {
   return expression
 }
 
+/**
+ * Entries whose `when` fails never take part in matching: otherwise a gated
+ * `]c` would still make a plain `]` a pending prefix (which-key, swallowed next
+ * key) while its command can never run. Returns the input when nothing is gated.
+ */
+function entriesWithActiveWhen(
+  entries: readonly IVimKeymapEntry[],
+  context: IContextKeyService,
+): readonly IVimKeymapEntry[] {
+  if (!entries.some((entry) => entry.when !== undefined)) return entries
+  return entries.filter(
+    (entry) => entry.when === undefined || context.contextMatchesRules(whenExpression(entry.when)),
+  )
+}
+
+function matchRank(entry: IVimKeymapEntry): number {
+  if (entry.scope === 'surface') return 0
+  return entry.when === undefined ? 2 : 1
+}
+
 function mergeCommandArgs(entry: IVimKeymapEntry, rawCount: number): Record<string, unknown> {
   // Vim's implicit count is 1; the sequence engine reports 0 when no digits
-  // were typed, but adapters should never have to special-case it.
+  // were typed. `hasCount: true` (only sent for typed digits) keeps the two apart
+  // for the few commands where `G` and `1G` mean different things.
   const base: Record<string, unknown> = { count: rawCount > 0 ? rawCount : 1 }
+  if (rawCount > 0) base['hasCount'] = true
   if (typeof entry.args === 'object' && entry.args !== null && !Array.isArray(entry.args)) {
     return { ...(entry.args as Record<string, unknown>), ...base }
   }
@@ -100,6 +126,16 @@ function mergeCommandArgs(entry: IVimKeymapEntry, rawCount: number): Record<stri
 
 export class VimDispatcher {
   private readonly _pending = new Map<string, PendingSequence>()
+  private _whichKeyTimer: ReturnType<typeof setTimeout> | undefined
+  /**
+   * The which-key state is one service-wide value but every window has its own
+   * dispatcher: only the dispatcher that published it (and only for the surface
+   * it was opened on) may treat it as "open" when deciding to skip a timeout or
+   * to refresh without the delay, and only it may close it.
+   */
+  private _whichKeyOwner:
+    | { readonly state: IVimWhichKeyState; readonly doc: Document; readonly surfaceKey: string }
+    | undefined
   private _disposed = false
 
   constructor(private readonly _options: VimDispatcherOptions) {}
@@ -115,6 +151,7 @@ export class VimDispatcher {
   /** Focus moved: a count typed in one surface must not carry into the next. */
   resetAll(doc?: Document): void {
     this.clearTimers()
+    this.clearFeedback()
     if (doc !== undefined) resetVimSequences(doc)
   }
 
@@ -127,6 +164,87 @@ export class VimDispatcher {
   private clearTimers(): void {
     for (const pending of this._pending.values()) clearTimeout(pending.timer)
     this._pending.clear()
+  }
+
+  /** The sequence ended (executed, cancelled, broken): drop pending text and which-key. */
+  private clearFeedback(): void {
+    if (this._whichKeyTimer !== undefined) clearTimeout(this._whichKeyTimer)
+    this._whichKeyTimer = undefined
+    this._options.vimModeService.setSequencePendingKeys('')
+    this.closeWhichKey()
+  }
+
+  private ownsWhichKey(doc: Document, surfaceKey: string): boolean {
+    const owner = this._whichKeyOwner
+    return (
+      owner !== undefined &&
+      owner.doc === doc &&
+      owner.surfaceKey === surfaceKey &&
+      this._options.vimModeService.whichKey === owner.state
+    )
+  }
+
+  private closeWhichKey(): void {
+    const owner = this._whichKeyOwner
+    this._whichKeyOwner = undefined
+    if (owner !== undefined && this._options.vimModeService.whichKey === owner.state) {
+      this._options.vimModeService.setWhichKey(undefined)
+    }
+  }
+
+  /**
+   * Which-key opens after a pause on a multi-token prefix, then follows the
+   * prefix immediately so walking `<leader> w` updates the list without a second delay.
+   */
+  private scheduleWhichKey(
+    doc: Document,
+    active: IActiveVimSurface,
+    entries: readonly IVimKeymapEntry[],
+    trace: VimTrace,
+    debug: IKeyboardDebugService | undefined,
+  ): void {
+    const vim = this._options.vimModeService
+    if (this._whichKeyTimer !== undefined) clearTimeout(this._whichKeyTimer)
+    this._whichKeyTimer = undefined
+    const prefix = active.sequence.prefix
+    if (!vim.getWhichKeyEnabled() || prefix.length === 0) {
+      this.closeWhichKey()
+      return
+    }
+    const context = this._options.contextKeyService
+    const surfaceKey = active.surfaceKey
+    const show = (): void => {
+      // The setting may have been switched off while the delay was running.
+      if (!vim.getWhichKeyEnabled()) {
+        this.closeWhichKey()
+        return
+      }
+      const items = computeWhichKeyItems(
+        entries,
+        prefix,
+        (entry) =>
+          entry.when === undefined || context.contextMatchesRules(whenExpression(entry.when)),
+        resolveVimCommandTitle,
+      )
+      if (debug?.enabled) {
+        debug.append(formatVimWhichKey(trace, formatVimKeys(prefix), items.length))
+      }
+      if (items.length === 0) {
+        this.closeWhichKey()
+        return
+      }
+      const state: IVimWhichKeyState = { prefix: formatVimKeys(prefix), items }
+      this._whichKeyOwner = { state, doc, surfaceKey }
+      vim.setWhichKey(state)
+    }
+    if (this.ownsWhichKey(doc, surfaceKey)) {
+      show()
+      return
+    }
+    this._whichKeyTimer = setTimeout(() => {
+      this._whichKeyTimer = undefined
+      if (!this._disposed && active.sequence.isPending) show()
+    }, WHICH_KEY_DELAY_MS)
   }
 
   private dispatch(doc: Document, event: KeyboardEvent): boolean {
@@ -167,13 +285,14 @@ export class VimDispatcher {
     if (kind === 'terminal' && mode !== 'terminal-normal') return false
 
     if (mode === 'insert') {
-      if (token !== 'escape') return false
+      // Only editors reach Insert in practice (terminals were handled above).
+      // Ctrl+[ is Esc as in Vim, on editors too: the core leaves Insert instead
+      // of Monaco outdenting the line.
+      if (token !== 'escape' && token !== 'ctrl+[') return false
       // Keep checking the dialog here: opening the settings modal while an
       // editor is in Insert mode must still leave Escape to the dialog.
       if (hasRendererDialog(doc)) return false
       if (kind === 'editor') return this.editorStroke(active, event)
-      // Non-editor surfaces have no insert mode of their own; Esc returns to
-      // Normal so the next keystroke is Vim's again.
       vim.setMode(surfaceKey, 'normal')
       return true
     }
@@ -224,27 +343,15 @@ export class VimDispatcher {
       return this.editorStroke(active, event)
     }
 
-    const surfaceKeys = vim.getEffectiveKeymap(kind)
-    active.sequence.setEntries(surfaceKeys)
-    const step = active.sequence.feed(token)
-    switch (step.kind) {
-      case 'cancel':
-        this.clearPending(surfaceKey)
-        return true
-      case 'pending':
-        this.armPending(active, doc, surfaceKey, trace)
-        if (debug?.enabled) {
-          debug.append(formatVimPending(trace, [...step.prefix]))
-        }
-        return true
-      case 'execute':
-        this.clearPending(surfaceKey)
-        this.runMatches(step.matches, step.count, trace, debug)
-        return true
-      case 'none':
-        this.clearPending(surfaceKey)
-        return this.handleUnmapped(kind, token, event, trace, debug)
-    }
+    active.sequence.setEntries(
+      entriesWithActiveWhen(
+        vim.getEffectiveKeymap(kind, active.keymap),
+        this._options.contextKeyService,
+      ),
+    )
+    return this.feedSequence(doc, active, token, surfaceKey, trace, debug, (typed) =>
+      this.handleUnmapped(kind, token, event, typed, trace, debug),
+    )
   }
 
   /**
@@ -262,24 +369,72 @@ export class VimDispatcher {
     debug: IKeyboardDebugService | undefined,
   ): boolean {
     const vim = this._options.vimModeService
+    // `r<Space>` / `f<Space>`: the core is waiting for a literal character, so
+    // the leader is that character and must not open a leader sequence.
+    if (active.surface.actions.isAwaitingCharArg?.() === true) return false
     if (token !== vim.getLeader() && !active.sequence.isPending) return false
-    active.sequence.setEntries(vim.getEffectiveKeymap('editor'))
-    const step = active.sequence.feed(token)
-    switch (step.kind) {
-      case 'cancel':
-        this.clearPending(surfaceKey)
-        return true
-      case 'pending':
-        this.armPending(active, doc, surfaceKey, trace)
-        if (debug?.enabled) debug.append(formatVimPending(trace, [...step.prefix]))
-        return true
-      case 'execute':
-        this.clearPending(surfaceKey)
-        this.runMatches(step.matches, step.count, trace, debug)
-        return true
-      case 'none':
-        this.clearPending(surfaceKey)
-        return false
+    active.sequence.setEntries(
+      entriesWithActiveWhen(
+        vim.getEffectiveKeymap('editor', active.keymap),
+        this._options.contextKeyService,
+      ),
+    )
+    // An unmatched token is the controller's: it was never ours to swallow.
+    return this.feedSequence(doc, active, token, surfaceKey, trace, debug, () => false, true)
+  }
+
+  /**
+   * Feed one token and act on the step. A token that merely ended a deferred
+   * match (`z` waiting for `za`, then `j`) is fed again after the match ran so
+   * it still counts; `editor` hands such a token back to the controller instead,
+   * because counts and operators there are the Vim core's, not the engine's.
+   */
+  private feedSequence(
+    doc: Document,
+    active: IActiveVimSurface,
+    token: string,
+    surfaceKey: string,
+    trace: VimTrace,
+    debug: IKeyboardDebugService | undefined,
+    onUnmatched: (typed: readonly string[]) => boolean,
+    editor = false,
+  ): boolean {
+    const vim = this._options.vimModeService
+    // What the user typed for the current attempt, for the unsupported-key notice.
+    let typed: readonly string[] = [...active.sequence.prefix, token]
+    let step = active.sequence.feed(token)
+    for (;;) {
+      switch (step.kind) {
+        case 'cancel':
+          this.clearPending(surfaceKey)
+          this.clearFeedback()
+          return true
+        case 'pending':
+          this.armPending(active, doc, surfaceKey, trace)
+          vim.setSequencePendingKeys(formatPendingKeys(step.count, step.prefix))
+          this.scheduleWhichKey(
+            doc,
+            active,
+            vim.getEffectiveKeymap(active.surface.kind, active.keymap),
+            trace,
+            debug,
+          )
+          if (debug?.enabled) debug.append(formatVimPending(trace, [...step.prefix]))
+          return true
+        case 'execute':
+          this.clearPending(surfaceKey)
+          this.clearFeedback()
+          this.runMatches(step.matches, step.count, trace, debug)
+          if (step.replay !== true) return true
+          if (editor && token !== vim.getLeader()) return false
+          typed = [token]
+          step = active.sequence.feed(token)
+          continue
+        case 'none':
+          this.clearPending(surfaceKey)
+          this.clearFeedback()
+          return onUnmatched(typed)
+      }
     }
   }
 
@@ -326,7 +481,11 @@ export class VimDispatcher {
       this._pending.delete(surfaceKey)
       // The surface may have unmounted while the timer was in flight.
       if (this._disposed || !isVimSurfaceEngineRegistered(doc, active.sequence)) return
+      // An open which-key list is reading time: only Esc, a key or a focus change
+      // ends the sequence. A deferred match (`z` before `za`) still runs on timeout.
+      if (this.ownsWhichKey(doc, surfaceKey) && !active.sequence.hasDeferredMatch) return
       const step = active.sequence.flush()
+      this.clearFeedback()
       if (step.kind === 'execute') this.runMatches(step.matches, step.count, trace, undefined)
     }, timeoutMs)
     this._pending.set(surfaceKey, { timer })
@@ -346,21 +505,23 @@ export class VimDispatcher {
     debug: IKeyboardDebugService | undefined,
   ): void {
     const context = this._options.contextKeyService
-    // A `when` entry is the scoped meaning of the key (chat-only `i`, the
-    // settings-only `/`); it must be tried before the default entry so a
-    // matching scope wins instead of being shadowed by registration order.
-    const ordered = [...matches].sort(
-      (a, b) => Number(a.when === undefined) - Number(b.when === undefined),
-    )
+    // Narrower meanings win over registration order: what the active surface
+    // declared itself (settings-only `/`), then `when`-gated entries (chat-only
+    // `i`), then the kind-wide default.
+    const ordered = [...matches].sort((a, b) => matchRank(a) - matchRank(b))
     const entry = ordered.find((candidate) => {
       if (candidate.when === undefined) return true
       return context.contextMatchesRules(whenExpression(candidate.when))
     })
-    if (entry === undefined) return
-    if (debug?.enabled) {
-      debug.append(formatVimExecute(trace, entry.command, count))
-      console.debug(`[vim] execute ${entry.command} count=${count}`)
+    if (entry === undefined) {
+      // Keys matched but every `when` failed: consumed, so tell the user why nothing ran.
+      const first = matches[0]
+      if (first !== undefined) {
+        this._options.vimModeService.reportUnsupportedKey(formatVimKeys(first.keys))
+      }
+      return
     }
+    if (debug?.enabled) debug.append(formatVimExecute(trace, entry.command, count))
     void this._options.commandService
       .executeCommand(entry.command, mergeCommandArgs(entry, count))
       .catch((error: unknown) => {
@@ -372,6 +533,7 @@ export class VimDispatcher {
     kind: VimSurfaceKind,
     token: string,
     event: KeyboardEvent,
+    typed: readonly string[],
     trace: VimTrace,
     debug: IKeyboardDebugService | undefined,
   ): boolean {
@@ -379,6 +541,7 @@ export class VimDispatcher {
     if (!PRINTABLE_SWALLOW_KINDS.has(kind)) return false
     if (token.length !== 1 || event.ctrlKey || event.altKey || event.metaKey) return false
     if (debug?.enabled) debug.append(formatVimPassThrough(trace, 'unmapped printable key'))
+    this._options.vimModeService.reportUnsupportedKey(formatVimKeys(typed))
     return true
   }
 }

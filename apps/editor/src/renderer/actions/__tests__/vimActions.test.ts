@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
+import { Window } from 'happy-dom'
 import {
   CommandsRegistry,
   ContextKeyService,
@@ -18,9 +19,18 @@ import {
   registerAction2,
   type IDisposable,
 } from '@universe-editor/platform'
-import type { IVimKeymapEntry } from '@universe-editor/workbench-ui'
+import {
+  __resetVimSurfacesForTests,
+  registerVimSurface,
+  type IVimKeymapEntry,
+} from '@universe-editor/workbench-ui'
+import {
+  registerWorkbenchDocument,
+  setActiveWorkbenchDocument,
+} from '../../services/windows/workbenchDocuments.js'
 import { IVimModeService, type IVimActiveSurface } from '../../services/vim/vimModeService.js'
-import { ShowActiveVimKeymapAction } from '../vimActions.js'
+import type { IVimUserKeymapItem } from '../../services/vim/vimKeymapMerge.js'
+import { ShowActiveVimKeymapAction, ToggleVimModeAction } from '../vimActions.js'
 
 const disposables: IDisposable[] = []
 afterEach(() => {
@@ -30,8 +40,10 @@ afterEach(() => {
 interface HarnessOptions {
   readonly activeSurface?: IVimActiveSurface
   readonly entries?: readonly IVimKeymapEntry[]
-  readonly userKeymap?: readonly IVimKeymapEntry[]
+  readonly userKeymap?: readonly IVimUserKeymapItem[]
+  readonly issues?: readonly string[]
   readonly reservedKeys?: readonly string[]
+  readonly onKeymapRequest?: (surfaceKeymap: readonly IVimKeymapEntry[] | undefined) => void
 }
 
 interface Harness {
@@ -56,8 +68,12 @@ function harness(options: HarnessOptions = {}): Harness {
     getLeader: () => 'space',
     activeSurface,
     getMode: (_key: string, fallback: string) => fallback,
-    getEffectiveKeymap: () => options.entries ?? [],
+    getEffectiveKeymap: (_kind: string, surfaceKeymap?: readonly IVimKeymapEntry[]) => {
+      options.onKeymapRequest?.(surfaceKeymap)
+      return options.entries ?? []
+    },
     getUserKeymap: () => options.userKeymap ?? [],
+    getUserKeymapIssues: () => options.issues ?? [],
     reservedKeys: options.reservedKeys ?? ['escape', 'ctrl+[', 'i', 'a', ':', '/', '?', 'space'],
   } as unknown as IVimModeService
   const contextKeyService = new ContextKeyService()
@@ -142,11 +158,28 @@ describe('ShowActiveVimKeymapAction', () => {
     const { lines, run } = harness({
       activeSurface: activeSurface(),
       entries: [override],
-      userKeymap: [override],
+      userKeymap: [{ ...override, unbind: false }],
     })
     run()
     expect(lines).toContain('  n  →  custom.down  (user override)')
     expect(lines).toContain('  list.focusDown: n  →  custom.down')
+  })
+
+  it('lists unbinds and parse problems from vim.keymap', () => {
+    const { lines, run } = harness({
+      activeSurface: activeSurface(),
+      userKeymap: [
+        { unbind: true, id: 'list.delete' },
+        { unbind: true, keys: ['d', 'd'], command: 'list.delete' },
+      ],
+      issues: ['vim.keymap[2]: unknown surface "lists"'],
+    })
+    run()
+    expect(lines).toContain('  unbind list.delete')
+    expect(lines).toContain('  unbind d d (list.delete)')
+    expect(
+      section(lines, 'Problems in vim.keymap (these entries were ignored or trimmed):'),
+    ).toContain('  vim.keymap[2]: unknown surface "lists"')
   })
 
   it('says there is no active surface instead of inventing a kind', () => {
@@ -173,5 +206,51 @@ describe('ShowActiveVimKeymapAction', () => {
     const { lines, run } = harness({ activeSurface: activeSurface(), entries })
     run()
     expect(section(lines, 'Shadowed by User bindings:')).toEqual(['  <none>'])
+  })
+})
+
+describe('Vim command categories', () => {
+  it('files the on/off switch under the Vim category like the other Vim commands', () => {
+    const category = new ToggleVimModeAction().desc.category
+    expect(typeof category === 'string' ? category : category?.original).toBe('Vim')
+  })
+})
+
+describe('ShowActiveVimKeymapAction document', () => {
+  afterEach(() => __resetVimSurfacesForTests())
+
+  it("reads the focused workbench document's surface keymap, not the global document", () => {
+    const own: readonly IVimKeymapEntry[] = [{ id: 'own', keys: ['/'], command: 'x.own' }]
+    const win = new Window()
+    const doc = win.document as unknown as Document
+    const documentRegistration = registerWorkbenchDocument(doc)
+    disposables.push(documentRegistration)
+    setActiveWorkbenchDocument(doc)
+    const element = doc.createElement('div')
+    element.tabIndex = 0
+    doc.body.appendChild(element)
+    disposables.push(
+      registerVimSurface(
+        {
+          id: 'tree-1',
+          kind: 'list',
+          focus: 'within',
+          getElement: () => element,
+          getSurfaceKey: () => 'list:tree-1',
+          defaultMode: 'normal',
+          actions: {},
+          keymap: own,
+        },
+        doc,
+      ),
+    )
+    element.focus()
+    const seen: (readonly IVimKeymapEntry[] | undefined)[] = []
+    const { run } = harness({
+      activeSurface: activeSurface(),
+      onKeymapRequest: (surfaceKeymap) => seen.push(surfaceKeymap),
+    })
+    run()
+    expect(seen).toEqual([own])
   })
 })

@@ -85,6 +85,7 @@ import { closestAttr, closestPartId } from '../services/focus/FocusStackService.
 import { installDocumentFocusReconcile } from '../services/focus/documentFocusReconcile.js'
 import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
 import { getActiveWorkbenchDocument } from '../services/windows/workbenchDocuments.js'
+import { isWebviewElement } from '../workbench/vim/webviewFocus.js'
 
 const PART_KEY_BY_ID: Readonly<Record<PartId, string>> = {
   [PartId.ActivityBar]: 'activityBarFocus',
@@ -106,8 +107,8 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
     const focusedView = contextKeyService.createKey<string>('focusedView', '')
     const focusedViewPane = contextKeyService.createKey<string>('focusedViewPane', '')
     const terminalFocus = contextKeyService.createKey<boolean>('terminalFocus', false)
-    // Webview focus is DOM-derived: when an iframe (or a container marked
-    // `data-vim-surface="webview"`) holds focus, Vim must stay out of the way.
+    // Webview focus is DOM-derived and shares its definition with the Vim
+    // dispatcher (`isWebviewElement`): Vim must stay out of an iframe / marked host.
     const webviewFocus = contextKeyService.createKey<boolean>('webviewFocus', false)
 
     const perPart = new Map<PartId, ReturnType<typeof contextKeyService.createKey<boolean>>>()
@@ -116,13 +117,7 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
     }
 
     const updateWebviewFocus = (active: Element | null): void => {
-      if (active === null) {
-        webviewFocus.set(false)
-        return
-      }
-      const inIframe = active.tagName.toUpperCase() === 'IFRAME'
-      const marked = active.closest?.('[data-vim-surface="webview"]') != null
-      webviewFocus.set(inIframe || marked)
+      webviewFocus.set(isWebviewElement(active))
     }
 
     const updateTerminalFocus = (active: Element | null): void => {

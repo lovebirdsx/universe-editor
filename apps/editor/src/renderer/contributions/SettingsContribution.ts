@@ -342,7 +342,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: true,
             description: localize(
               'settings.vim.showStatusBar.description',
-              'Show the current Vim mode as a status-bar icon while any active Vim surface holds the keyboard.',
+              'Show the current Vim mode (NORMAL / INSERT / VISUAL ...), pending keys and unsupported-key notices in the status bar while any active Vim surface holds the keyboard.',
             ),
           },
           'vim.autoSwitchInputMethod': {
@@ -376,6 +376,22 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             description: localize(
               'settings.vim.highlightSearch.description',
               'Highlight all Vim search matches and keep them updated while editing. Press Escape in Normal mode to clear them (`:nohlsearch`). Large files are capped.',
+            ),
+          },
+          'vim.whichKey': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.vim.whichKey.description',
+              'After a multi-key prefix such as the leader, pause briefly to list the keys that can follow and what they do.',
+            ),
+          },
+          'vim.useSystemClipboard': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.vim.useSystemClipboard.description',
+              'Sync the editor Vim unnamed register with the system clipboard: y/d/c write to it, p/P paste from it.',
             ),
           },
           'vim.leader': {
@@ -428,7 +444,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: [],
             description: localize(
               'settings.vim.keymap.description',
-              'User Vim mappings. Entries with an existing `id` replace the built-in entry; others are appended. Keys use Vim tokens (`j`, `G`, `ctrl+d`, `<leader>`) and active surfaces default to all non-editor surfaces.',
+              'User Vim mappings. An entry with an existing `id` overrides that built-in entry and inherits any field it omits (keys, command, surfaces, when). Other entries are added and need `keys` and `command`. A `command` starting with `-` removes a mapping, like a keybindings.json "-command" entry: `{ "id": "list.delete", "command": "-" }` or `{ "keys": ["d", "d"], "command": "-list.delete" }`. Keys use Vim tokens (`j`, `G`, `ctrl+d`, `<leader>`); `surfaces` defaults to every non-editor surface (and the editor for `<leader>` chords). Invalid entries are skipped with a warning in the console and in "Vim: Show Active Keymap".',
             ),
           },
           'vim.surfaces.lists': {
@@ -436,7 +452,23 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: true,
             description: localize(
               'settings.vim.surfaces.lists.description',
-              'Enable Vim keys on trees, lists, menus and overlays.',
+              'Enable Vim keys on trees, lists and the Markdown preview.',
+            ),
+          },
+          'vim.surfaces.menus': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.vim.surfaces.menus.description',
+              'Enable Vim keys on context menus and dropdown menus.',
+            ),
+          },
+          'vim.surfaces.overlays': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.vim.surfaces.overlays.description',
+              'Enable Vim keys on overlays such as notifications and the hover panel.',
             ),
           },
           'vim.surfaces.tabs': {
@@ -461,6 +493,14 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             description: localize(
               'settings.vim.surfaces.terminalNormalMode.description',
               'Enable the terminal Normal Mode surface.',
+            ),
+          },
+          'vim.surfaces.editor': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.vim.surfaces.editor.description',
+              'Enable Vim keys in text editors (including the Output panel). When off, editors behave as plain Monaco even while vim.enabled is on; the leader chords stay inactive there too.',
             ),
           },
         },

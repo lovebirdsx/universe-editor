@@ -42,7 +42,14 @@ function surfaceKeyOf(call: unknown[]): string | undefined {
   return surface?.surfaceKey
 }
 
-function mountDocument(doc: Document, vim: { activateSurface: ReturnType<typeof vi.fn> }) {
+function mountDocument(
+  doc: Document,
+  vim: {
+    activateSurface: ReturnType<typeof vi.fn>
+    setSequencePendingKeys: ReturnType<typeof vi.fn>
+    setWhichKey: ReturnType<typeof vi.fn>
+  },
+) {
   const services = new ServiceCollection()
   const context = new ContextKeyService()
   services.set(IContextKeyService, context)
@@ -109,7 +116,11 @@ describe('useVimDispatcher across workbench documents', () => {
     mainEl.focus()
     auxEl.focus()
 
-    const vim = { activateSurface: vi.fn() }
+    const vim = {
+      activateSurface: vi.fn(),
+      setSequencePendingKeys: vi.fn(),
+      setWhichKey: vi.fn(),
+    }
     const view = mountDocument(mainDoc, vim)
     mountDocument(auxDoc, vim)
 

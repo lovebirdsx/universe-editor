@@ -13,6 +13,7 @@ import { PerfMarks } from '../../shared/perf/marks.js'
 import { ServicesContext, useService, useObservable } from './useService.js'
 import { useGlobalKeybindingHandler } from './useGlobalKeybindingHandler.js'
 import { useVimDispatcher } from './vim/useVimDispatcher.js'
+import { VimWhichKey } from './vim/VimWhichKey.js'
 import {
   DragSessionProvider,
   OwnerDocumentProvider,
@@ -127,6 +128,7 @@ function WorkbenchShell() {
       <NotificationsToast />
       <NotificationsCenter />
       <ProgressDialogHost />
+      <VimWhichKey />
     </>
   )
 }

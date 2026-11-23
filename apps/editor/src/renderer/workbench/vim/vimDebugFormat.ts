@@ -35,3 +35,11 @@ export function formatVimUserShadow(context: VimTraceContext, command: string): 
 export function formatVimPassThrough(context: VimTraceContext, reason: string): string {
   return `${prefix(context)} / ⤫ ${reason}`
 }
+
+export function formatVimWhichKey(
+  context: VimTraceContext,
+  keys: string,
+  itemCount: number,
+): string {
+  return `${prefix(context)} / which-key ${keys} → ${itemCount} item(s)`
+}

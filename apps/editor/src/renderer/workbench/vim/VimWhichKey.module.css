@@ -1,0 +1,54 @@
+.panel {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  z-index: var(--z-popover);
+  max-width: min(720px, calc(100vw - 32px));
+  max-height: 50vh;
+  overflow: hidden;
+  padding: var(--spacing-4) var(--spacing-5);
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: var(--radius-md);
+  background: var(--vscode-editorWidget-background);
+  color: var(--vscode-editorWidget-foreground);
+  box-shadow: var(--shadow-md);
+  font-size: var(--font-size-sm);
+  pointer-events: none;
+}
+
+.prefix {
+  margin-bottom: var(--spacing-2);
+  color: var(--vscode-descriptionForeground);
+  font-family: monospace;
+}
+
+.list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--spacing-1) var(--spacing-5);
+}
+
+.item {
+  display: flex;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.key {
+  flex: none;
+  min-width: 3ch;
+  color: var(--vscode-textLink-foreground);
+  font-family: monospace;
+  font-weight: 600;
+}
+
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group {
+  color: var(--vscode-descriptionForeground);
+}

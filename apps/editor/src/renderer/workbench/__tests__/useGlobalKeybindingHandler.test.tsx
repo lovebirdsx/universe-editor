@@ -258,6 +258,25 @@ describe('useGlobalKeybindingHandler', () => {
     }
   })
 
+  // Normal mode owns Ctrl+R/V/O/I through the Vim window-capture dispatcher (see
+  // vimDispatcher tests); with Vim off or in Insert mode `vimNormalMode` is false and
+  // the workbench / Monaco must keep them. The viewport safety net above must not widen.
+  it.each(['r', 'v', 'o', 'i'])(
+    'keeps the workbench Ctrl+%s outside Vim Normal mode even with editor text focus',
+    (letter) => {
+      const { executeCommand, instantiation } = createHarness()
+      bind(`ctrl+${letter}`, `test.ctrl.${letter}`)
+      const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+      ck.createKey('vimNormalMode', false)
+      ck.createKey('editorTextFocus', true)
+      mountHost(instantiation)
+
+      const { preventDefault } = dispatch({ ctrlKey: true, key: letter })
+      expect(executeCommand).toHaveBeenCalledWith(`test.ctrl.${letter}`)
+      expect(preventDefault).toHaveBeenCalledTimes(1)
+    },
+  )
+
   it('still executes a User binding for Ctrl+e in Vim Normal mode', () => {
     const { executeCommand, instantiation } = createHarness()
     disposables.push(

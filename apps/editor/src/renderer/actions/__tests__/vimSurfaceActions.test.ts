@@ -11,6 +11,7 @@ import {
   CommandsRegistry,
   InstantiationService,
   ServiceCollection,
+  configureNls,
   registerAction2,
   type Action2,
 } from '@universe-editor/platform'
@@ -19,6 +20,7 @@ import {
   registerVimSurface,
   type IVimSurfaceActions,
 } from '@universe-editor/workbench-ui'
+import { ZH_CN_MESSAGES } from '../../../shared/i18n/messages/zh-CN.js'
 import {
   registerWorkbenchDocument,
   setActiveWorkbenchDocument,
@@ -37,6 +39,7 @@ import {
   ListFocusLeftAction,
   ListFocusRightAction,
   ListFocusUpAction,
+  ListFindAction,
   ListPageDownAction,
   ListPageUpAction,
   ListScrollViewportDownAction,
@@ -45,6 +48,7 @@ import {
   SurfaceEscapeAction,
   SurfaceNextAction,
   SurfacePreviousAction,
+  VIM_SURFACE_ACTIONS,
 } from '../vimSurfaceActions.js'
 
 const cleanups: (() => void)[] = []
@@ -155,6 +159,30 @@ describe('Vim surface commands', () => {
     expect(move).toHaveBeenCalledWith('down', 3)
   })
 
+  it('sends first/last 0 unless a count was typed', () => {
+    const first = vi.fn()
+    const last = vi.fn()
+    focusSurface({ first, last })
+    invoke(ListFocusFirstAction, { count: 1 })
+    invoke(ListFocusFirstAction, { count: 1, hasCount: true })
+    invoke(ListFocusLastAction, { count: 1 })
+    invoke(ListFocusLastAction, { count: 4, hasCount: true })
+    // A direct call without the dispatcher's flag still honours a count above 1.
+    invoke(ListFocusLastAction, { count: 3 })
+    expect(first).toHaveBeenNthCalledWith(1, 0)
+    expect(first).toHaveBeenNthCalledWith(2, 1)
+    expect(last).toHaveBeenNthCalledWith(1, 0)
+    expect(last).toHaveBeenNthCalledWith(2, 4)
+    expect(last).toHaveBeenNthCalledWith(3, 3)
+  })
+
+  it('opens the surface filter box on list.find', () => {
+    const find = vi.fn()
+    focusSurface({ find })
+    invoke(ListFindAction)
+    expect(find).toHaveBeenCalledTimes(1)
+  })
+
   it('normalizes invalid counts to 1', () => {
     const move = vi.fn()
     focusSurface({ move })
@@ -224,6 +252,32 @@ describe('Vim surface command ids', () => {
       SurfacePreviousAction.ID,
       SurfaceEscapeAction.ID,
     ]
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe('Vim surface command titles', () => {
+  // The titles use a dynamic `action.vim.<id>.title` key, which the literal-key zh-CN
+  // coverage scan cannot see: a missing entry would silently show English.
+  it('has a zh-CN title for every action, and uses it', () => {
+    const missing = VIM_SURFACE_ACTIONS.map((action) => `action.vim.${action.ID}.title`).filter(
+      (key) => ZH_CN_MESSAGES[key] === undefined,
+    )
+    expect(missing).toEqual([])
+
+    configureNls({ locale: 'zh-CN', messages: ZH_CN_MESSAGES })
+    cleanups.push(() => configureNls({ locale: 'en-US' }))
+    for (const Action of VIM_SURFACE_ACTIONS) {
+      const { title, category } = new Action().desc
+      expect(typeof title === 'string' ? title : title.value).toBe(
+        ZH_CN_MESSAGES[`action.vim.${Action.ID}.title`],
+      )
+      expect(category).toBeDefined()
+    }
+  })
+
+  it('keeps VIM_SURFACE_ACTIONS ids distinct', () => {
+    const ids = VIM_SURFACE_ACTIONS.map((action) => action.ID)
     expect(new Set(ids).size).toBe(ids.length)
   })
 })

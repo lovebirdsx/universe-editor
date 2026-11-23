@@ -1,9 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  Generic Vim surface commands. Wave 0 registers every id up front so later
- *  work packages only add adapter actions; the commands themselves already
- *  forward to the active surface (throwing away nothing for adapters that exist).
+ *  Generic Vim surface commands (`list.*` / `surface.*`). Each forwards to the
+ *  `actions` of the surface that owns the keyboard; a surface that does not
+ *  implement an action ignores it. Lists, trees, menus, the terminal and the
+ *  Markdown preview all share these ids.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -15,7 +16,7 @@ import {
 import { getActiveVimSurface, type IVimSurfaceActions } from '@universe-editor/workbench-ui'
 import { getActiveWorkbenchDocument } from '../services/windows/workbenchDocuments.js'
 
-type Invoke = (actions: IVimSurfaceActions, count: number) => void
+type Invoke = (actions: IVimSurfaceActions, count: number, hasCount: boolean) => void
 
 function readCount(arg: unknown): number {
   if (typeof arg === 'object' && arg !== null) {
@@ -23,6 +24,15 @@ function readCount(arg: unknown): number {
     if (typeof count === 'number' && Number.isFinite(count) && count > 0) return Math.floor(count)
   }
   return 1
+}
+
+// The dispatcher sends `hasCount`; a direct command call without it counts as typed only above 1.
+function readHasCount(arg: unknown): boolean {
+  if (typeof arg === 'object' && arg !== null) {
+    const hasCount = (arg as { hasCount?: unknown }).hasCount
+    if (typeof hasCount === 'boolean') return hasCount
+  }
+  return readCount(arg) > 1
 }
 
 abstract class VimSurfaceCommandAction extends Action2 {
@@ -41,7 +51,7 @@ abstract class VimSurfaceCommandAction extends Action2 {
       console.debug(`[vim] ${this.desc.id}: no active surface`)
       return
     }
-    this._invoke(active.surface.actions, readCount(args[0]))
+    this._invoke(active.surface.actions, readCount(args[0]), readHasCount(args[0]))
   }
 }
 
@@ -90,8 +100,8 @@ export class ListFocusRightAction extends VimSurfaceCommandAction {
 export class ListFocusFirstAction extends VimSurfaceCommandAction {
   static readonly ID = 'list.focusFirst'
   constructor() {
-    super(options(ListFocusFirstAction.ID, 'Focus First Item'), (actions, count) =>
-      actions.first?.(count),
+    super(options(ListFocusFirstAction.ID, 'Focus First Item'), (actions, count, hasCount) =>
+      actions.first?.(hasCount ? count : 0),
     )
   }
 }
@@ -99,8 +109,8 @@ export class ListFocusFirstAction extends VimSurfaceCommandAction {
 export class ListFocusLastAction extends VimSurfaceCommandAction {
   static readonly ID = 'list.focusLast'
   constructor() {
-    super(options(ListFocusLastAction.ID, 'Focus Last Item'), (actions, count) =>
-      actions.last?.(count),
+    super(options(ListFocusLastAction.ID, 'Focus Last Item'), (actions, count, hasCount) =>
+      actions.last?.(hasCount ? count : 0),
     )
   }
 }
@@ -191,6 +201,13 @@ export class ListContextMenuAction extends VimSurfaceCommandAction {
   }
 }
 
+export class ListFindAction extends VimSurfaceCommandAction {
+  static readonly ID = 'list.find'
+  constructor() {
+    super(options(ListFindAction.ID, 'Find in List'), (actions) => actions.find?.())
+  }
+}
+
 export class ListCopyAction extends VimSurfaceCommandAction {
   static readonly ID = 'list.copy'
   constructor() {
@@ -249,6 +266,7 @@ export const VIM_SURFACE_ACTIONS = [
   ListActivateAction,
   ListActivatePreviewAction,
   ListContextMenuAction,
+  ListFindAction,
   ListCopyAction,
   ListDeleteAction,
   SurfaceNextAction,
