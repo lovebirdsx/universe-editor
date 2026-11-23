@@ -49,6 +49,28 @@ describe('reduceOutputVimKey', () => {
     expect(ten.command).toEqual({ type: 'move', direction: 'up', count: 10 })
   })
 
+  it('maps gj/gk to display-row moves', () => {
+    expect(press(INITIAL_OUTPUT_VIM_STATE, key('g'), key('j')).command).toEqual({
+      type: 'display-move',
+      direction: 'down',
+      count: 1,
+    })
+    expect(press(INITIAL_OUTPUT_VIM_STATE, key('3'), key('g'), key('k')).command).toEqual({
+      type: 'display-move',
+      direction: 'up',
+      count: 3,
+    })
+  })
+
+  it('drops an operator before it can combine with gj/gk', () => {
+    expect(press(INITIAL_OUTPUT_VIM_STATE, key('d')).state).toEqual(INITIAL_OUTPUT_VIM_STATE)
+    expect(press(INITIAL_OUTPUT_VIM_STATE, key('d'), key('g'), key('j')).command).toEqual({
+      type: 'display-move',
+      direction: 'down',
+      count: 1,
+    })
+  })
+
   it('maps Ctrl+E/Y to viewport scrolling with the count as lines', () => {
     expect(press(INITIAL_OUTPUT_VIM_STATE, key('e', { ctrl: true })).command).toEqual({
       type: 'scroll-viewport',

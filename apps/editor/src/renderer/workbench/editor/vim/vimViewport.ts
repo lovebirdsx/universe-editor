@@ -9,7 +9,14 @@
 
 import type { monaco } from '../monaco/MonacoLoader.js'
 import { scrollViewportPayload } from './vimKeyUtils.js'
-import { firstNonBlankColumn, getVimMotion, lineLength, type VimScreenOps } from './vimMotions.js'
+import {
+  clampNormalPosition,
+  firstNonBlankColumn,
+  getVimMotion,
+  lineLength,
+  type VimDisplayMove,
+  type VimScreenOps,
+} from './vimMotions.js'
 import type {
   VimCommand,
   VimEditor,
@@ -25,6 +32,15 @@ const FOLDING_CONTRIBUTION_ID = 'editor.contrib.folding'
 /** Row count assumed when the editor reports no visible range (not laid out yet). */
 const FALLBACK_VISIBLE_ROWS = 20
 const FALLBACK_LINE_HEIGHT = 20
+/** A binary search on display-row tops either finds a column, runs out of line, or loses the layout. */
+const NO_COLUMN = Symbol('no-column')
+const NO_GEOMETRY = Symbol('no-geometry')
+type ColumnSearch = number | typeof NO_COLUMN | typeof NO_GEOMETRY
+/** One display row: its model line and the column its first character sits on. */
+interface DisplayRow {
+  readonly line: number
+  readonly start: number
+}
 
 interface StickyScrollContribution extends monaco.editor.IEditorContribution {
   readonly stickyScrollWidgetHeight: number
@@ -200,12 +216,156 @@ export function createVimViewport(options: VimViewportOptions): VimViewport {
     return { line, column: length === 0 ? 1 : Math.max(1, Math.min(length, from.column)) }
   }
 
+  /**
+   * `gj` / `gk` count display rows. Monaco exposes no "rows in this model line"
+   * API, but `getTopForPosition` returns the top of the display row containing a
+   * position, so the row boundaries are found by binary-searching for the next
+   * column whose top changes. A closed fold's header counts as one row even when
+   * it soft-wraps, matching Vim and `advanceVisibleLines`.
+   */
   function createScreenOps(lines: VimLineReader): VimScreenOps {
     const folding = foldingModel()
+    const lineCount = lines.getLineCount()
+
+    function maxColumnOf(line: number): number {
+      return Math.max(1, lineLength(lines, line))
+    }
+
+    function topAt(line: number, column: number): number | null {
+      const top = editor.getTopForPosition?.(line, column)
+      return typeof top === 'number' && Number.isFinite(top) && top >= 0 ? top : null
+    }
+
+    /** First column in [low, high] whose top satisfies `predicate`; tops never decrease. */
+    function firstColumnWhere(
+      line: number,
+      low: number,
+      high: number,
+      predicate: (top: number) => boolean,
+    ): ColumnSearch {
+      let left = low
+      let right = high
+      let found = -1
+      while (left <= right) {
+        const middle = Math.floor((left + right) / 2)
+        const top = topAt(line, middle)
+        if (top === null) return NO_GEOMETRY
+        if (predicate(top)) {
+          found = middle
+          right = middle - 1
+        } else {
+          left = middle + 1
+        }
+      }
+      return found === -1 ? NO_COLUMN : found
+    }
+
+    function segmentStartAt(line: number, column: number): ColumnSearch {
+      const top = topAt(line, column)
+      if (top === null) return NO_GEOMETRY
+      return firstColumnWhere(line, 1, column, (value) => value >= top)
+    }
+
+    function nextSegmentStart(line: number, start: number): ColumnSearch {
+      const top = topAt(line, start)
+      if (top === null) return NO_GEOMETRY
+      return firstColumnWhere(line, start, maxColumnOf(line), (value) => value > top)
+    }
+
+    function isClosedFoldStart(line: number): boolean {
+      return closedFoldAtModel(folding, line)?.start === line
+    }
+
+    function rowStartAt(line: number, column: number): ColumnSearch {
+      if (isClosedFoldStart(line)) return 1
+      return segmentStartAt(line, Math.min(Math.max(1, column), maxColumnOf(line)))
+    }
+
+    function lastRowStart(line: number): ColumnSearch {
+      if (isClosedFoldStart(line)) return 1
+      return segmentStartAt(line, maxColumnOf(line))
+    }
+
+    function nextRow(row: DisplayRow): DisplayRow | null | typeof NO_GEOMETRY {
+      if (!isClosedFoldStart(row.line)) {
+        const next = nextSegmentStart(row.line, row.start)
+        if (next === NO_GEOMETRY) return NO_GEOMETRY
+        if (next !== NO_COLUMN) return { line: row.line, start: next }
+      }
+      const nextLine = advanceVisibleLines(folding, row.line, 1, 1, lineCount)
+      return nextLine === row.line ? null : { line: nextLine, start: 1 }
+    }
+
+    function previousRow(row: DisplayRow): DisplayRow | null | typeof NO_GEOMETRY {
+      if (row.start > 1) {
+        const previous = segmentStartAt(row.line, row.start - 1)
+        if (previous === NO_GEOMETRY) return NO_GEOMETRY
+        if (previous !== NO_COLUMN) return { line: row.line, start: previous }
+      }
+      const previousLine = advanceVisibleLines(folding, row.line, -1, 1, lineCount)
+      if (previousLine === row.line) return null
+      const start = lastRowStart(previousLine)
+      if (start === NO_GEOMETRY) return NO_GEOMETRY
+      return { line: previousLine, start: start === NO_COLUMN ? 1 : start }
+    }
+
+    /** Place `preferred` characters into a row, clamped to its last character. */
+    function placeInRow(row: DisplayRow, preferred: number): VimPosition | null {
+      const length = lineLength(lines, row.line)
+      if (length === 0) return { line: row.line, column: 1 }
+      const start = Math.min(Math.max(1, row.start), length)
+      let endExclusive = length + 1
+      if (!isClosedFoldStart(row.line)) {
+        const next = nextSegmentStart(row.line, start)
+        if (next === NO_GEOMETRY) return null
+        if (next !== NO_COLUMN) endExclusive = next
+      }
+      const maxOffset = Math.max(0, endExclusive - start - 1)
+      // Compare before adding: the remembered `$` column is MAX_SAFE_INTEGER.
+      const offset = preferred >= maxOffset ? maxOffset : Math.max(0, preferred)
+      return { line: row.line, column: start + offset }
+    }
+
+    function displayOffsetAt(position: VimPosition): number | null {
+      const normalized = normalizeHiddenPosition(folding, clampNormalPosition(lines, position))
+      const start = rowStartAt(normalized.line, normalized.column)
+      if (start === NO_GEOMETRY) return null
+      return start === NO_COLUMN ? 0 : Math.max(0, normalized.column - start)
+    }
+
+    function advanceDisplayRows(
+      from: VimPosition,
+      delta: 1 | -1,
+      steps: number,
+      preferredOffset = 0,
+    ): VimDisplayMove | null {
+      const origin = normalizeHiddenPosition(folding, clampNormalPosition(lines, from))
+      if (steps <= 0) return { position: origin, moved: false }
+      const start = rowStartAt(origin.line, origin.column)
+      if (start === NO_GEOMETRY || start === NO_COLUMN) return null
+      let row: DisplayRow = { line: origin.line, start }
+      let moved = false
+      for (let index = 0; index < steps; index++) {
+        const next = delta > 0 ? nextRow(row) : previousRow(row)
+        if (next === NO_GEOMETRY) return null
+        if (next === null) break
+        row = next
+        moved = true
+      }
+      // A failed move must not apply the remembered column: the cursor stays put.
+      if (!moved) return { position: origin, moved: false }
+      const placed = placeInRow(row, preferredOffset)
+      return placed === null ? null : { position: placed, moved: true }
+    }
+
+    const advanceRows = (line: number, delta: 1 | -1, steps: number): number =>
+      advanceVisibleLines(folding, line, delta, steps, lineCount)
     return {
-      advanceRows: (line, delta, steps) =>
-        advanceVisibleLines(folding, line, delta, steps, lines.getLineCount()),
+      advanceRows,
       pageRows: visibleRowCount,
+      wrapsLines: () => (editor.getLayoutInfo().wrappingColumn ?? -1) > 0,
+      displayOffsetAt,
+      advanceDisplayRows,
     }
   }
 
@@ -213,8 +373,10 @@ export function createVimViewport(options: VimViewportOptions): VimViewport {
    * Line-wise operators act on a closed fold as a whole (`dd` on a fold header
    * deletes the fold). The outermost collapsed region is the one on screen.
    */
-  function closedFoldAt(line: number): { start: number; end: number } | null {
-    const model = foldingModel()
+  function closedFoldAtModel(
+    model: FoldingModelLike | null,
+    line: number,
+  ): { start: number; end: number } | null {
     if (model === null) return null
     const regions = model.getAllRegionsAtLine(line)
     for (let index = regions.length - 1; index >= 0; index--) {
@@ -222,6 +384,10 @@ export function createVimViewport(options: VimViewportOptions): VimViewport {
       if (region.isCollapsed) return { start: region.startLineNumber, end: region.endLineNumber }
     }
     return null
+  }
+
+  function closedFoldAt(line: number): { start: number; end: number } | null {
+    return closedFoldAtModel(foldingModel(), line)
   }
 
   function resolveScreenMotion(

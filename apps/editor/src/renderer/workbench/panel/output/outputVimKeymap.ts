@@ -25,6 +25,12 @@ export const INITIAL_OUTPUT_VIM_STATE: OutputVimState = INITIAL_VIM_STATE
 
 export type OutputVimCommand =
   | { readonly type: 'move'; readonly direction: 'up' | 'down'; readonly count: number }
+  /** `gj` / `gk`: display rows, i.e. Monaco's `wrappedLine` unit. */
+  | {
+      readonly type: 'display-move'
+      readonly direction: 'up' | 'down'
+      readonly count: number
+    }
   | {
       readonly type: 'scroll-viewport'
       readonly direction: 'up' | 'down'
@@ -58,6 +64,10 @@ function project(command: VimCommand): OutputVimCommand | null {
           return { type: 'move', direction: 'down', count }
         case 'k':
           return { type: 'move', direction: 'up', count }
+        case 'gj':
+          return { type: 'display-move', direction: 'down', count }
+        case 'gk':
+          return { type: 'display-move', direction: 'up', count }
         case 'gg':
         case 'G':
           return {

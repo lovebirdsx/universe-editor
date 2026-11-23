@@ -953,3 +953,41 @@ describe('reduceVimKey: g v', () => {
     expect(afterOperator.state).toEqual(INITIAL_VIM_STATE)
   })
 })
+
+describe('reduceVimKey: display-line motions', () => {
+  function run(...keys: string[]) {
+    let state: VimState = INITIAL_VIM_STATE
+    let last = press(state, keys[0]!)
+    state = last.state
+    for (const key of keys.slice(1)) {
+      last = press(state, key)
+      state = last.state
+    }
+    return last
+  }
+
+  it('reaches gj / gk through the g prefix', () => {
+    expect(run('g', 'j').command).toEqual({ type: 'motion', motion: 'gj', count: 0 })
+    expect(run('g', 'k').command).toEqual({ type: 'motion', motion: 'gk', count: 0 })
+    expect(run('3', 'g', 'j').command).toEqual({ type: 'motion', motion: 'gj', count: 3 })
+  })
+
+  it('stays usable as an operator motion', () => {
+    expect(run('d', 'g', 'j').command).toEqual({
+      type: 'operator',
+      operator: 'd',
+      motion: 'gj',
+      count: 0,
+    })
+    expect(run('y', '2', 'g', 'k').command).toEqual({
+      type: 'operator',
+      operator: 'y',
+      motion: 'gk',
+      count: 2,
+    })
+  })
+
+  it('works in Visual mode', () => {
+    expect(run('v', 'g', 'j').command).toEqual({ type: 'motion', motion: 'gj', count: 0 })
+  })
+})

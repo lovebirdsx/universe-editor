@@ -73,11 +73,12 @@ export interface FakeFold {
 const cloneCursors = (cursors: readonly Cursor[]): Cursor[] =>
   cursors.map((cursor) => ({ ...cursor }))
 
-export function createTextEditor(initial: string[], doc: Document = document) {
+export function createTextEditor(initial: string[], doc: Document = document, wrapWidth?: number) {
   let lines = [...initial]
   let cursors: Cursor[] = [{ anchorLine: 1, anchorColumn: 1, line: 1, column: 1 }]
   let readOnly = false
   let folds: readonly FakeFold[] | null = null
+  const wraps = typeof wrapWidth === 'number' && wrapWidth > 0
   const focusListeners: (() => void)[] = []
   const blurListeners: (() => void)[] = []
   const modelListeners: (() => void)[] = []
@@ -329,6 +330,34 @@ export function createTextEditor(initial: string[], doc: Document = document) {
         isCollapsed: fold.collapsed,
       }))
 
+  // Soft-wrap geometry for gj/gk. Monaco only exposes row tops, so the fake
+  // wraps by character count and mirrors the viewport's fold accounting: a
+  // closed fold hides its inner lines and its header stays one row.
+  const hiddenFoldStart = (line: number): number | null => {
+    const fold = folds?.find(
+      (region) => region.collapsed && region.start < line && line <= region.end,
+    )
+    return fold?.start ?? null
+  }
+  const rowsOf = (line: number): number => {
+    if (folds?.some((region) => region.collapsed && region.start === line)) return 1
+    if (hiddenFoldStart(line) !== null) return 0
+    if (!wraps) return 1
+    return Math.max(1, Math.ceil((lines[line - 1] ?? '').length / wrapWidth))
+  }
+  const firstRowTop = (line: number): number => {
+    let rows = 0
+    for (let before = 1; before < line; before++) rows += rowsOf(before)
+    return rows * 20
+  }
+  const topForPosition = (lineNumber: number, column: number): number => {
+    const line = hiddenFoldStart(validLine(lineNumber)) ?? validLine(lineNumber)
+    const maxColumn = Math.max(1, (lines[line - 1] ?? '').length)
+    const clampedColumn = Math.max(1, Math.min(maxColumn, column))
+    const row = wraps ? Math.floor((clampedColumn - 1) / wrapWidth) : 0
+    return firstRowTop(line) + row * 20
+  }
+
   const editor: VimEditor = {
     getModel: () => model,
     getSelections: () =>
@@ -375,10 +404,11 @@ export function createTextEditor(initial: string[], doc: Document = document) {
     }),
     trigger,
     revealPositionInCenterIfOutsideViewport: vi.fn(),
-    getTopForLineNumber: (line: number) => (line - 1) * 20,
-    getBottomForLineNumber: (line: number) => line * 20,
+    getTopForLineNumber: (line: number) => firstRowTop(line),
+    getBottomForLineNumber: (line: number) => firstRowTop(line) + rowsOf(line) * 20,
+    ...(wraps ? { getTopForPosition: topForPosition } : {}),
     setScrollTop: vi.fn(),
-    getLayoutInfo: () => ({ height: 400 }),
+    getLayoutInfo: () => ({ height: 400, ...(wraps ? { wrappingColumn: wrapWidth } : {}) }),
     getContribution: <T extends monaco.editor.IEditorContribution>(id: string): T | null =>
       (id === 'editor.contrib.folding' && folds !== null
         ? { foldingModel: { getAllRegionsAtLine: foldingRegionsAt } }
@@ -546,10 +576,12 @@ export interface VimHarnessOptions {
   readonly config?: Record<string, unknown>
   readonly controller?: Partial<IVimEditorControllerOptions>
   readonly readOnly?: boolean
+  /** Enables Monaco-like soft wrapping at this many characters per display row. */
+  readonly wrapWidth?: number
 }
 
 export function createVimHarness(lines: string[], options: VimHarnessOptions = {}) {
-  const fake = createTextEditor(lines)
+  const fake = createTextEditor(lines, document, options.wrapWidth)
   if (options.readOnly === true) fake.setReadOnly(true)
   const vim = createVimModeServiceFake()
   const inputMethod = createInputMethodFake()

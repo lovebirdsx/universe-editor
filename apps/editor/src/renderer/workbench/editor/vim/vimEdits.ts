@@ -391,7 +391,7 @@ export function createVimEdits(options: VimEditsOptions): VimEdits {
     const target =
       vertical !== undefined
         ? vertical
-        : resolveOperatorRange(model, from, motion, count, operator, args)
+        : resolveOperatorRange(model, from, motion, count, operator, args, createScreenOps?.(model))
     return applyOperator(model, operator, target, register)
   }
 

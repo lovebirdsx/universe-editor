@@ -46,6 +46,8 @@ export type VimMotion =
   | 'h'
   | 'j'
   | 'k'
+  | 'gj'
+  | 'gk'
   | 'l'
   | 'w'
   | 'b'
@@ -86,6 +88,8 @@ export interface VimFindState {
 export interface VimMotionArgs {
   readonly char?: string
   readonly lastFind?: VimFindState | null
+  /** `gj`/`gk`'s remembered screen column, as a 0-based character offset into a display row. */
+  readonly displayOffset?: number
 }
 
 /** Canonical id of a text object — the key of its first spelling (`)` and `b` both mean `(`). */
@@ -391,8 +395,11 @@ export interface VimEditor {
   getTopForLineNumber(lineNumber: number): number
   /** Content Y of a line's bottom edge. */
   getBottomForLineNumber(lineNumber: number): number
+  /** Content Y of the display row containing a position; absent in fakes without layout. */
+  getTopForPosition?(lineNumber: number, column: number): number
   setScrollTop(scrollTop: number, scrollType?: number): void
-  getLayoutInfo(): { height: number }
+  /** `wrappingColumn > 0` means soft wrapping is on (Monaco reports it in layout info). */
+  getLayoutInfo(): { height: number; wrappingColumn?: number }
   /** Lets `zt`/`H` subtract the sticky-scroll overlay without importing Monaco. */
   getContribution?<T extends monaco.editor.IEditorContribution>(id: string): T | null
   getVisibleRanges(): readonly VimRange[]

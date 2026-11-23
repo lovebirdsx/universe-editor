@@ -44,6 +44,8 @@ export interface VimVisualSelection {
 const EOL_KEEPING_MOTIONS: ReadonlySet<VimMotion> = new Set<VimMotion>([
   'j',
   'k',
+  'gj',
+  'gk',
   'pageDown',
   'pageUp',
   'halfPageDown',
@@ -169,6 +171,9 @@ function stickyBreakIncluded(lines: VimLineReader, selection: VimVisualSelection
   return (
     selection.eol === true &&
     selection.cursor.line < lines.getLineCount() &&
+    // A display-row move can stop at the end of a wrapped segment in the middle
+    // of a model line; there is no newline there to include.
+    selection.cursor.column >= Math.max(1, lineLength(lines, selection.cursor.line)) &&
     comparePositions(selection.cursor, selection.anchor) >= 0
   )
 }

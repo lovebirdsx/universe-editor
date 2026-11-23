@@ -306,3 +306,33 @@ describe('vim.surfaces.editor', () => {
     expect(h.keys('x')).toBe(false)
   })
 })
+
+describe('Visual mode (display rows)', () => {
+  it('v + gj selects the next display row without inventing a line break', () => {
+    const h = createVimHarness(['abcdefghijklm'], { wrapWidth: 5 })
+    h.fake.setCursor(1, 1)
+    h.keys('vgj')
+    expect(h.fake.selection()).toMatchObject({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: 1,
+      endColumn: 7,
+    })
+    h.keys('y')
+    expect(getVimRegister()).toEqual({ text: 'abcdef', linewise: false })
+  })
+
+  it('v$ + gk keeps eol but does not take the newline from a display row', () => {
+    const h = createVimHarness(['abcdefghijklm', 'tail'], { wrapWidth: 5 })
+    h.fake.setCursor(1, 1)
+    h.keys('v$gk')
+    expect(h.fake.selection()).toMatchObject({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: 1,
+      endColumn: 11,
+    })
+    h.keys('y')
+    expect(getVimRegister()).toEqual({ text: 'abcdefghij', linewise: false })
+  })
+})

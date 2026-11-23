@@ -151,6 +151,34 @@ describe('createOutputVimController', () => {
     expect(h.positions.at(-1)).toEqual({ lineNumber: 10, column: 3 })
   })
 
+  it('moves by display rows with gj/gk through Monaco cursorMove', () => {
+    const onViewportScroll = vi.fn()
+    const h = setup(100, { onViewportScroll })
+    h.focus()
+    h.controller.handleKeyDown(keyEvent('g'))
+    h.controller.handleKeyDown(keyEvent('j'))
+    expect(h.trigger).toHaveBeenLastCalledWith('vim', 'cursorMove', {
+      to: 'down',
+      by: 'wrappedLine',
+      value: 1,
+      select: false,
+      noHistory: true,
+    })
+    h.controller.handleKeyDown(keyEvent('3'))
+    h.controller.handleKeyDown(keyEvent('g'))
+    h.controller.handleKeyDown(keyEvent('k'))
+    expect(h.trigger).toHaveBeenLastCalledWith('vim', 'cursorMove', {
+      to: 'up',
+      by: 'wrappedLine',
+      value: 3,
+      select: false,
+      noHistory: true,
+    })
+    // Only Ctrl+E/Y releases the follow-tail lock; gj/gk keep it.
+    expect(onViewportScroll).not.toHaveBeenCalled()
+    expect(h.positions).toHaveLength(0)
+  })
+
   it('scrolls the viewport through Monaco editorScroll and releases auto-scroll', () => {
     const onViewportScroll = vi.fn()
     const h = setup(100, { onViewportScroll })

@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   clampNormalPosition,
   classifyChar,
@@ -10,9 +10,11 @@ import {
   firstNonBlankColumn,
   getVimMotion,
   toLineReader,
+  type VimDisplayMove,
   type VimLines,
+  type VimScreenOps,
 } from '../vimMotions.js'
-import type { VimMotion, VimPosition } from '../vimTypes.js'
+import type { VimMotion, VimMotionArgs, VimPosition } from '../vimTypes.js'
 
 /** Resolve a motion through the public registry, as the controller does. */
 function resolveMotion(
@@ -175,5 +177,158 @@ describe('resolveMotion: empty lines and word boundaries', () => {
     const text = ['foo.bar baz']
     expect(resolveMotion(text, { line: 1, column: 1 }, 'W', 1)).toEqual({ line: 1, column: 9 })
     expect(resolveMotion(text, { line: 1, column: 1 }, 'w', 1)).toEqual({ line: 1, column: 4 })
+  })
+})
+
+describe('gj / gk (display lines)', () => {
+  function resolveWithScreen(
+    lines: VimLines,
+    from: VimPosition,
+    motion: 'gj' | 'gk',
+    count: number,
+    screen: VimScreenOps,
+    args: VimMotionArgs = {},
+  ): VimPosition | null {
+    const reader = toLineReader(lines)
+    return getVimMotion(motion).resolve({ lines: reader, from, screen, ...args }, count)
+  }
+
+  function operatorWithScreen(
+    lines: VimLines,
+    from: VimPosition,
+    motion: 'gj' | 'gk',
+    count: number,
+    screen: VimScreenOps,
+    args: VimMotionArgs = {},
+  ) {
+    const reader = toLineReader(lines)
+    return getVimMotion(motion).resolveForOperator!(
+      { lines: reader, from, screen, ...args },
+      count,
+      'd',
+    )
+  }
+
+  function displayScreen(
+    move: (preferred: number | undefined) => VimDisplayMove | null,
+    offset: number | null = null,
+  ): VimScreenOps {
+    return {
+      advanceRows: (line, delta, steps) => line + delta * steps,
+      wrapsLines: () => true,
+      displayOffsetAt: () => offset,
+      advanceDisplayRows: (_from, _delta, _steps, preferred) => move(preferred),
+    }
+  }
+
+  it('registers prefix-only motions with help keys', () => {
+    for (const id of ['gj', 'gk'] as const) {
+      const def = getVimMotion(id)
+      expect(def.keys).toEqual([])
+      expect(def.helpKeys).toBe(id)
+      expect(def.kind).toBe('exclusive')
+      expect(def.screenAware).toBe(true)
+    }
+  })
+
+  it('behaves exactly like j / k when soft wrapping is off', () => {
+    const lines = ['abc', 'defgh', 'ij']
+    expect(resolveMotion(lines, { line: 1, column: 2 }, 'gj', 1)).toEqual({ line: 2, column: 2 })
+    expect(resolveMotion(lines, { line: 2, column: 4 }, 'gk', 1)).toEqual({ line: 1, column: 3 })
+    expect(resolveMotion(lines, { line: 2, column: 4 }, 'gj', 5)).toEqual({ line: 3, column: 2 })
+  })
+
+  it('uses the display rows and the remembered screen offset', () => {
+    const advance = vi.fn(() => ({ position: { line: 1, column: 7 }, moved: true }))
+    const screen: VimScreenOps = {
+      advanceRows: () => 2,
+      wrapsLines: () => true,
+      displayOffsetAt: () => 4,
+      advanceDisplayRows: advance,
+    }
+    expect(resolveWithScreen(['abcdefghij'], { line: 1, column: 3 }, 'gj', 2, screen)).toEqual({
+      line: 1,
+      column: 7,
+    })
+    expect(advance).toHaveBeenCalledWith({ line: 1, column: 3 }, 1, 2, 4)
+  })
+
+  it('prefers an explicit displayOffset over the cursor segment offset', () => {
+    const screen = displayScreen((preferred) => {
+      expect(preferred).toBe(8)
+      return { position: { line: 1, column: 9 }, moved: true }
+    }, 1)
+    expect(
+      resolveWithScreen(['abcdefghij'], { line: 1, column: 2 }, 'gk', 1, screen, {
+        displayOffset: 8,
+      }),
+    ).toEqual({ line: 1, column: 9 })
+  })
+
+  it('returns the origin when the display geometry reports no movement', () => {
+    const screen = displayScreen(() => ({ position: { line: 1, column: 3 }, moved: false }))
+    expect(resolveWithScreen(['abcdefghij'], { line: 1, column: 3 }, 'gj', 1, screen)).toEqual({
+      line: 1,
+      column: 3,
+    })
+  })
+
+  it('falls back to line motion when the geometry is unavailable', () => {
+    const screen: VimScreenOps = {
+      advanceRows: (line, delta, steps) => line + delta * steps,
+      wrapsLines: () => true,
+      advanceDisplayRows: () => null,
+    }
+    expect(resolveWithScreen(['abc', 'def'], { line: 1, column: 2 }, 'gj', 1, screen)).toEqual({
+      line: 2,
+      column: 2,
+    })
+  })
+
+  it('is linewise to operators when wrapping is off (Vim runtime behavior)', () => {
+    const lines = ['abcdef', 'abcdef', 'xyz']
+    expect(
+      operatorWithScreen(
+        lines,
+        { line: 1, column: 3 },
+        'gj',
+        1,
+        createPlainScreenOps(toLineReader(lines)),
+      ),
+    ).toEqual({ to: { line: 2, column: 3 }, kind: 'linewise' })
+    expect(
+      operatorWithScreen(
+        lines,
+        { line: 3, column: 1 },
+        'gj',
+        1,
+        createPlainScreenOps(toLineReader(lines)),
+      ),
+    ).toBeNull()
+  })
+
+  it('is exclusive to operators when wrapping is on', () => {
+    const screen = displayScreen(() => ({ position: { line: 1, column: 8 }, moved: true }))
+    expect(operatorWithScreen(['abcdefghij'], { line: 1, column: 3 }, 'gj', 1, screen)).toEqual({
+      to: { line: 1, column: 8 },
+      kind: 'exclusive',
+    })
+  })
+
+  it('fails an operator when the display move could not move', () => {
+    const screen = displayScreen(() => ({ position: { line: 1, column: 3 }, moved: false }))
+    expect(operatorWithScreen(['abcdefghij'], { line: 1, column: 3 }, 'gj', 1, screen)).toBeNull()
+  })
+
+  it('keeps the wrap-on operator kind when the geometry is unavailable', () => {
+    const screen: VimScreenOps = {
+      advanceRows: (line, delta, steps) => line + delta * steps,
+      wrapsLines: () => true,
+      advanceDisplayRows: () => null,
+    }
+    expect(operatorWithScreen(['abc', 'def'], { line: 1, column: 2 }, 'gj', 1, screen)).toEqual({
+      to: { line: 2, column: 2 },
+      kind: 'exclusive',
+    })
   })
 })

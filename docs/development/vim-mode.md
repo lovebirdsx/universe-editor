@@ -74,7 +74,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | `vimEditorController.ts` | 把 reducer 的输出绑到 Monaco：`COMMAND_HANDLERS`（`Record` 覆盖每个 `VimCommand['type']`，缺一个编译器就报）、Visual 状态（anchor + cursor）、`.` 重放、Insert 会话记录（`3ifoo<Esc>`）、块状光标、`"+`/`"*`/`vim.useSystemClipboard` |
 | `attachVim.ts` | 一次调用接好 controller + surface 注册；`FileEditor` / `DiffEditor` 共用，两处不再各写一遍 |
 | `vimSurfaceKeys.ts` | `editorVimSurfaceKey(groupId, inputId)` |
-| `workbench/panel/output/outputVimKeymap.ts` | Output 只读编辑器：**复用 `reduceVimKey`** 再 `project()` 成可执行子集（`j/k`、`Ctrl+E/Y/D/U/F/B`、`gg/G`），其余吞掉；要多支持一个 motion 就在 `project` 加 `case`，不要另写键表 |
+| `workbench/panel/output/outputVimKeymap.ts` | Output 只读编辑器：**复用 `reduceVimKey`** 再 `project()` 成可执行子集（`j/k`、`gj/gk`、`Ctrl+E/Y/D/U/F/B`、`gg/G`），其余吞掉；要多支持一个 motion 就在 `project` 加 `case`，不要另写键表 |
 | `workbench/panel/output/outputVimController.ts` | 把投影后的命令绑到 Output 的 Monaco 实例；只跟踪 text focus 与 blur 重置 |
 
 ## 唯一入口与分发顺序
@@ -224,7 +224,7 @@ reducer 是纯函数：`VimState = { mode, count, operatorCount, pendingOperator
 - **块状光标**：Normal / Visual 下 `editor.updateOptions({ cursorStyle: 'block' })`，Insert 与 deactivate 还原为用户的 `editor.cursorStyle`。「编辑器选项桥」在任意桥接配置变化时会重设 `cursorStyle`，所以 controller 在配置事件里用 `queueMicrotask` 重新夺回。
 - **Normal 空闲 `Esc`**：reducer 在「没有任何待定状态」时发 `search-highlight-clear`；handler 先清 hlsearch 高亮，没有可清的才执行 `workbench.action.focusEditorTabs`（把焦点交给标签栏）。取消待定前缀 / 计数的那一次 `Esc` 不会触发它。
 - **`Ctrl+[`**：reducer 的 `isEscapeStroke` 把它视同 `Esc`（Normal / Visual / Insert 皆然）；dispatcher 的 Insert 分支同样放行 `ctrl+[` 给内核（编辑器上也会离开 Insert），保留集默认含 `ctrl+[`。
-- **光标期望列（curswant）**：`j` / `k` 记住进入垂直移动前的列，穿过短行后回到原列；`$` 之后贴行尾（`END_OF_LINE_COLUMN`，下移到的每一行都停在行尾，Visual `$` 同样保留换行）；任何水平移动、或光标被别处移走，都会让记忆失效。
+- **光标期望列（curswant）**：`j` / `k` 记住进入垂直移动前的列，穿过短行后回到原列；`$` 之后贴行尾（`END_OF_LINE_COLUMN`，下移到的每一行都停在行尾，Visual `$` 同样保留换行）；任何水平移动、或光标被别处移走，都会让记忆失效。`gj` / `gk` 单独记住**显示段内的字符偏移**，见下节。
 - **折叠头行上的行级操作**：折叠闭合时，`dd` / `yy` / `>>` / `o` / `dj` 等行级命令把整个折叠当一行（作用于折叠头行到末行，`j` / `k` 计数同理）。
 - **一个命令一个撤销步**：`3J` 一次 `u` 撤销；`J` 次数是 `count - 1` 次合并（`J` 单次合并两行）。
 - **只读编辑器**：`isReadOnly` 为真时写命令（`isWriteCommand`）被 `refuseWrite` 拒绝——不改缓冲区、不进 Insert、Visual 的 `c` / `d` 直接退出 Visual；移动与 `y` 照常；Insert 中缓冲区变只读会被踢回 Normal。
@@ -244,7 +244,9 @@ reducer 是纯函数：`VimState = { mode, count, operatorCount, pendingOperator
 
 粘性滚动默认开启（`editor.stickyScroll.enabled`），它是不透明 overlay，`getVisibleRanges()` 仍会算上被盖住的行。控制器通过 `getContribution('store.contrib.stickyScrollController').stickyScrollWidgetHeight` 取实际高度：`zt` 从 `scrollTop` 里减掉它，`H`/`M` 的可见行索引起点也跳过这些行。`H/M/L` 遍历可见 ranges 而不是直接做 `first + count` 算术，折叠造成的空洞不会成为目标行。
 
-移动类 motion（`j/k`、`Enter`、`w/b/e`、`gg/G`、`{/}`、翻页）同样以**屏幕行**计数：闭合折叠只占起始行，控制器从 `getContribution('editor.contrib.folding').foldingModel` 的 `getAllRegionsAtLine()` 取 `(start, end]` 隐藏区，落点隐藏时吸附到折叠起始行（向前且从起始行出发时取 `end+1`），因此不会触发 Monaco 200ms 的自动展开。搜索、`%`、undo 不在吸附范围内——它们本就属于 Vim 默认 `'foldopen'` 的展开场景。
+移动类 motion（`j/k`、`Enter`、`w/b/e`、`gg/G`、`{/}`、翻页）按**可见逻辑行**计数：`j/k` 保持 Vim 的 buffer-line 语义，闭合折叠只占起始行，控制器从 `getContribution('editor.contrib.folding').foldingModel` 的 `getAllRegionsAtLine()` 取 `(start, end]` 隐藏区，落点隐藏时吸附到折叠起始行（向前且从起始行出发时取 `end+1`），因此不会触发 Monaco 200ms 的自动展开。搜索、`%`、undo 不在吸附范围内——它们本就属于 Vim 默认 `'foldopen'` 的展开场景。
+
+`gj` / `gk` 才按软换行后的**显示行**计数（Vim 的 display-line motion），支持 count、Normal / Visual / operator-pending。几何只用公开 API：`getLayoutInfo().wrappingColumn > 0` 判定 wrap 开启，`editor.getTopForPosition(line, column)` 返回该列所在显示行的顶部，`createScreenOps` 在行内按列二分找段边界；布局未就绪（方法缺失、返回 -1 / 非有限值）时退回 `j/k` 的逻辑行路径。闭合折叠整体算**一个**显示行，折叠头自身的软换行也按一行计（与 Vim 及 `advanceVisibleLines` 一致；Monaco 实际渲染仍可能展开头行）。行内没有下一段时跨到下一可见逻辑行的第一段（向上则进入上一行的最后一段）。期望屏幕列按段内**字符偏移**记忆：跨短显示段被 clamp 后，下一次 `gj/gk` 仍回到原偏移（`desiredDisplayOffset`）；tabs / 全角 / `wrappingIndent` 下与 Vim 的视觉列可能有轻微偏差，段边界本身由 Monaco 几何决定。wrap 关闭时 `gj/gk` 完全等同 `j/k`，operator 语义为 linewise；wrap 开启时是 characterwise exclusive（`dgj` 可被 o_v 规则提升为 linewise），寄存器类型与 Vim 一致。Visual 的 `v$` sticky eol 只在光标真的落在模型行尾时才把换行纳入选区，避免显示行移动把长行中间的换行算进去。
 
 待定 operator 时按 `H/M/L/z` 会取消 operator 并吞键（`dH`、`dz*` 等组合明确不支持）。自动换行下 `H/M/L` 与 `zt/zb` 按逻辑行近似；`Ctrl+E/Y` 用 `wrappedLine` 不受影响。
 
@@ -263,9 +265,10 @@ reducer 是纯函数：`VimState = { mode, count, operatorCount, pendingOperator
 
 `LogOutputView` 以 `kind: 'editor'`、`defaultMode: 'normal'` 注册，surfaceKey 为 `editor:${viewId ?? 'output'}`，`actions.handleStroke` 转发给 `outputVimController`。它与文件编辑器**共用 reducer**、只投影可执行子集：
 
-- 只支持滚动类命令（`j/k`、`Ctrl+E/Y`、`Ctrl+D/U`、`Ctrl+F/B`、`gg/G`），不会产生编辑 / 搜索 / Insert 命令；`v` / `V` / `Ctrl+V` 被吞掉并把共享 reducer 的状态拉回 Normal（只读缓冲区没有 Visual），不会再留下隐藏的 Visual 状态；未映射的可打印键吞掉，`Esc`（含 `Ctrl+[`）、方向键、`PageUp/PageDown` 仍交给 Monaco（查找框已打开时的 `Esc` 必须能关自己）。Normal 下 `Ctrl+F` 是整页下滚，不能用来打开查找框。
+- 只支持滚动类命令（`j/k`、`gj/gk`、`Ctrl+E/Y`、`Ctrl+D/U`、`Ctrl+F/B`、`gg/G`），不会产生编辑 / 搜索 / Insert 命令；`v` / `V` / `Ctrl+V` 被吞掉并把共享 reducer 的状态拉回 Normal（只读缓冲区没有 Visual），不会再留下隐藏的 Visual 状态；未映射的可打印键吞掉，`Esc`（含 `Ctrl+[`）、方向键、`PageUp/PageDown` 仍交给 Monaco（查找框已打开时的 `Esc` 必须能关自己）。Normal 下 `Ctrl+F` 是整页下滚，不能用来打开查找框。
 - 起了 operator 或除 `g` 外的前缀（`d`、`z`、`f` 等）会被立即丢弃，避免等待一个本 surface 永远不会执行的键。
 - 翻页走 Monaco `editorScroll` 的 `by: 'halfPage' | 'page'`，按**视觉行**计量；Output 强制 `wordWrap: 'on'`，若用可见逻辑行数会把一条折成 20 行的日志算成 1 行。
+- `gj/gk` 触发 Monaco `cursorMove`（`by: 'wrappedLine'`、`noHistory: true`），按视觉行移动并由 Monaco 保持期望列；它不调用 `onViewportScroll`——光标移动仍在跟随输出，只有 `Ctrl+E/Y` 这种纯视口滚动才需要释放 follow-tail。
 - `Ctrl+E/Y` 不移动光标，因此控制器通过 `onViewportScroll` 回调让视图关闭 follow-tail（`setAutoScroll(false)`）；否则下一条日志 append 会把视口拽回底部。
 - 控制器只跟踪 `onDidFocusEditorText/onDidBlurEditorText` 与 IME 守卫，blur 时重置计数；不写 `editorTextFocus`，避免 dirty-diff / inline completion 等命令误判。
 - `Ctrl+E/Y` 与文件编辑器一样通过 window capture 的 Vim 分发消费，早于 `useGlobalKeybindingHandler` 的 document capture 安全网；后者只在 `vimNormalMode && editorTextFocus` 时兜底，Output 不满足该条件也无需满足。
@@ -378,7 +381,7 @@ releaseInputMethod(owner, service)          // 仅当 owner 正持有英文时�
 | 服务 / 键位 | `services/vim/__tests__/`：`vimModeService.test.ts`、`vimAppKeymap.test.ts`、`vimKeymapMerge.test.ts`、`vimKeyFormat.test.ts`、`vimCheatSheet.test.ts`、`vimCommandTitle.test.ts`；`contributions/__tests__/vimConfigKeys.test.ts`（保证 `VIM_SERVICE_CONFIG_KEYS` 覆盖 `SettingsContribution` 注册的 `vim.*`） |
 | 分发 / 反馈 | `workbench/vim/__tests__/`：`vimDispatcher.test.ts`、`useVimDispatcher.test.tsx`、`vimImeCoordinator.test.ts`、`vimWhichKeyItems.test.ts`、`VimWhichKey.test.tsx`；`actions/__tests__/vimActions.test.ts` / `vimSurfaceActions.test.ts` / `vimCheatSheetAction.test.ts` |
 | surface 适配 | `workbench/editor/__tests__/useEditorTabsVim.test.tsx` / `useMarkdownKeyboardNav.test.tsx`、`activitybar/__tests__/ActivityBar.vim.test.tsx`、`paneComposite/__tests__/PaneCompositeHeader.vim.test.tsx`、`preferences/__tests__/SettingsEditor.vim.test.tsx`、`gitGraph/__tests__/useGraphKeyboardNav.vim.test.tsx`、`terminal/__tests__/terminalNormalMode.test.ts` / `terminalNormalMode.inputMethod.test.ts`（owner 模型下的焦点 / 归还）/ `TerminalInstance.vimReparent.test.tsx`（面板 ↔ 编辑器区 reparent 保持 Normal） |
-| 编辑器内核（纯） | `workbench/editor/vim/__tests__/`：`vimKeymap` / `vimMotions` / `vimOperators` / `vimTextObjects` / `vimRegisters` / `vimSearch` / `vimInputMethod` / `vimKeyHelp` / `vimVisual` / `vimKeyUtils` `.test.ts` |
+| 编辑器内核（纯） | `workbench/editor/vim/__tests__/`：`vimKeymap` / `vimMotions` / `vimOperators` / `vimTextObjects` / `vimRegisters` / `vimSearch` / `vimInputMethod` / `vimKeyHelp` / `vimVisual` / `vimKeyUtils` / `vimViewport`（显示行几何与折叠，内联 mock `getTopForPosition`）`.test.ts` |
 | 编辑器内核（绑 Monaco） | 同目录 `vimEditorController.test.tsx`、`vimEditorFeatures.test.tsx`（`.` / 寄存器 / Insert 分组等）、`vimEditorVisual.test.tsx`、`vimEditorRegressions.test.tsx`（审查修复的回归集：pending 取消、curswant、折叠、只读、`.` 按键流、输入法归属…），统一用 `fakeVimEditor.ts` 搭假编辑器 |
 | Output | `workbench/panel/output/__tests__/outputVimKeymap.test.ts` / `outputVimController.test.ts` / `LogOutputView.test.tsx` |
 | 视口滚动 | `packages/workbench-ui/src/__tests__/scrollViewport.test.ts`、`vimSurfaceAdapters.test.tsx`（Tree/FlatList/Overlay）、`gitGraph/__tests__/useGraphKeyboardNav.vim.test.tsx`、`agents/__tests__/ChatBody.test.tsx` |

@@ -58,9 +58,11 @@ import {
   type VimEditor,
   type VimLastChange,
   type VimMode,
+  type VimMotion,
   type VimMotionArgs,
   type VimPosition,
   type VimState,
+  type VimTextModel,
 } from './vimTypes.js'
 import {
   selectionFromExtent,
@@ -164,6 +166,12 @@ interface DesiredColumn {
   readonly at: VimPosition
 }
 
+/** `gj` / `gk`'s screen column: an offset inside a display row, kept across short rows. */
+interface DesiredDisplayOffset {
+  readonly offset: number
+  readonly at: VimPosition
+}
+
 const END_OF_LINE_COLUMN = Number.MAX_SAFE_INTEGER
 const MOVE_KEYS: ReadonlySet<string> = new Set([
   'ArrowLeft',
@@ -231,6 +239,7 @@ export function createVimEditorController(
 
   let deferredChange = false
   let desiredColumn: DesiredColumn | null = null
+  let desiredDisplayOffset: DesiredDisplayOffset | null = null
   // Async clipboard paste: a result is applied only if nothing moved on meanwhile.
   let pasteGeneration = 0
   let contentVersion = 0
@@ -605,15 +614,22 @@ export function createVimEditorController(
       if (model === null) return
       recordFind(command.motion, command.char)
       const cursor = getCursor()
-      const vertical = command.motion === 'j' || command.motion === 'k'
+      const baseArgs = motionArgs(command.char)
+      const display = displayMotion(model, command.motion, cursor)
+      // A wrapped `gj`/`gk` keeps its own screen column; everywhere else it is
+      // the j/k path (including when soft wrapping is off).
+      const lineVertical =
+        command.motion === 'j' ||
+        command.motion === 'k' ||
+        ((command.motion === 'gj' || command.motion === 'gk') && display === null)
       // j / k aim for the column the cursor had before a short line clamped it.
-      const want = vertical ? (currentDesiredColumn(cursor) ?? cursor.column) : null
+      const want = lineVertical ? (currentDesiredColumn(cursor) ?? cursor.column) : null
       const target = viewport.resolveScreenMotion(
         model,
         want === null ? cursor : { line: cursor.line, column: want },
         command.motion,
         command.count,
-        motionArgs(command.char),
+        display === null ? baseArgs : { ...baseArgs, displayOffset: display.offset },
       )
       if (target === null) return
       moveCursor(target)
@@ -624,20 +640,32 @@ export function createVimEditorController(
           renderVisual()
         }
       }
-      if (vertical && want !== null) {
-        desiredColumn = { column: want, at: getCursor() }
+      const after = getCursor()
+      if (display !== null) {
+        // Remember the requested offset, not the landing column: a short display
+        // row may clamp this move, but the next gj/gk must return to the column.
+        desiredDisplayOffset = { offset: display.offset, at: after }
+        if (display.offset === END_OF_LINE_COLUMN) {
+          desiredColumn = { column: END_OF_LINE_COLUMN, at: after }
+        }
+      } else if (lineVertical) {
+        desiredColumn = { column: want ?? cursor.column, at: after }
       } else if (command.motion === '$') {
-        desiredColumn = { column: END_OF_LINE_COLUMN, at: getCursor() }
+        desiredColumn = { column: END_OF_LINE_COLUMN, at: after }
+        desiredDisplayOffset = null
       }
     },
     operator(command, { register }) {
       recordFind(command.motion, command.char)
+      const model = editor.getModel()
+      const baseArgs = motionArgs(command.char)
+      const display = model === null ? null : displayMotion(model, command.motion, getCursor())
       const done = edits.runOperator(
         command.operator,
         command.motion,
         command.count,
         register,
-        motionArgs(command.char),
+        display === null ? baseArgs : { ...baseArgs, displayOffset: display.offset },
       )
       if (!done) commandFailed = true
     },
@@ -830,6 +858,29 @@ export function createVimEditorController(
       : null
   }
 
+  function currentDesiredDisplayOffset(cursor: VimPosition): number | null {
+    const remembered = desiredDisplayOffset
+    return remembered !== null && comparePositions(remembered.at, cursor) === 0
+      ? remembered.offset
+      : null
+  }
+
+  /** The screen column `gj`/`gk` should target, or null when the display path does not apply. */
+  function displayMotion(
+    model: VimTextModel,
+    motion: VimMotion,
+    cursor: VimPosition,
+  ): { readonly offset: number } | null {
+    if (motion !== 'gj' && motion !== 'gk') return null
+    const screen = viewport.createScreenOps(model)
+    if (screen.wrapsLines?.() !== true || screen.advanceDisplayRows === undefined) return null
+    const eol = visual?.eol === true || currentDesiredColumn(cursor) === END_OF_LINE_COLUMN
+    const offset = eol
+      ? END_OF_LINE_COLUMN
+      : (currentDesiredDisplayOffset(cursor) ?? screen.displayOffsetAt?.(cursor) ?? 0)
+    return { offset }
+  }
+
   function runCommand(command: VimCommand, register: string | null): void {
     if (isWriteCommand(command) && readOnly()) {
       refuseWrite(command)
@@ -865,6 +916,7 @@ export function createVimEditorController(
     renderedSelectionKey = null
     insertRecording = null
     desiredColumn = null
+    desiredDisplayOffset = null
     pasteGeneration++
   }
 

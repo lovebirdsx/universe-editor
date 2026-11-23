@@ -70,6 +70,18 @@ export function createOutputVimController(
         moveCursorTo(currentLine() + delta)
         return
       }
+      case 'display-move':
+        // Output always wraps and never folds, so Monaco's native visual-row
+        // move is exactly Vim's gj/gk. It keeps its own desired column and
+        // reports an Explicit reason, letting the follow-tail listener update.
+        editor.trigger('vim', 'cursorMove', {
+          to: command.direction,
+          by: 'wrappedLine',
+          value: Math.max(1, command.count),
+          select: false,
+          noHistory: true,
+        })
+        return
       case 'scroll-viewport':
         options.onViewportScroll?.()
         editor.trigger(

@@ -370,6 +370,8 @@ export const PREFIX_TABLES: Record<VimPendingKind, VimPrefixTable> = {
     allowedWithOperator: true,
     entries: new Map<string, VimPrefixEntry>([
       ['g', { motion: 'gg' }],
+      ['j', { motion: 'gj' }],
+      ['k', { motion: 'gk' }],
       ['d', editorCommand('editor.action.revealDefinition', 'Go to definition')],
       ['D', editorCommand('editor.action.revealDeclaration', 'Go to declaration')],
       ['y', editorCommand('editor.action.goToTypeDefinition', 'Go to type definition')],

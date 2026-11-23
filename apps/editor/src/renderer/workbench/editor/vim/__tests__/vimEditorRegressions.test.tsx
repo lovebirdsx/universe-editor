@@ -580,3 +580,97 @@ describe('registers touched by the failed-command rule', () => {
     expect(h.fake.lines()[0]).toBe('cd')
   })
 })
+
+describe('gj / gk (display lines)', () => {
+  it('moves between display rows of one model line', () => {
+    const h = createVimHarness(['abcdefghijklm'], { wrapWidth: 5 })
+    h.fake.setCursor(1, 2)
+    h.keys('gj')
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 7 })
+    h.keys('gj')
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 12 })
+    h.keys('gk')
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 7 })
+    h.keys('gk')
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 2 })
+  })
+
+  it('honours a count and stops at the last display row', () => {
+    const h = createVimHarness(['abcdefghijklm'], { wrapWidth: 5 })
+    h.fake.setCursor(1, 1)
+    h.keys('3gj')
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 11 })
+    h.keys('9gj')
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 11 })
+  })
+
+  it('crosses model lines while keeping the screen offset', () => {
+    const h = createVimHarness(['abcdefghijklm', 'abcdefghij'], { wrapWidth: 5 })
+    h.fake.setCursor(1, 12)
+    h.keys('gj')
+    expect(h.fake.cursor()).toEqual({ line: 2, column: 2 })
+    h.keys('gk')
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 12 })
+  })
+
+  it('restores the remembered offset after clamping on a short line', () => {
+    const h = createVimHarness(['abcdefghijklm', 'abc', 'abcdefghijklm'], { wrapWidth: 10 })
+    h.fake.setCursor(1, 9)
+    h.keys('gj')
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 13 })
+    h.keys('gj')
+    expect(h.fake.cursor()).toEqual({ line: 2, column: 3 })
+    h.keys('gj')
+    expect(h.fake.cursor()).toEqual({ line: 3, column: 9 })
+  })
+
+  it('keeps $ at the end of each display row', () => {
+    const h = createVimHarness(['abcdefghijklm', 'abcdefghijklm'], { wrapWidth: 5 })
+    h.fake.setCursor(1, 2)
+    h.keys('$')
+    h.keys('gj')
+    expect(h.fake.cursor()).toEqual({ line: 2, column: 5 })
+    h.keys('gk')
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 13 })
+  })
+
+  it('falls back to j / k when soft wrapping is off', () => {
+    const h = createVimHarness(['abcdef', 'abcdef'])
+    h.fake.setCursor(1, 2)
+    h.keys('gj')
+    expect(h.fake.cursor()).toEqual({ line: 2, column: 2 })
+    h.keys('gk')
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 2 })
+  })
+
+  it('deletes by whole model lines when wrapping is off', () => {
+    const h = createVimHarness(['abcdef', 'abcdef', 'tail'])
+    h.fake.setCursor(1, 3)
+    h.keys('dgj')
+    expect(h.fake.lines()).toEqual(['tail'])
+    expect(getVimRegister()).toEqual({ text: 'abcdef\nabcdef\n', linewise: true })
+  })
+
+  it('deletes the display-row range when wrapping is on', () => {
+    const h = createVimHarness(['abcdefghijklm', 'abcdefghijklm'], { wrapWidth: 5 })
+    h.fake.setCursor(1, 2)
+    h.keys('dgj')
+    expect(h.fake.lines()).toEqual(['aghijklm', 'abcdefghijklm'])
+    expect(getVimRegister()).toEqual({ text: 'bcdef', linewise: false })
+  })
+
+  it('yanks the display-row range and lands on its first character', () => {
+    const h = createVimHarness(['abcdefghijklm'], { wrapWidth: 5 })
+    h.fake.setCursor(1, 2)
+    h.keys('ygj')
+    expect(getVimRegister()).toEqual({ text: 'bcdef', linewise: false })
+    expect(h.fake.cursor()).toEqual({ line: 1, column: 2 })
+  })
+
+  it('repeats a display-row delete with .', () => {
+    const h = createVimHarness(['abcdefghijklm'], { wrapWidth: 5 })
+    h.fake.setCursor(1, 1)
+    h.keys('dgj.')
+    expect(h.fake.lines()).toEqual(['klm'])
+  })
+})

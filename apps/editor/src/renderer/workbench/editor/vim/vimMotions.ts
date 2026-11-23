@@ -83,6 +83,12 @@ export function clampNormalPosition(lines: VimLines, position: VimPosition): Vim
   return { line, column }
 }
 
+/** One `gj` / `gk` step result: `moved: false` means the buffer edge was already reached. */
+export interface VimDisplayMove {
+  readonly position: VimPosition
+  readonly moved: boolean
+}
+
 /**
  * Screen-row awareness injected by the host. Folds and the viewport live in the
  * editor, not in the text, so row-counted motions (`j`, `k`, `<CR>`, paging) ask
@@ -93,12 +99,24 @@ export interface VimScreenOps {
   advanceRows(line: number, delta: 1 | -1, steps: number): number
   /** Rows in the viewport; absent when there is no viewport, which disables paging. */
   pageRows?(): number
+  /** Whether soft wrapping is actually on; absent means off. */
+  wrapsLines?(): boolean
+  /** Cursor's character offset inside its display row; null when the geometry is unavailable. */
+  displayOffsetAt?(position: VimPosition): number | null
+  /** Move `steps` display rows; null means the geometry is unavailable, not "did not move". */
+  advanceDisplayRows?(
+    from: VimPosition,
+    delta: 1 | -1,
+    steps: number,
+    preferredOffset?: number,
+  ): VimDisplayMove | null
 }
 
 export function createPlainScreenOps(lines: VimLineReader): VimScreenOps {
   return {
     advanceRows: (line, delta, steps) =>
       Math.max(1, Math.min(lines.getLineCount(), line + delta * steps)),
+    wrapsLines: () => false,
   }
 }
 
@@ -111,6 +129,8 @@ export interface VimMotionContext {
   readonly char?: string
   /** What `;` / `,` repeat. */
   readonly lastFind?: VimFindState | null
+  /** `gj`/`gk`'s remembered screen column; absent means derive it from `from`. */
+  readonly displayOffset?: number
 }
 
 /** What an operator needs from a motion: where it ends and how that end is interpreted. */
@@ -339,6 +359,54 @@ function lineMotion(
   }
 }
 
+/**
+ * `gj` / `gk` count display rows: soft-wrapped segments and closed folds
+ * (one row) rather than model lines. With `wrap` off they behave exactly like
+ * `j` / `k`, including Vim's linewise operator semantics; with `wrap` on an
+ * operator gets an exclusive target (Vim 9.1 behavior).
+ */
+function displayLineMotion(id: 'gj' | 'gk', delta: 1 | -1, description: string): VimMotionDef {
+  const lineTarget = (ctx: VimMotionContext, count: number): VimPosition =>
+    clampNormalPosition(ctx.lines, {
+      line: ctx.screen.advanceRows(ctx.from.line, delta, steps(count)),
+      column: ctx.from.column,
+    })
+
+  const displayMove = (ctx: VimMotionContext, count: number): VimDisplayMove | null => {
+    if (ctx.screen.wrapsLines?.() !== true || ctx.screen.advanceDisplayRows === undefined) {
+      return null
+    }
+    const preferred = ctx.displayOffset ?? ctx.screen.displayOffsetAt?.(ctx.from) ?? 0
+    return ctx.screen.advanceDisplayRows(ctx.from, delta, steps(count), preferred)
+  }
+
+  return {
+    id,
+    keys: [],
+    helpKeys: id,
+    kind: 'exclusive',
+    description,
+    screenAware: true,
+    resolve: (ctx, count) => {
+      const display = displayMove(ctx, count)
+      return display === null
+        ? lineTarget(ctx, count)
+        : clampNormalPosition(ctx.lines, display.position)
+    },
+    resolveForOperator: (ctx, count) => {
+      const display = displayMove(ctx, count)
+      if (display !== null) {
+        return display.moved ? { to: display.position, kind: 'exclusive' } : null
+      }
+      const to = lineTarget(ctx, count)
+      if (to.line === ctx.from.line) return null
+      // Without display geometry the cursor still moves line-wise, but the
+      // operator kind must follow the 'wrap' option, not the fallback path.
+      return { to, kind: ctx.screen.wrapsLines?.() === true ? 'exclusive' : 'linewise' }
+    },
+  }
+}
+
 function gotoLine(ctx: VimMotionContext, line: number): VimPosition {
   const target = Math.max(1, Math.min(ctx.lines.getLineCount(), line))
   return clampNormalPosition(ctx.lines, {
@@ -528,6 +596,8 @@ export const VIM_MOTIONS: readonly VimMotionDef[] = [
   },
   lineMotion('j', ['j'], 1, 'Move down'),
   lineMotion('k', ['k'], -1, 'Move up'),
+  displayLineMotion('gj', 1, 'Down one display line'),
+  displayLineMotion('gk', -1, 'Up one display line'),
   {
     id: 'enter',
     keys: [],

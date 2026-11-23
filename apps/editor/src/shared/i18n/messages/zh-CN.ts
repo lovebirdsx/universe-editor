@@ -379,6 +379,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'vim.keyHelp.Move_right': '向右移动',
   'vim.keyHelp.Move_down': '向下移动',
   'vim.keyHelp.Move_up': '向上移动',
+  'vim.keyHelp.Down_one_display_line': '向下移动一个显示行',
+  'vim.keyHelp.Up_one_display_line': '向上移动一个显示行',
   'vim.keyHelp.Down_to_the_first_non_blank_of_the_next_line': '下一行的第一个非空白字符',
   'vim.keyHelp.Insert_at_column_1': '在第 1 列插入',
   'vim.keyHelp.Start_of_line': '行首',

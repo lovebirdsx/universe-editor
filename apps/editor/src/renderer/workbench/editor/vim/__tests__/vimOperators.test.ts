@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { linewiseOperatorRange, resolveOperatorRange } from '../vimOperators.js'
+import type { VimScreenOps } from '../vimMotions.js'
 
 const linewiseRange = (lines: string[], start: number, end: number) =>
   linewiseOperatorRange(lines, start, end).range
@@ -276,5 +277,73 @@ describe('resolveOperatorRange: cw / cW / dh / dl / > / <', () => {
       expect(target?.linewise).toBe(true)
       expect(target?.range.startLineNumber).toBe(1)
     }
+  })
+})
+
+describe('resolveOperatorRange: display-line motions', () => {
+  function displayScreen(position: { line: number; column: number }): VimScreenOps {
+    return {
+      advanceRows: (line, delta, steps) => line + delta * steps,
+      wrapsLines: () => true,
+      advanceDisplayRows: () => ({ position, moved: true }),
+    }
+  }
+
+  it('is linewise without a display geometry (wrap off behaves like j/k)', () => {
+    expect(
+      resolveOperatorRange(['abcdef', 'abcdef', 'tail'], { line: 1, column: 3 }, 'gj', 1)?.range,
+    ).toEqual({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: 3,
+      endColumn: 1,
+    })
+  })
+
+  it('is characterwise exclusive with wrapping on', () => {
+    const range = resolveOperatorRange(
+      ['abcdefghij'],
+      { line: 1, column: 3 },
+      'gj',
+      1,
+      'd',
+      {},
+      displayScreen({ line: 1, column: 8 }),
+    )
+    expect(range).toMatchObject({
+      linewise: false,
+      range: { startLineNumber: 1, startColumn: 3, endLineNumber: 1, endColumn: 8 },
+    })
+  })
+
+  it('lets the o_v rule promote a display row ending in column 1 to linewise', () => {
+    const range = resolveOperatorRange(
+      ['  abc', 'def'],
+      { line: 1, column: 2 },
+      'gj',
+      1,
+      'd',
+      {},
+      displayScreen({ line: 2, column: 1 }),
+    )
+    expect(range?.linewise).toBe(true)
+    // The o_v rule stops at the end of the previous line (line 1), not line 2.
+    expect(range?.range).toEqual({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: 2,
+      endColumn: 1,
+    })
+  })
+
+  it('fails when the display geometry cannot move', () => {
+    const screen: VimScreenOps = {
+      advanceRows: (line, delta, steps) => line + delta * steps,
+      wrapsLines: () => true,
+      advanceDisplayRows: () => ({ position: { line: 1, column: 3 }, moved: false }),
+    }
+    expect(
+      resolveOperatorRange(['abcdefghij'], { line: 1, column: 3 }, 'gj', 1, 'd', {}, screen),
+    ).toBeNull()
   })
 })

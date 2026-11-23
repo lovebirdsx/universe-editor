@@ -24,6 +24,7 @@ import {
   toLineReader,
   type VimLines,
   type VimOperatorTarget,
+  type VimScreenOps,
 } from './vimMotions.js'
 import {
   comparePositions,
@@ -142,9 +143,15 @@ export function resolveOperatorRange(
   count: number,
   operator: VimOperator = 'd',
   args: VimMotionArgs = {},
+  screen?: VimScreenOps,
 ): VimOperatorRange | null {
   const reader = toLineReader(lines)
-  const ctx = { lines: reader, from, screen: createPlainScreenOps(reader), ...args }
+  const ctx = {
+    lines: reader,
+    from,
+    screen: screen ?? createPlainScreenOps(reader),
+    ...args,
+  }
   const def = getVimMotion(motion)
   let target: VimOperatorTarget | null
   if (def.resolveForOperator !== undefined) {
