@@ -63,7 +63,10 @@ import {
   createKeyboardContextMenuEvent,
   isKeyboardContextMenu,
   writeClipboardText,
+  useVimSurfaceKeymap,
+  vimSurfaceKeyFor,
 } from '@universe-editor/workbench-ui'
+import { GIT_GRAPH_SURFACE_KEYMAP } from '../../services/vim/vimSurfaceKeymaps.js'
 import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
 import {
   useService,
@@ -2435,6 +2438,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     defaultRowId: rowKeys.find((k) => k !== UNCOMMITTED_HASH) ?? null,
     selectDefault: selectFromKeyboard,
   })
+  useVimSurfaceKeymap(vimSurfaceKeyFor('list', 'git-graph'), GIT_GRAPH_SURFACE_KEYMAP)
   const onRowsKeyDown = useGraphKeyboardNav({
     rows: rowKeys,
     selectionRef,

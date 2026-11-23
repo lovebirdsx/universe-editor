@@ -7,7 +7,7 @@ import {
   localize,
 } from '@universe-editor/platform'
 import type { IPart, IViewContainerDescriptor } from '@universe-editor/platform'
-import { useVimSurface } from '@universe-editor/workbench-ui'
+import { createStripVimActions, useVimSurface } from '@universe-editor/workbench-ui'
 import { useService, useObservable } from '../useService.js'
 import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { VIEW_DRAG_MIME, dragContainsView, viewDragData } from '../dnd/viewDragData.js'
@@ -190,6 +190,12 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
     [containers.length, navRef],
   )
 
+  const stripActions = createStripVimActions({
+    getCount: () => containers.length,
+    getIndex: () => rovingIndex,
+    setIndex: focusItem,
+  })
+
   // Vim `activityBar` surface: j/k move the roving cursor between containers,
   // Enter opens the focused container and hands focus to its first view.
   useVimSurface({
@@ -200,14 +206,7 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
     getSurfaceKey: () => 'activityBar',
     defaultMode: 'normal',
     actions: {
-      move: (direction, count) => {
-        const delta = direction === 'up' || direction === 'left' ? -1 : 1
-        focusItem(rovingIndex + delta * Math.max(1, count))
-      },
-      next: (count) => focusItem(rovingIndex + Math.max(1, count)),
-      previous: (count) => focusItem(rovingIndex - Math.max(1, count)),
-      first: (count) => focusItem(count > 1 ? count - 1 : 0),
-      last: (count) => focusItem(count > 1 ? count - 1 : containers.length - 1),
+      ...stripActions,
       activate: () => {
         const target = containers[rovingIndex]
         if (target !== undefined) activateContainer(target.id)

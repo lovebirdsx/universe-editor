@@ -10,13 +10,14 @@ import { useOptionalService, useService } from '../../useService.js'
 import { IVimModeService } from '../../../services/vim/vimModeService.js'
 import { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
 import { registerTerminalNormalModeController } from '../../../services/terminal/terminalNormalModeRegistry.js'
-import { TerminalNormalModeController } from './terminalNormalMode.js'
+import { TerminalNormalModeController, createTerminalSurfaceActions } from './terminalNormalMode.js'
 import { copyTerminalSelection } from './terminalClipboard.js'
 import type { OpenTarget } from '../../../services/editor/openTarget.js'
 import type { ResolveTerminalFile } from './terminalLinkProvider.js'
 import {
   dragContainsResources,
   getOwnerResizeObserver,
+  isNodeLike,
   ListMenu,
   registerVimSurface,
   type ListMenuEntry,
@@ -76,6 +77,7 @@ export function TerminalInstance({
       vimModeService.onDidChangeMode((event) => {
         if (event.surfaceKey !== surfaceKey) return
         read()
+        normalModeRef.current?.syncInputMethod()
         // Re-focus xterm when entering normal mode: switchToEn() may briefly move
         // focus away. Panel terminals recover via `focused` prop re-firing; editor
         // terminals have no such mechanism and must pull focus back explicitly.
@@ -87,9 +89,11 @@ export function TerminalInstance({
         configService.onDidChangeConfiguration((event) => {
           if (
             event.affectsConfiguration('vim.enabled') ||
-            event.affectsConfiguration('vim.surfaces.terminalNormalMode')
+            event.affectsConfiguration('vim.surfaces.terminalNormalMode') ||
+            event.affectsConfiguration('vim.autoSwitchInputMethod')
           ) {
             read()
+            normalModeRef.current?.syncInputMethod()
           }
         }),
       )
@@ -102,6 +106,7 @@ export function TerminalInstance({
 
   const hostRef = useRef<HTMLDivElement>(null)
   const holderRef = useRef<ITerminalXtermHolder | null>(null)
+  const normalModeRef = useRef<TerminalNormalModeController | undefined>(undefined)
   // Fresh per effect setup; a deferred teardown step compares it to tell dev
   // StrictMode's rehearsal cleanup (immediately followed by a re-setup) from a
   // real unmount. The object is stable; only its counter changes.
@@ -139,21 +144,6 @@ export function TerminalInstance({
     holder.reattachTo(host)
     setHasSelection(holder.hasSelection())
 
-    // Vim's terminal surface. The registration is per terminal instance and
-    // survives a panel/editor reparent (the xterm holder does); Normal mode is
-    // remembered by `surfaceKey` in IVimModeService.
-    const vimSurface =
-      vimModeService === undefined
-        ? undefined
-        : registerVimSurface({
-            id: surfaceKey,
-            kind: 'terminal',
-            getElement: () => hostRef.current,
-            focus: 'within',
-            getSurfaceKey: () => surfaceKey,
-            defaultMode: 'insert',
-            actions: {},
-          })
     const normalMode =
       vimModeService === undefined
         ? undefined
@@ -169,8 +159,51 @@ export function TerminalInstance({
               configService?.get<boolean>('vim.autoSwitchInputMethod') !== false,
             copySelection: (target) => copyTerminalSelection(target),
           })
+    // Vim's terminal surface. The registration is per terminal instance and
+    // survives a panel/editor reparent (the xterm holder does); Normal mode is
+    // remembered by `surfaceKey` in IVimModeService. Its `actions` drive the
+    // Normal-mode controller, so the keymap reuses the generic list.* commands.
+    const vimSurface =
+      vimModeService === undefined || normalMode === undefined
+        ? undefined
+        : registerVimSurface({
+            id: surfaceKey,
+            kind: 'terminal',
+            getElement: () => hostRef.current,
+            focus: 'within',
+            getSurfaceKey: () => surfaceKey,
+            defaultMode: 'insert',
+            actions: createTerminalSurfaceActions(normalMode),
+          })
     const normalModeRegistration =
       normalMode === undefined ? undefined : registerTerminalNormalModeController(normalMode)
+    normalModeRef.current = normalMode
+
+    // English is held only while this terminal is in Normal mode AND holds DOM
+    // focus; Alt+Tab fires the same focusout/window-blur path, so the input
+    // method is handed back when the user leaves the app.
+    const ownerDoc = host.ownerDocument
+    const ownerWindow = ownerDoc.defaultView
+    const hostHasFocus = (): boolean => {
+      const active = ownerDoc.activeElement
+      return active !== null && host.contains(active) && ownerDoc.hasFocus()
+    }
+    const onFocusIn = (): void => normalMode?.handleFocusIn()
+    const onFocusOut = (event: FocusEvent): void => {
+      if (isNodeLike(event.relatedTarget) && host.contains(event.relatedTarget)) return
+      normalMode?.handleFocusOut()
+    }
+    const onWindowBlur = (): void => normalMode?.handleFocusOut()
+    const onWindowFocus = (): void => {
+      if (hostHasFocus()) normalMode?.handleFocusIn()
+    }
+    host.addEventListener('focusin', onFocusIn)
+    host.addEventListener('focusout', onFocusOut)
+    ownerWindow?.addEventListener('blur', onWindowBlur)
+    ownerWindow?.addEventListener('focus', onWindowFocus)
+    // A remount (panel <-> editor reparent) keeps the remembered Normal mode;
+    // pick the input method back up if focus is already here.
+    if (hostHasFocus()) normalMode?.handleFocusIn()
 
     // The instance unmounts when the view is reparented (panel <-> editor) and
     // the xterm holder survives that, so mode memory may only be dropped when
@@ -195,8 +228,15 @@ export function TerminalInstance({
       observer?.disconnect()
       selectionSub.dispose()
       forgetSurfaceOnClose?.dispose()
+      host.removeEventListener('focusin', onFocusIn)
+      host.removeEventListener('focusout', onFocusOut)
+      ownerWindow?.removeEventListener('blur', onWindowBlur)
+      ownerWindow?.removeEventListener('focus', onWindowFocus)
       normalModeRegistration?.dispose()
+      // Detach only: releases the input method but keeps the remembered mode,
+      // which must survive a panel <-> editor reparent.
       normalMode?.dispose()
+      if (normalModeRef.current === normalMode) normalModeRef.current = undefined
       vimSurface?.dispose()
       holder.wrapper.remove()
       holderRef.current = null

@@ -27,7 +27,7 @@ import {
 import { EditorGroupView } from '../EditorGroupView.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { ServicesContext } from '../../useService.js'
-import { focusActiveEditorTabs } from '../useEditorTabsVim.js'
+import { focusActiveEditorTabs } from '../editorTabsFocus.js'
 
 const stubDialog = {
   _serviceBrand: undefined,
@@ -135,13 +135,27 @@ describe('EditorGroupView vim tabs surface', () => {
     renderGroup(svc.activeGroup, svc)
 
     tabFor(b.id).focus()
-    act(() => surfaceActions().first?.(1))
+    act(() => surfaceActions().first?.(0))
     expect(svc.activeGroup.activeEditor).toBe(a)
     expect(document.activeElement).toBe(tabFor(a.id))
 
-    act(() => surfaceActions().last?.(1))
+    act(() => surfaceActions().last?.(0))
     expect(svc.activeGroup.activeEditor).toBe(b)
     expect(document.activeElement).toBe(tabFor(b.id))
+  })
+
+  it('1G jumps to the first tab (a typed count is the 1-based target)', () => {
+    const svc = new EditorGroupsService()
+    const a = new FakeEditor('a')
+    const b = new FakeEditor('b')
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+    renderGroup(svc.activeGroup, svc)
+
+    tabFor(b.id).focus()
+    act(() => surfaceActions().last?.(1))
+    expect(svc.activeGroup.activeEditor).toBe(a)
+    expect(document.activeElement).toBe(tabFor(a.id))
   })
 
   it('activate hands focus to the editor body', () => {

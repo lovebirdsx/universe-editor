@@ -15,8 +15,8 @@
 
 import { useCallback, type KeyboardEvent, type RefObject } from 'react'
 import {
+  createIndexListVimActions,
   isContextMenuKey,
-  scrollViewportByRows,
   useVimSurface,
   useVimSurfaceKey,
 } from '@universe-editor/workbench-ui'
@@ -86,6 +86,18 @@ export function useGraphKeyboardNav({
   const pageSize = (): number =>
     Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 0) / rowHeight))
 
+  const listActions = createIndexListVimActions({
+    getCount: () => rows.length,
+    getIndex: () => {
+      const currentKey = selectionRef.current[0]
+      return currentKey === undefined ? -1 : rows.indexOf(currentKey)
+    },
+    setIndex: moveTo,
+    getPageSize: pageSize,
+    scroller: { getElement: () => scrollRef.current, getRowHeight: () => rowHeight },
+    upFromNone: 'last',
+  })
+
   useVimSurface({
     id: vimSurfaceKey,
     kind: 'list',
@@ -94,29 +106,7 @@ export function useGraphKeyboardNav({
     getSurfaceKey: () => vimSurfaceKey,
     defaultMode: 'normal',
     actions: {
-      move: (direction, count) => {
-        if (rows.length === 0) return
-        const currentKey = selectionRef.current[0]
-        const currentIndex = currentKey === undefined ? -1 : rows.indexOf(currentKey)
-        const steps = Math.max(1, count)
-        if (direction === 'down') {
-          moveTo(currentIndex < 0 ? steps - 1 : currentIndex + steps)
-        } else if (direction === 'up') {
-          moveTo(currentIndex < 0 ? rows.length - steps : currentIndex - steps)
-        }
-      },
-      first: () => moveTo(0),
-      last: () => moveTo(rows.length - 1),
-      page: (direction, count) => {
-        const currentKey = selectionRef.current[0]
-        const currentIndex = currentKey === undefined ? -1 : rows.indexOf(currentKey)
-        const base = currentIndex < 0 ? 0 : currentIndex
-        const delta = pageSize() * Math.max(1, count)
-        moveTo(direction === 'down' ? base + delta : base - delta)
-      },
-      scrollViewport: (direction, count) => {
-        scrollViewportByRows(scrollRef.current, rowHeight, direction, count)
-      },
+      ...listActions,
       activate: () => {
         if (selectionRef.current[0] === undefined) return
         openCommitChanges()

@@ -31,7 +31,10 @@ import {
   useScrollRestore,
   VirtualList,
   type VirtualListHandle,
+  useVimSurfaceKeymap,
+  vimSurfaceKeyFor,
 } from '@universe-editor/workbench-ui'
+import { KEYBINDINGS_SURFACE_KEYMAP } from '../../services/vim/vimSurfaceKeymaps.js'
 import type { IKeybindingRow } from '../../services/keybindings/keybindingsEditorModel.js'
 import type { IKeybindingRowMatch } from '../../services/keybindings/keybindingsSearchModel.js'
 import { KeybindingsRow } from './KeybindingsRow.js'
@@ -107,6 +110,7 @@ export function KeybindingsTable({
     onRevealed()
   }, [revealRowId, indexOfRowId, onSelect, onRevealed])
 
+  useVimSurfaceKeymap(vimSurfaceKeyFor('list', 'keybindings'), KEYBINDINGS_SURFACE_KEYMAP)
   const nav = useFlatListNavigation({
     count: rows.length,
     focusedIndex: selectedIndex,

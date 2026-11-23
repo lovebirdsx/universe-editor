@@ -2,9 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  Surface focus commands used by the Vim leader (`<leader>b/j/t`, group
- *  chords) and the command palette. Part focus is already available; the tab
- *  strip commands are registered here but implemented by the tab-surface work
- *  package (WP4) without touching `actions/index.ts` again.
+ *  chords) and the command palette: part focus, the editor tab strip and the
+ *  view container tab headers.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -19,7 +18,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
-import { focusActiveEditorTabs, holdEditorTabsFocus } from '../workbench/editor/useEditorTabsVim.js'
+import { focusActiveEditorTabs, holdEditorTabsFocus } from '../workbench/editor/editorTabsFocus.js'
 import { focusViewContainerTabsArea } from '../workbench/paneComposite/viewContainerTabsFocus.js'
 
 interface DefaultContainer {

@@ -12,7 +12,12 @@
 
 import { useCallback, useRef, useState, type RefObject } from 'react'
 import { localize } from '@universe-editor/platform'
-import { useFlatListNavigation } from '@universe-editor/workbench-ui'
+import {
+  useFlatListNavigation,
+  useVimSurfaceKeymap,
+  vimSurfaceKeyFor,
+} from '@universe-editor/workbench-ui'
+import { SETTINGS_SURFACE_KEYMAP } from '../../services/vim/vimSurfaceKeymaps.js'
 import type { SettingsTocEntry } from '../../services/preferences/settingsFlatModel.js'
 import styles from './SettingsEditor.module.css'
 
@@ -39,6 +44,7 @@ export function SettingsToc({ entries, activeId, onNavigate, onActivate }: Setti
     [entries, onActivate, onNavigate],
   )
 
+  useVimSurfaceKeymap(vimSurfaceKeyFor('list', 'settings-toc'), SETTINGS_SURFACE_KEYMAP)
   const nav = useFlatListNavigation({
     count: entries.length,
     focusedIndex: safeIndex,

@@ -691,9 +691,9 @@ describe('ChatBody — Vim list surface', () => {
     act(() => activeSurface().surface.actions.move?.('up', 1))
     expect(slotEl(container, 'm:b').className).toContain(focusedClass)
 
-    act(() => activeSurface().surface.actions.first?.(1))
+    act(() => activeSurface().surface.actions.first?.(0))
     expect(slotEl(container, 'm:a').className).toContain(focusedClass)
-    act(() => activeSurface().surface.actions.last?.(1))
+    act(() => activeSurface().surface.actions.last?.(0))
     expect(slotEl(container, 'm:c').className).toContain(focusedClass)
   })
 

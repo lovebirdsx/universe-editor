@@ -16,7 +16,7 @@ import {
   type PartId,
   type ViewContainerLocation,
 } from '@universe-editor/platform'
-import { findRowElement, useVimSurface } from '@universe-editor/workbench-ui'
+import { createStripVimActions, findRowElement, useVimSurface } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { registerViewContainerTabsFocus } from './viewContainerTabsFocus.js'
@@ -104,21 +104,21 @@ export function useViewContainerTabsVim(options: UseViewContainerTabsVimOptions)
     })
   }
 
-  const cycle = (delta: number): void => {
-    const state = stateRef.current
-    const containers = state.getContainers()
-    if (containers.length < 2) return
-    const activeId = viewsService.getActiveViewContainerId(state.location)
-    const index = containers.findIndex((container) => container.id === activeId)
-    const nextIndex =
-      index === -1
-        ? delta > 0
-          ? 0
-          : containers.length - 1
-        : (((index + delta) % containers.length) + containers.length) % containers.length
-    const target = containers[nextIndex]
-    if (target !== undefined) switchTo(target.id)
-  }
+  // The strip cycles around the ends; the cursor is the container the location
+  // currently shows (-1 when none is active yet).
+  const stripActions = createStripVimActions({
+    getCount: () => stateRef.current.getContainers().length,
+    getIndex: () => {
+      const state = stateRef.current
+      const activeId = viewsService.getActiveViewContainerId(state.location)
+      return state.getContainers().findIndex((container) => container.id === activeId)
+    },
+    setIndex: (index) => {
+      const target = stateRef.current.getContainers()[index]
+      if (target !== undefined) switchTo(target.id)
+    },
+    wrap: true,
+  })
 
   const focusContainerContent = (): void => {
     // Enter/Escape is choosing the content as the focus destination; cancel any
@@ -146,25 +146,7 @@ export function useViewContainerTabsVim(options: UseViewContainerTabsVimOptions)
     getSurfaceKey: () => viewContainerTabsSurfaceKey(stateRef.current.location),
     defaultMode: 'normal',
     actions: {
-      move: (direction, count) => {
-        const backwards = direction === 'left' || direction === 'up'
-        cycle((backwards ? -1 : 1) * Math.max(1, count))
-      },
-      next: (count) => cycle(Math.max(1, count)),
-      previous: (count) => cycle(-Math.max(1, count)),
-      first: (count) => {
-        const containers = stateRef.current.getContainers()
-        if (containers.length === 0) return
-        const target = containers[count > 1 ? Math.min(count - 1, containers.length - 1) : 0]
-        if (target !== undefined) switchTo(target.id)
-      },
-      last: (count) => {
-        const containers = stateRef.current.getContainers()
-        if (containers.length === 0) return
-        const index = count > 1 ? Math.min(count - 1, containers.length - 1) : containers.length - 1
-        const target = containers[index]
-        if (target !== undefined) switchTo(target.id)
-      },
+      ...stripActions,
       activate: focusContainerContent,
       escape: focusContainerContent,
     },

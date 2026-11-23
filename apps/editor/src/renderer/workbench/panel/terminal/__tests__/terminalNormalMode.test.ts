@@ -1,9 +1,23 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { VimSurfaceMode } from '@universe-editor/workbench-ui'
+import { releaseInputMethod, requestInputMethod } from '../../../editor/vim/vimInputMethod.js'
 import {
   TerminalNormalModeController,
+  createTerminalSurfaceActions,
   type TerminalNormalModeTarget,
 } from '../terminalNormalMode.js'
+
+// The window-wide owner model lives in editor/vim/vimInputMethod.ts (own tests);
+// here only the terminal's use of it is asserted.
+vi.mock('../../../editor/vim/vimInputMethod.js', () => ({
+  requestInputMethod: vi.fn(),
+  releaseInputMethod: vi.fn(),
+}))
+
+beforeEach(() => {
+  vi.mocked(requestInputMethod).mockClear()
+  vi.mocked(releaseInputMethod).mockClear()
+})
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
@@ -98,6 +112,7 @@ function fakeVimService(enabled = true) {
 
 function fakeInputMethod() {
   return {
+    _serviceBrand: undefined,
     switchToEnglish: vi.fn(async () => true),
     restore: vi.fn(async () => {}),
   }
@@ -268,26 +283,150 @@ describe('TerminalNormalModeController', () => {
     expect(copy).not.toHaveBeenCalled()
   })
 
-  it('switches the input method to English on entry and restores it on exit', async () => {
+  it('claims English on entry and gives it back on exit, as the terminal owner', () => {
     const inputMethod = fakeInputMethod()
     const { controller } = makeController({ inputMethod })
 
     controller.enterNormalMode()
-    await vi.waitFor(() => expect(inputMethod.switchToEnglish).toHaveBeenCalledTimes(1))
+    expect(requestInputMethod).toHaveBeenLastCalledWith(controller, inputMethod, 'english')
 
     controller.exitNormalMode()
-    await vi.waitFor(() => expect(inputMethod.restore).toHaveBeenCalledTimes(1))
+    expect(releaseInputMethod).toHaveBeenLastCalledWith(controller, inputMethod)
   })
 
-  it('honours vim.autoSwitchInputMethod=false', async () => {
+  it('honours vim.autoSwitchInputMethod=false', () => {
     const inputMethod = fakeInputMethod()
     const { controller } = makeController({ inputMethod, autoSwitch: () => false })
 
     controller.enterNormalMode()
     controller.exitNormalMode()
-    await Promise.resolve()
 
-    expect(inputMethod.switchToEnglish).not.toHaveBeenCalled()
-    expect(inputMethod.restore).not.toHaveBeenCalled()
+    expect(requestInputMethod).not.toHaveBeenCalled()
+  })
+
+  it('hands the input method back when focus leaves and re-asserts it on return', () => {
+    const inputMethod = fakeInputMethod()
+    const { controller, vim } = makeController({ inputMethod })
+    controller.enterNormalMode()
+    vi.mocked(requestInputMethod).mockClear()
+
+    controller.handleFocusOut()
+    expect(releaseInputMethod).toHaveBeenLastCalledWith(controller, inputMethod)
+    expect(requestInputMethod).not.toHaveBeenCalled()
+    // Leaving focus is not leaving Normal mode.
+    expect(vim.modes.get('terminal:t1')).toBe('terminal-normal')
+
+    controller.handleFocusIn()
+    expect(requestInputMethod).toHaveBeenLastCalledWith(controller, inputMethod, 'english')
+  })
+
+  it('never claims English for a terminal that is focused but in Insert mode', () => {
+    const inputMethod = fakeInputMethod()
+    const { controller } = makeController({ inputMethod })
+
+    controller.handleFocusIn()
+
+    expect(requestInputMethod).not.toHaveBeenCalled()
+  })
+
+  it('re-asserts English after a remount when the remembered mode is still Normal', () => {
+    const inputMethod = fakeInputMethod()
+    const first = makeController({ inputMethod })
+    first.controller.enterNormalMode()
+
+    // Reparent: the old view detaches, the mode memory stays, a new controller
+    // attaches to the same surface key and sees focus come back.
+    first.controller.dispose()
+    expect(first.vim.modes.get('terminal:t1')).toBe('terminal-normal')
+    expect(releaseInputMethod).toHaveBeenLastCalledWith(first.controller, inputMethod)
+
+    const second = new TerminalNormalModeController({
+      surfaceKey: 'terminal:t1',
+      target: first.target,
+      vimModeService: first.vim,
+      inputMethodService: inputMethod,
+      copySelection: first.copy,
+    })
+    expect(second.isNormalMode()).toBe(true)
+    second.handleFocusIn()
+    expect(requestInputMethod).toHaveBeenLastCalledWith(second, inputMethod, 'english')
+  })
+
+  it('follows a runtime vim.enabled / mode change through syncInputMethod', () => {
+    const inputMethod = fakeInputMethod()
+    const { controller, vim } = makeController({ inputMethod })
+    controller.enterNormalMode()
+    vi.mocked(releaseInputMethod).mockClear()
+
+    vim.state.enabled = false
+    controller.syncInputMethod()
+
+    expect(releaseInputMethod).toHaveBeenLastCalledWith(controller, inputMethod)
+  })
+
+  it('NG jumps to buffer line N, centred in the viewport and clamped', () => {
+    const { controller, target } = makeController()
+
+    controller.scrollToBufferLine(50)
+    controller.scrollToBufferLine(1)
+    controller.scrollToBufferLine(9999)
+
+    // rows = 10 -> half = 5; line 50 is index 49, so the viewport starts at 44.
+    // Line 1 clamps at 0; past the end it clamps to the last line (index 99 -> 94).
+    expect(target.scrollToLineCalls).toEqual([44, 0, 94])
+  })
+
+  it('NG while selecting extends the selection to that line', () => {
+    const { controller, target } = makeController()
+    target.setViewport(90, { cursorY: 5 })
+    controller.enterNormalMode()
+    controller.startSelection()
+
+    controller.scrollToBufferLine(80)
+
+    expect(target.selection).toEqual({ start: 79, end: 95 })
+  })
+})
+
+describe('createTerminalSurfaceActions', () => {
+  it('maps the generic list.* contract onto the Normal-mode controller', () => {
+    const { controller, target } = makeController()
+    const actions = createTerminalSurfaceActions(controller)
+
+    actions.move?.('down', 3)
+    actions.move?.('up', 2)
+    actions.move?.('left', 5)
+    actions.scrollViewport?.('down', 4)
+    actions.scrollViewport?.('up', 1)
+    actions.page?.('down', 1)
+    actions.page?.('up', 2)
+    expect(target.scrollLinesCalls).toEqual([3, -2, 4, -1, 5, -10])
+
+    actions.first?.(0)
+    actions.last?.(0)
+    expect(target.scrollToLineCalls).toEqual([0, 90])
+  })
+
+  it('treats a count on gg / G as the 1-based buffer line', () => {
+    const { controller, target } = makeController()
+    const actions = createTerminalSurfaceActions(controller)
+
+    actions.first?.(1)
+    actions.last?.(1)
+    actions.last?.(50)
+
+    expect(target.scrollToLineCalls).toEqual([0, 0, 44])
+  })
+
+  it('escape leaves Normal mode, or just clears a selection first', () => {
+    const { controller, vim } = makeController()
+    const actions = createTerminalSurfaceActions(controller)
+    controller.enterNormalMode()
+    controller.startSelection()
+
+    actions.escape?.(1)
+    expect(vim.modes.get('terminal:t1')).toBe('terminal-normal')
+    actions.escape?.(1)
+    expect(vim.modes.get('terminal:t1')).toBe('insert')
   })
 })

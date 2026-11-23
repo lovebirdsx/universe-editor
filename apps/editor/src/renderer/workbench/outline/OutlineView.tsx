@@ -399,6 +399,12 @@ export function OutlineView() {
     if (findActive) findInputRef.current?.focus()
   }, [findActive])
 
+  // Vim `/` on the tree: same box that type-to-filter opens, without seeding a character.
+  const openFind = useCallback(() => {
+    setFindActive(true)
+    findInputRef.current?.focus()
+  }, [])
+
   const closeFind = useCallback(() => {
     setFindActive(false)
     setFilterText('')
@@ -452,6 +458,7 @@ export function OutlineView() {
           rootRef={containerRef}
           scrollStateKey="outline"
           vimSurfaceId="outline"
+          onVimFind={openFind}
           className={styles['view'] ?? ''}
           ariaLabel={localize('outline.label', 'Outline')}
           renderRow={(ctx) => {

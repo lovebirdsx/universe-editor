@@ -4,7 +4,9 @@
  *  that folds keystrokes into navigation commands, supporting a numeric count
  *  prefix (`3j`) and the two-char `gg` chord. Pure — no DOM, no scrolling — so
  *  the parsing rules are unit-testable in isolation; the hook applies the
- *  resulting command to the live scroll container.
+ *  resulting command to the live scroll container. The same commands are what the
+ *  `reader` Vim surface's actions produce (`useMarkdownKeyboardNav`), so the
+ *  keyboard path and the Vim path cannot drift.
  *--------------------------------------------------------------------------------------------*/
 
 export type NavCommand =
@@ -12,8 +14,16 @@ export type NavCommand =
   | { readonly type: 'scrollHoriz'; readonly dir: 1 | -1; readonly count: number }
   | { readonly type: 'scrollHalfPage'; readonly dir: 1 | -1; readonly count: number }
   | { readonly type: 'scrollFullPage'; readonly dir: 1 | -1 }
+  /** Ctrl+E / Ctrl+Y: nudge the viewport by a single text line (Vim's scroll-by-line). */
+  | { readonly type: 'scrollViewport'; readonly dir: 1 | -1; readonly count: number }
   | { readonly type: 'scrollToTop' }
   | { readonly type: 'scrollToBottom' }
+  /** `NG` / `Ngg`: scroll to markdown source line N; `edge` is the fallback without line info. */
+  | {
+      readonly type: 'scrollToLine'
+      readonly line: number
+      readonly edge: 'first' | 'last'
+    }
   | { readonly type: 'goBack' }
   | { readonly type: 'goForward' }
 
@@ -59,7 +69,11 @@ export function reduceNavKey(state: NavKeyState, key: string, shift: boolean): N
   // Second `g` of the `gg` chord → scroll to top.
   if (state.pendingG) {
     if (key === 'g') {
-      return { command: { type: 'scrollToTop' }, state: INITIAL_NAV_STATE, handled: true }
+      return done(
+        state.count > 0
+          ? { type: 'scrollToLine', line: state.count, edge: 'first' }
+          : { type: 'scrollToTop' },
+      )
     }
     // Any other key aborts the pending chord; fall through to re-interpret it
     // with a clean state so e.g. `gj` still scrolls down.
@@ -82,7 +96,11 @@ export function reduceNavKey(state: NavKeyState, key: string, shift: boolean): N
     case ' ':
       return done({ type: 'scrollFullPage', dir: shift ? -1 : 1 })
     case 'G':
-      return done({ type: 'scrollToBottom' })
+      return done(
+        state.count > 0
+          ? { type: 'scrollToLine', line: state.count, edge: 'last' }
+          : { type: 'scrollToBottom' },
+      )
     case 'H':
       return done({ type: 'goBack' })
     case 'L':

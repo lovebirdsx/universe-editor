@@ -34,7 +34,10 @@ import {
   useOwnerDocument,
   useScrollRestore,
   type VirtualListHandle,
+  useVimSurfaceKeymap,
+  vimSurfaceKeyFor,
 } from '@universe-editor/workbench-ui'
+import { SETTINGS_SURFACE_KEYMAP } from '../../services/vim/vimSurfaceKeymaps.js'
 import { useOptionalService, useService } from '../useService.js'
 import {
   SETTINGS_EDITOR_FOCUS_LIST_EVENT,
@@ -289,6 +292,7 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
     [navigable],
   )
 
+  useVimSurfaceKeymap(vimSurfaceKeyFor('list', 'settings'), SETTINGS_SURFACE_KEYMAP)
   const listNav = useFlatListNavigation({
     count: navigable.length,
     focusedIndex: focusedRowIndex,

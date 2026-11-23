@@ -7,72 +7,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import {
-  ContextKeyService,
-  IContextKeyService,
   ILayoutService,
-  IViewDescriptorService,
   IViewsService,
   InstantiationService,
-  NullLogger,
-  ServiceCollection,
-  ViewContainerLocation,
-  ViewContainerRegistry,
-  ViewRegistry,
   observableValue,
-  type ILoggerService,
-  type IStorageService,
-  type IWorkspaceService,
 } from '@universe-editor/platform'
 import {
   __resetVimSurfacesForTests,
   getActiveVimSurface,
   type IVimSurfaceActions,
 } from '@universe-editor/workbench-ui'
-import { ViewDescriptorService } from '../../../services/views/ViewDescriptorService.js'
+import {
+  makeVimTestServices,
+  registerTestContainers,
+  type VimTestServices,
+} from '../../../__tests__/_helpers/vimTestHarness.js'
 import { IActivityService } from '../../../services/activity/ActivityService.js'
 import { ServicesContext } from '../../useService.js'
 import { ActivityBar } from '../ActivityBar.js'
 
-function makeStorage(): IStorageService {
-  return {
-    _serviceBrand: undefined,
-    get: vi.fn().mockResolvedValue(undefined),
-    set: vi.fn().mockResolvedValue(undefined),
-    remove: vi.fn().mockResolvedValue(undefined),
-    onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
-  } as unknown as IStorageService
-}
-
-const disposables: Array<{ dispose(): void }> = []
-
-let idSeq = 0
+// Created per test in beforeEach (and disposed in afterEach), never at module scope.
+let harness: VimTestServices
 
 function registerContainers(count: number): string[] {
-  const prefix = `vim.activity.${idSeq++}`
-  const ids: string[] = []
-  for (let i = 0; i < count; i++) {
-    const id = `${prefix}.${i}`
-    ids.push(id)
-    disposables.push(
-      ViewContainerRegistry.registerViewContainer({
-        id,
-        label: `Container ${i}`,
-        icon: i === 0 ? 'files' : 'search',
-        order: i,
-        location: ViewContainerLocation.SideBar,
-      }),
-    )
-    disposables.push(
-      ViewRegistry.registerView({
-        id: `${id}.main`,
-        name: `View ${i}`,
-        containerId: id,
-        componentKey: `${id}.main`,
-        order: 1,
-      }),
-    )
-  }
-  return ids
+  return registerTestContainers(harness, count, {
+    idPrefix: 'vim.activity',
+    icon: (i) => (i === 0 ? 'files' : 'search'),
+  })
 }
 
 function setup() {
@@ -80,22 +41,12 @@ function setup() {
   const closeViewContainer = vi.fn()
   const focusView = vi.fn(() => Promise.resolve(true))
   const setVisible = vi.fn()
-  const contextKeyService = new ContextKeyService()
-  disposables.push(contextKeyService)
-  const viewDescriptorService = new ViewDescriptorService(
-    makeStorage(),
-    { current: {} } as unknown as IWorkspaceService,
-    contextKeyService,
-    { createLogger: () => new NullLogger() } as unknown as ILoggerService,
-  )
+  const { services } = harness
 
   const activeContainerByLocation = observableValue<Readonly<Record<number, string | undefined>>>(
     'vim.activity.active',
     {},
   )
-  const services = new ServiceCollection()
-  services.set(IContextKeyService, contextKeyService)
-  services.set(IViewDescriptorService, viewDescriptorService)
   services.set(IViewsService, {
     _serviceBrand: undefined,
     openViewContainer,
@@ -137,12 +88,13 @@ function surfaceActions(): IVimSurfaceActions {
 
 describe('ActivityBar vim surface', () => {
   beforeEach(() => {
+    harness = makeVimTestServices()
     __resetVimSurfacesForTests()
   })
   afterEach(() => {
     cleanup()
     __resetVimSurfacesForTests()
-    while (disposables.length > 0) disposables.pop()?.dispose()
+    harness.dispose()
   })
 
   it('uses a roving tabindex on the items', () => {
@@ -179,9 +131,27 @@ describe('ActivityBar vim surface', () => {
     registerContainers(3)
     setup()
     item(1).focus()
-    act(() => surfaceActions().first?.(1))
+    act(() => surfaceActions().first?.(0))
     expect(document.activeElement).toBe(item(0))
+    act(() => surfaceActions().last?.(0))
+    expect(document.activeElement).toBe(item(2))
+  })
+
+  it('1G goes to the first container (a typed count is the 1-based target)', () => {
+    registerContainers(3)
+    setup()
+    item(2).focus()
     act(() => surfaceActions().last?.(1))
+    expect(document.activeElement).toBe(item(0))
+  })
+
+  it('treats a count on gg / G as the 1-based target container', () => {
+    registerContainers(3)
+    setup()
+    item(0).focus()
+    act(() => surfaceActions().last?.(2))
+    expect(document.activeElement).toBe(item(1))
+    act(() => surfaceActions().first?.(3))
     expect(document.activeElement).toBe(item(2))
   })
 })

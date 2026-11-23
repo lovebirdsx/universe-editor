@@ -66,7 +66,10 @@ import {
   createKeyboardContextMenuEvent,
   isKeyboardContextMenu,
   Spinner,
+  useVimSurfaceKeymap,
+  vimSurfaceKeyFor,
 } from '@universe-editor/workbench-ui'
+import { PERFORCE_GRAPH_SURFACE_KEYMAP } from '../../services/vim/vimSurfaceKeymaps.js'
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import { useEditorGroup } from '../editor/EditorGroupContext.js'
 import { IScmService, scmProviderPathKey } from '../../services/extensions/ScmService.js'
@@ -1641,6 +1644,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     // storage and grow the per-repo key map without bound for every path viewed.
     persist: scope === undefined,
   })
+  useVimSurfaceKeymap(vimSurfaceKeyFor('list', 'perforce-graph'), PERFORCE_GRAPH_SURFACE_KEYMAP)
   const onRowsKeyDown = useGraphKeyboardNav({
     rows: rowKeys,
     selectionRef,

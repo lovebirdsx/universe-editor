@@ -84,9 +84,17 @@ describe('reduceNavKey', () => {
     expect(run(['1', '0', 'j']).commands).toEqual([{ type: 'scrollLine', dir: 1, count: 10 }])
   })
 
-  it('carries the count through the gg chord', () => {
-    // gg ignores count (scroll to absolute top); just verify it still resolves.
-    expect(run(['5', 'g', 'g']).commands).toEqual([{ type: 'scrollToTop' }])
+  it('carries the count through the gg chord as a source line', () => {
+    expect(run(['5', 'g', 'g']).commands).toEqual([
+      { type: 'scrollToLine', line: 5, edge: 'first' },
+    ])
+  })
+
+  it('treats NG as source line N and a bare G as the bottom', () => {
+    expect(run(['1', '2', 'G']).commands).toEqual([
+      { type: 'scrollToLine', line: 12, edge: 'last' },
+    ])
+    expect(run(['G']).commands).toEqual([{ type: 'scrollToBottom' }])
   })
 
   it('resets the count after a command completes', () => {

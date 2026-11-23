@@ -1,10 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  Terminal Normal Mode commands. The dispatcher's default Vim keymap names
- *  these ids; handlers forward to the live TerminalNormalModeController of the
- *  terminal that owns DOM focus. Registered in Wave 0's action loop, so adding
- *  a class to TERMINAL_NORMAL_ACTIONS is enough.
+ *  Terminal Normal Mode commands that have no generic counterpart: the mode
+ *  switches, full-page scroll, and the linewise selection. Plain motion (j/k,
+ *  Ctrl+D/U/E/Y, gg/G) goes through the `list.*` commands and the terminal
+ *  surface's `actions` (see `createTerminalSurfaceActions`). Handlers forward to
+ *  the controller of the terminal that owns DOM focus; adding a class to
+ *  TERMINAL_NORMAL_ACTIONS is enough to register it.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -65,52 +67,6 @@ export class TerminalExitNormalModeAction extends Action2 {
   }
 }
 
-export class TerminalNormalScrollLineUpAction extends Action2 {
-  static readonly ID = 'workbench.action.terminal.normalScrollLineUp'
-  constructor() {
-    super(options(TerminalNormalScrollLineUpAction.ID, 'Terminal Normal: Scroll Line Up'))
-  }
-
-  override run(_accessor: ServicesAccessor, arg?: unknown): void {
-    focused()?.scrollLines(-1, readCount(arg))
-  }
-}
-
-export class TerminalNormalScrollLineDownAction extends Action2 {
-  static readonly ID = 'workbench.action.terminal.normalScrollLineDown'
-  constructor() {
-    super(options(TerminalNormalScrollLineDownAction.ID, 'Terminal Normal: Scroll Line Down'))
-  }
-
-  override run(_accessor: ServicesAccessor, arg?: unknown): void {
-    focused()?.scrollLines(1, readCount(arg))
-  }
-}
-
-export class TerminalNormalScrollHalfPageUpAction extends Action2 {
-  static readonly ID = 'workbench.action.terminal.normalScrollHalfPageUp'
-  constructor() {
-    super(options(TerminalNormalScrollHalfPageUpAction.ID, 'Terminal Normal: Scroll Half Page Up'))
-  }
-
-  override run(_accessor: ServicesAccessor, arg?: unknown): void {
-    focused()?.scrollHalfPage('up', readCount(arg))
-  }
-}
-
-export class TerminalNormalScrollHalfPageDownAction extends Action2 {
-  static readonly ID = 'workbench.action.terminal.normalScrollHalfPageDown'
-  constructor() {
-    super(
-      options(TerminalNormalScrollHalfPageDownAction.ID, 'Terminal Normal: Scroll Half Page Down'),
-    )
-  }
-
-  override run(_accessor: ServicesAccessor, arg?: unknown): void {
-    focused()?.scrollHalfPage('down', readCount(arg))
-  }
-}
-
 export class TerminalNormalScrollPageUpAction extends Action2 {
   static readonly ID = 'workbench.action.terminal.normalScrollPageUp'
   constructor() {
@@ -130,28 +86,6 @@ export class TerminalNormalScrollPageDownAction extends Action2 {
 
   override run(_accessor: ServicesAccessor, arg?: unknown): void {
     focused()?.scrollPage('down', readCount(arg))
-  }
-}
-
-export class TerminalNormalScrollToTopAction extends Action2 {
-  static readonly ID = 'workbench.action.terminal.normalScrollToTop'
-  constructor() {
-    super(options(TerminalNormalScrollToTopAction.ID, 'Terminal Normal: Scroll to Top'))
-  }
-
-  override run(_accessor: ServicesAccessor): void {
-    focused()?.scrollToTop()
-  }
-}
-
-export class TerminalNormalScrollToBottomAction extends Action2 {
-  static readonly ID = 'workbench.action.terminal.normalScrollToBottom'
-  constructor() {
-    super(options(TerminalNormalScrollToBottomAction.ID, 'Terminal Normal: Scroll to Bottom'))
-  }
-
-  override run(_accessor: ServicesAccessor): void {
-    focused()?.scrollToBottom()
   }
 }
 
@@ -185,14 +119,8 @@ export class TerminalNormalCopySelectionAction extends Action2 {
 export const TERMINAL_NORMAL_ACTIONS = [
   TerminalEnterNormalModeAction,
   TerminalExitNormalModeAction,
-  TerminalNormalScrollLineUpAction,
-  TerminalNormalScrollLineDownAction,
-  TerminalNormalScrollHalfPageUpAction,
-  TerminalNormalScrollHalfPageDownAction,
   TerminalNormalScrollPageUpAction,
   TerminalNormalScrollPageDownAction,
-  TerminalNormalScrollToTopAction,
-  TerminalNormalScrollToBottomAction,
   TerminalNormalStartSelectionAction,
   TerminalNormalCopySelectionAction,
 ] as const

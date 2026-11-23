@@ -95,9 +95,12 @@ describe('useGraphKeyboardNav as a Vim list surface', () => {
     act(() => actions.move?.('up', 1))
     expect(selected()).toBe('c')
 
-    act(() => actions.last?.(1))
+    act(() => actions.last?.(0))
     expect(selected()).toBe('e')
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
+    expect(selected()).toBe('a')
+    act(() => actions.last?.(0))
+    act(() => actions.last?.(1))
     expect(selected()).toBe('a')
 
     // happy-dom reports a zero-height viewport, so a page is one row.
@@ -105,11 +108,23 @@ describe('useGraphKeyboardNav as a Vim list surface', () => {
     expect(selected()).toBe('b')
   })
 
+  it('treats a count on gg / G as the 1-based target row', () => {
+    render(<Harness onSelect={() => {}} openMenu={() => {}} openCommitChanges={() => {}} />)
+    act(() => screen.getByTestId('graph').focus())
+    const actions = surfaceActions()
+    act(() => actions.first?.(4))
+    expect(selected()).toBe('d')
+    act(() => actions.last?.(2))
+    expect(selected()).toBe('b')
+    act(() => actions.last?.(99))
+    expect(selected()).toBe('e')
+  })
+
   it('scrolls the viewport without changing the selection', () => {
     render(<Harness onSelect={() => {}} openMenu={() => {}} openCommitChanges={() => {}} />)
     act(() => screen.getByTestId('graph').focus())
     const actions = surfaceActions()
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
 
     const graph = screen.getByTestId('graph')
     graph.scrollTop = 100
@@ -128,7 +143,7 @@ describe('useGraphKeyboardNav as a Vim list surface', () => {
     act(() => screen.getByTestId('graph').focus())
 
     const actions = surfaceActions()
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
     act(() => actions.activate?.(1, false))
     expect(openCommitChanges).toHaveBeenCalledTimes(1)
     expect(onSelect).toHaveBeenLastCalledWith('a')

@@ -6,17 +6,26 @@
  *  The terminal has no text cursor to move, so Normal mode is a viewport/selection
  *  layer: j/k scroll lines, Ctrl+D/U half pages, Ctrl+F/B pages, gg/G jump, and
  *  `v` starts a linewise selection that j/k extends. The dispatcher routes keys
- *  through the default Vim keymap — including Ctrl+F/B paging and `a`/`q` to
- *  leave Normal — so this class owns no DOM event and no command registry; it
- *  only implements the operations those commands call.
+ *  through the Vim keymap, so this class owns no DOM event and no command
+ *  registry. Motion reaches it through the generic `list.*` commands via
+ *  {@link createTerminalSurfaceActions}; only Ctrl+F/B paging, selection and the
+ *  mode switches are terminal-specific commands.
  *
- *  Pure apart from the injected terminal target, so the entire state machine is
- *  unit-testable with a fake buffer.
+ *  Input method: English is held while this terminal is in Normal mode AND has
+ *  focus, through the window-wide owner API in `editor/vim/vimInputMethod.ts`
+ *  (owner = this controller instance, so only the terminal that took English can give it back).
+ *  The host reports focus changes via `handleFocusIn/Out`; `dispose()` is a
+ *  detach (reparent / unmount) — it releases the input method but leaves the
+ *  remembered mode alone, since the xterm holder and the mode outlive the view.
+ *
+ *  Pure apart from the injected terminal target and the input-method module, so
+ *  the entire state machine is unit-testable with a fake buffer.
  *--------------------------------------------------------------------------------------------*/
 
-import type { VimSurfaceMode } from '@universe-editor/workbench-ui'
+import type { IVimSurfaceActions, VimSurfaceMode } from '@universe-editor/workbench-ui'
 import type { IVimModeService } from '../../../services/vim/vimModeService.js'
 import type { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
+import { releaseInputMethod, requestInputMethod } from '../../editor/vim/vimInputMethod.js'
 
 export interface TerminalNormalModeBufferState {
   /** Cursor row relative to the bottom page (0 = `baseY`). */
@@ -59,9 +68,7 @@ export interface TerminalNormalModeOptions {
     IVimModeService,
     'getEnabled' | 'getMode' | 'setMode' | 'isSurfaceEnabled'
   >
-  readonly inputMethodService?:
-    | Pick<IVimInputMethodService, 'switchToEnglish' | 'restore'>
-    | undefined
+  readonly inputMethodService?: IVimInputMethodService | undefined
   /** Reads `vim.autoSwitchInputMethod`; defaults to enabled when omitted. */
   readonly autoSwitchInputMethod?: (() => boolean) | undefined
   readonly copySelection: TerminalNormalModeCopy
@@ -74,13 +81,48 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
+/**
+ * The terminal's side of the generic Vim surface contract: `list.focusDown`,
+ * `list.pageDown`, `list.scrollViewportDown` ... land here, so the keymap reuses
+ * the list command ids instead of a parallel `normalScroll*` family.
+ */
+export function createTerminalSurfaceActions(
+  controller: Pick<
+    TerminalNormalModeController,
+    | 'scrollLines'
+    | 'scrollHalfPage'
+    | 'scrollToTop'
+    | 'scrollToBottom'
+    | 'scrollToBufferLine'
+    | 'exitNormalMode'
+  >,
+): IVimSurfaceActions {
+  return {
+    move: (direction, count) => {
+      if (direction === 'down') controller.scrollLines(1, count)
+      else if (direction === 'up') controller.scrollLines(-1, count)
+    },
+    scrollViewport: (direction, count) =>
+      controller.scrollLines(direction === 'down' ? 1 : -1, count),
+    page: (direction, count) => controller.scrollHalfPage(direction, count),
+    // count 0 = none typed (`gg` / `G`); n >= 1 = buffer line n, like Vim's `nG`.
+    first: (count) =>
+      count >= 1 ? controller.scrollToBufferLine(count) : controller.scrollToTop(),
+    last: (count) =>
+      count >= 1 ? controller.scrollToBufferLine(count) : controller.scrollToBottom(),
+    escape: () => {
+      controller.exitNormalMode()
+    },
+  }
+}
+
 export class TerminalNormalModeController {
   private readonly _options: TerminalNormalModeOptions
   private _selecting = false
   private _anchorLine = 0
   private _endLine = 0
-  private _inputMethodSwitched = false
-  private _inputMethodChain: Promise<void> = Promise.resolve()
+  /** DOM focus is inside this terminal; English is only held while it is. */
+  private _focused = false
 
   constructor(options: TerminalNormalModeOptions) {
     this._options = options
@@ -108,12 +150,16 @@ export class TerminalNormalModeController {
     const vim = this._options.vimModeService
     if (!vim.getEnabled() || !vim.isSurfaceEnabled('terminal')) return false
     if (this.isNormalMode()) {
+      this._focused = true
+      this.syncInputMethod()
       this._options.target.focus()
       return true
     }
     this._cancelSelectionState()
     vim.setMode(this._options.surfaceKey, NORMAL_MODE)
-    this._switchInputMethodToEnglish()
+    // Entering is only ever requested from the focused terminal (and focuses it).
+    this._focused = true
+    this.syncInputMethod()
     this._options.target.focus()
     return true
   }
@@ -131,9 +177,21 @@ export class TerminalNormalModeController {
     }
     this._cancelSelectionState()
     this._options.vimModeService.setMode(this._options.surfaceKey, INSERT_MODE)
-    this._restoreInputMethod()
+    this.syncInputMethod()
     this._options.target.focus()
     return true
+  }
+
+  /** DOM focus entered the terminal (also: the window regained focus). */
+  handleFocusIn(): void {
+    this._focused = true
+    this.syncInputMethod()
+  }
+
+  /** DOM focus left the terminal (also: the window lost focus, e.g. Alt+Tab). */
+  handleFocusOut(): void {
+    this._focused = false
+    this.syncInputMethod()
   }
 
   /** Drop a linewise selection without leaving Normal mode. */
@@ -177,6 +235,21 @@ export class TerminalNormalModeController {
   }
 
   /**
+   * `NG`: jump to buffer line `line` (1-based, clamped). With no text cursor to
+   * land on, the line is centred in the viewport like Vim does for a far jump;
+   * while selecting it extends the selection to that line instead.
+   */
+  scrollToBufferLine(line: number): void {
+    const index = clamp(Math.floor(line) - 1, 0, this._lastLine())
+    if (this._selecting) {
+      this.extendSelectionTo(index)
+      return
+    }
+    const target = this._options.target
+    target.scrollToLine(Math.max(0, index - Math.floor(target.rows / 2)))
+  }
+
+  /**
    * Start a linewise selection at the cursor line when it is visible, otherwise
    * at the last visible line (the user is scrolled up in history and the shell
    * cursor is below the viewport).
@@ -211,12 +284,15 @@ export class TerminalNormalModeController {
     return true
   }
 
+  /**
+   * Detach from the view. The remembered mode is kept on purpose: the view is
+   * recreated when the terminal moves between panel and editor area, and the
+   * mode is only dropped (`forgetSurface`) when the terminal itself is removed.
+   */
   dispose(): void {
     this._cancelSelectionState()
-    if (this.isNormalMode()) {
-      this._options.vimModeService.setMode(this._options.surfaceKey, INSERT_MODE)
-    }
-    this._restoreInputMethod()
+    this._focused = false
+    this.syncInputMethod()
   }
 
   private _lastLine(): number {
@@ -261,30 +337,13 @@ export class TerminalNormalModeController {
     this._endLine = 0
   }
 
-  private _switchInputMethodToEnglish(): void {
+  /** Re-derive the input method from mode + focus + config; idempotent. */
+  syncInputMethod(): void {
     const service = this._options.inputMethodService
     if (service === undefined) return
-    if (this._options.autoSwitchInputMethod?.() === false) return
-    if (this._inputMethodSwitched) return
-    this._inputMethodSwitched = true
-    // Serialize with restore: a fast i → Ctrl+Shift+\ pair must not reorder.
-    this._inputMethodChain = this._inputMethodChain
-      .then(async () => {
-        if (!(await service.switchToEnglish()) && this._inputMethodSwitched) {
-          this._inputMethodSwitched = false
-        }
-      })
-      .catch(() => {
-        this._inputMethodSwitched = false
-      })
-  }
-
-  private _restoreInputMethod(): void {
-    const service = this._options.inputMethodService
-    if (service === undefined || !this._inputMethodSwitched) return
-    this._inputMethodSwitched = false
-    this._inputMethodChain = this._inputMethodChain
-      .then(() => service.restore())
-      .catch(() => undefined)
+    const english =
+      this._focused && this.isNormalMode() && this._options.autoSwitchInputMethod?.() !== false
+    if (english) requestInputMethod(this, service, 'english')
+    else releaseInputMethod(this, service)
   }
 }
