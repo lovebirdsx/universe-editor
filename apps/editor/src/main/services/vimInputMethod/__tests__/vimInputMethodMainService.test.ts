@@ -74,14 +74,62 @@ describe('VimInputMethodMainService', () => {
     expect(post).not.toHaveBeenCalled()
   })
 
-  it('is idempotent while a switch is already saved', async () => {
+  it('is idempotent while a switch is already saved and English is really active', async () => {
     const post = vi.fn(() => 1)
-    const api = createApi({ PostMessageW: post })
+    let layout = ZH_CN_HKL
+    const api = createApi({ PostMessageW: post, GetKeyboardLayout: () => layout })
+    const service = new VimInputMethodMainService(createLogger(), async () => api)
+
+    await service.switchToEnglish()
+    layout = EN_US_HKL
+    await expect(service.switchToEnglish()).resolves.toBe(true)
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-asserts English when the user switched back by hand, keeping the original layout to restore', async () => {
+    const posts: number[][] = []
+    // The layout never becomes en-US: the user flipped back to Chinese after the first switch.
+    const api = createApi({
+      PostMessageW: (...args: number[]) => {
+        posts.push(args)
+        return 1
+      },
+    })
     const service = new VimInputMethodMainService(createLogger(), async () => api)
 
     await service.switchToEnglish()
     await expect(service.switchToEnglish()).resolves.toBe(true)
-    expect(post).toHaveBeenCalledTimes(1)
+    expect(posts).toEqual([
+      [HWND, 0x0050, 0, EN_US_HKL],
+      [HWND, 0x0050, 0, EN_US_HKL],
+    ])
+
+    await service.restore()
+    expect(posts[2]).toEqual([HWND, 0x0050, 0, ZH_CN_HKL])
+  })
+
+  it('re-asserts English in conversion mode when the IME was flipped back to native', async () => {
+    let conversion = 0x0001
+    const setStatus = vi.fn((_himc: number, value: number) => {
+      conversion = value
+      return 1
+    })
+    const api = createApi({
+      LoadKeyboardLayoutW: () => 0,
+      ImmGetContext: () => 0x200,
+      ImmGetConversionStatus: (_himc, out) => {
+        out[0] = conversion
+        return 1
+      },
+      ImmSetConversionStatus: setStatus,
+    })
+    const service = new VimInputMethodMainService(createLogger(), async () => api)
+
+    await service.switchToEnglish()
+    conversion = 0x0001
+    await expect(service.switchToEnglish()).resolves.toBe(true)
+    expect(setStatus).toHaveBeenCalledTimes(2)
+    expect(conversion).toBe(0)
   })
 
   it('falls back to the IME conversion mode when no en-US layout is installed', async () => {
@@ -151,5 +199,96 @@ describe('VimInputMethodMainService', () => {
     const service = new VimInputMethodMainService(createLogger(), async () => api)
 
     await expect(service.switchToEnglish()).resolves.toBe(false)
+  })
+
+  it('keeps the saved layout when the restore request fails so a retry still works', async () => {
+    let failRestore = false
+    const posts: number[][] = []
+    const api = createApi({
+      PostMessageW: (...args: number[]) => {
+        posts.push(args)
+        return failRestore ? 0 : 1
+      },
+    })
+    const service = new VimInputMethodMainService(createLogger(), async () => api)
+
+    await service.switchToEnglish()
+    failRestore = true
+    await service.restore()
+    failRestore = false
+    await service.restore()
+
+    expect(posts.slice(1)).toEqual([
+      [HWND, 0x0050, 0, ZH_CN_HKL],
+      [HWND, 0x0050, 0, ZH_CN_HKL],
+    ])
+    // Restored for real this time: the next restore has nothing to do.
+    await service.restore()
+    expect(posts).toHaveLength(3)
+  })
+
+  it('keeps the saved layout when restore throws', async () => {
+    let throwOnRestore = false
+    const post = vi.fn(() => {
+      if (throwOnRestore) throw new Error('boom')
+      return 1
+    })
+    const service = new VimInputMethodMainService(createLogger(), async () =>
+      createApi({ PostMessageW: post }),
+    )
+
+    await service.switchToEnglish()
+    throwOnRestore = true
+    await service.restore()
+    throwOnRestore = false
+    await service.restore()
+
+    expect(post).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps the saved IME state when the conversion restore fails', async () => {
+    let conversion = 0x0001
+    let failSet = false
+    const setStatus = vi.fn((_himc: number, value: number) => {
+      if (failSet) return 0
+      conversion = value
+      return 1
+    })
+    const api = createApi({
+      LoadKeyboardLayoutW: () => 0,
+      ImmGetContext: () => 0x200,
+      ImmGetConversionStatus: (_himc, out) => {
+        out[0] = conversion
+        return 1
+      },
+      ImmSetConversionStatus: setStatus,
+    })
+    const service = new VimInputMethodMainService(createLogger(), async () => api)
+
+    await service.switchToEnglish()
+    failSet = true
+    await service.restore()
+    failSet = false
+    await service.restore()
+
+    expect(conversion).toBe(0x0001)
+  })
+
+  it('reports an IME that is already in English mode without saving anything', async () => {
+    const setStatus = vi.fn(() => 1)
+    const api = createApi({
+      LoadKeyboardLayoutW: () => 0,
+      ImmGetContext: () => 0x200,
+      ImmGetConversionStatus: (_himc, out) => {
+        out[0] = 0
+        return 1
+      },
+      ImmSetConversionStatus: setStatus,
+    })
+    const service = new VimInputMethodMainService(createLogger(), async () => api)
+
+    await expect(service.switchToEnglish()).resolves.toBe(true)
+    await service.restore()
+    expect(setStatus).not.toHaveBeenCalled()
   })
 })

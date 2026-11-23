@@ -17,7 +17,6 @@ import type { IDisposable, IEditorInput } from '@universe-editor/platform'
 import {
   cancelOwnerFrame,
   isKeyupContextMenuSupplement,
-  registerVimSurface,
   requestOwnerFrame,
   type OwnerFrame,
 } from '@universe-editor/workbench-ui'
@@ -35,7 +34,7 @@ import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { createWorkbenchEditor } from './monaco/workbenchEditorFactory.js'
-import { createVimEditorController } from './vim/vimEditorController.js'
+import { attachVim } from './vim/attachVim.js'
 import { editorVimSurfaceKey } from './vim/vimSurfaceKeys.js'
 import { IVimInputMethodService } from '../../../shared/ipc/vimInputMethodService.js'
 import { IVimModeService } from '../../services/vim/vimModeService.js'
@@ -340,7 +339,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // installs the window-capture listener that routes strokes here ahead of the
     // global dispatcher. It is disposed before the editor so its focus/config
     // subscriptions never observe a half-disposed instance.
-    const vimController = createVimEditorController({
+    const vim = attachVim({
       editor: ed,
       surfaceKey: currentSurfaceKey,
       configService,
@@ -349,17 +348,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       inputMethodService: vimInputMethodService,
       executeCommand: (id, args) => commandService.executeCommand(id, args),
       getLineHeight: () => ed.getOption(MonacoLoader.get().editor.EditorOption.lineHeight),
-    })
-    const vimRegistration = registerVimSurface({
-      get id() {
-        return currentSurfaceKey()
-      },
-      kind: 'editor',
-      getElement: () => ed.getContainerDomNode(),
-      focus: 'within',
-      getSurfaceKey: currentSurfaceKey,
-      defaultMode: 'normal',
-      actions: { handleStroke: (event) => vimController.handleKeyDown(event) },
+      isReadOnly: () => ed.getOption(MonacoLoader.get().editor.EditorOption.readOnly) === true,
     })
     editorRef.current = ed
     return () => {
@@ -367,8 +356,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       dropContainer.removeEventListener('contextmenu', onContextMenu)
       contextMenuKeySub.dispose()
       hoverGuard.dispose()
-      vimRegistration.dispose()
-      vimController.dispose()
+      vim.dispose()
       // A closed group leaves the service before React unmounts it, and its
       // closeAll event carries no editor: drop every key this editor saw. A swap
       // to a non-file editor keeps the group, whose memories must survive.

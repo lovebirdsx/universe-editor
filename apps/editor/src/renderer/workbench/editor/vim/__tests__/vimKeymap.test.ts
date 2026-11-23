@@ -3,7 +3,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { isVimViewportStroke, reduceVimKey } from '../vimKeymap.js'
+import {
+  idle,
+  isAwaitingCharArg,
+  isVimViewportStroke,
+  PREFIX_TABLES,
+  reduceVimKey,
+} from '../vimKeymap.js'
 import { INITIAL_VIM_STATE, type VimKeyInput, type VimState } from '../vimTypes.js'
 
 function press(state: VimState, key: string, modifiers: Partial<Omit<VimKeyInput, 'key'>> = {}) {
@@ -13,7 +19,6 @@ function press(state: VimState, key: string, modifiers: Partial<Omit<VimKeyInput
     alt: false,
     meta: false,
     shift: false,
-    repeat: false,
     ...modifiers,
   })
 }
@@ -97,7 +102,7 @@ describe('reduceVimKey', () => {
 
   it('resolves gg and G', () => {
     const firstG = press(INITIAL_VIM_STATE, 'g')
-    expect(firstG.state.pendingG).toBe(true)
+    expect(firstG.state.pending).toEqual({ kind: 'g' })
     expect(press(firstG.state, 'g').command).toEqual({ type: 'motion', motion: 'gg', count: 0 })
     expect(press(INITIAL_VIM_STATE, 'G').command).toEqual({ type: 'motion', motion: 'G', count: 0 })
   })
@@ -105,7 +110,7 @@ describe('reduceVimKey', () => {
   it('clears a dangling g when another key arrives', () => {
     const firstG = press(INITIAL_VIM_STATE, 'g')
     const result = press(firstG.state, 'x')
-    expect(result.state.pendingG).toBe(false)
+    expect(result.state.pending).toBeNull()
     expect(result.command).toBeNull()
     expect(result.handled).toBe(true)
   })
@@ -286,7 +291,7 @@ describe('reduceVimKey', () => {
     const escaped = press(insert, 'Escape')
     expect(escaped.state.mode).toBe('normal')
     expect(escaped.handled).toBe(true)
-    expect(escaped.command).toBeNull()
+    expect(escaped.command).toEqual({ type: 'exit-insert' })
   })
 
   it('maps Normal-mode Escape to :nohlsearch', () => {
@@ -387,10 +392,10 @@ describe('reduceVimKey', () => {
     ] as const
     for (const [key, commandId] of mappings) {
       const g = press(INITIAL_VIM_STATE, 'g')
-      expect(g.state.pendingG).toBe(true)
+      expect(g.state.pending).toEqual({ kind: 'g' })
       const result = press(g.state, key)
       expect(result.command).toEqual({ type: 'editor-command', commandId })
-      expect(result.state.pendingG).toBe(false)
+      expect(result.state.pending).toBeNull()
     }
   })
 
@@ -417,15 +422,15 @@ describe('reduceVimKey', () => {
 
   it('indents and outdents with >> and << carrying counts', () => {
     expect(press(press(INITIAL_VIM_STATE, '>').state, '>').command).toEqual({
-      type: 'indent',
-      direction: 'in',
+      type: 'linewise',
+      operator: '>',
       count: 1,
     })
     const counted = press(press(press(INITIAL_VIM_STATE, '3').state, '>').state, '>')
-    expect(counted.command).toEqual({ type: 'indent', direction: 'in', count: 3 })
+    expect(counted.command).toEqual({ type: 'linewise', operator: '>', count: 3 })
     expect(press(press(INITIAL_VIM_STATE, '<').state, '<').command).toEqual({
-      type: 'indent',
-      direction: 'out',
+      type: 'linewise',
+      operator: '<',
       count: 1,
     })
   })
@@ -435,10 +440,7 @@ describe('reduceVimKey', () => {
       type: 'editor-command',
       commandId: 'editor.action.showHover',
     })
-    expect(press(INITIAL_VIM_STATE, '%').command).toEqual({
-      type: 'editor-command',
-      commandId: 'editor.action.jumpToBracket',
-    })
+    expect(press(INITIAL_VIM_STATE, '%').command).toEqual({ type: 'motion', motion: '%', count: 0 })
     expect(press(INITIAL_VIM_STATE, '*').command).toEqual({
       type: 'search-word',
       direction: 'forward',
@@ -477,7 +479,7 @@ describe('reduceVimKey', () => {
 
   it('resolves zz / zt / zb, using a count as the target line', () => {
     const z = press(INITIAL_VIM_STATE, 'z')
-    expect(z.state.pendingZ).toBe(true)
+    expect(z.state.pending).toEqual({ kind: 'z' })
     expect(z.command).toBeNull()
     expect(press(z.state, 'z').command).toEqual({ type: 'reveal-line', at: 'center', line: null })
     expect(press(press(INITIAL_VIM_STATE, 'z').state, 't').command).toEqual({
@@ -526,12 +528,12 @@ describe('reduceVimKey', () => {
 
   it('clears a dangling z and lets function keys through', () => {
     const swallowed = press(press(INITIAL_VIM_STATE, 'z').state, 'x')
-    expect(swallowed.state.pendingZ).toBe(false)
+    expect(swallowed.state.pending).toBeNull()
     expect(swallowed.command).toBeNull()
     expect(swallowed.handled).toBe(true)
 
     const passed = press(press(INITIAL_VIM_STATE, 'z').state, 'F5')
-    expect(passed.state.pendingZ).toBe(false)
+    expect(passed.state.pending).toBeNull()
     expect(passed.handled).toBe(false)
   })
 
@@ -610,5 +612,344 @@ describe('isVimViewportStroke', () => {
     expect(isVimViewportStroke({ key: 'f', ctrlKey: false, altKey: false, metaKey: false })).toBe(
       false,
     )
+  })
+})
+
+describe('reduceVimKey: counts, Escape and prefixes', () => {
+  function run(...keys: string[]) {
+    let state: VimState = INITIAL_VIM_STATE
+    let last = press(state, keys[0]!)
+    state = last.state
+    for (const k of keys.slice(1)) {
+      last = press(state, k)
+      state = last.state
+    }
+    return last
+  }
+
+  it('multiplies the count before an operator with the count after it', () => {
+    expect(run('2', 'd', '3', 'w').command).toEqual({
+      type: 'operator',
+      operator: 'd',
+      motion: 'w',
+      count: 6,
+    })
+    expect(run('2', 'd', 'd').command).toEqual({ type: 'linewise', operator: 'd', count: 2 })
+    expect(run('2', 'd', '3', 'd').command).toEqual({ type: 'linewise', operator: 'd', count: 6 })
+    // 0 after the operator's count is the line-start motion, not a digit of it.
+    expect(run('3', 'd', '0').command).toEqual({
+      type: 'operator',
+      operator: 'd',
+      motion: '0',
+      count: 3,
+    })
+  })
+
+  it('treats > and < as operators that take motions', () => {
+    expect(run('>', 'j').command).toEqual({
+      type: 'operator',
+      operator: '>',
+      motion: 'j',
+      count: 0,
+    })
+    expect(run('<', 'G').command).toEqual({
+      type: 'operator',
+      operator: '<',
+      motion: 'G',
+      count: 0,
+    })
+    expect(run('3', '>', '>').command).toEqual({ type: 'linewise', operator: '>', count: 3 })
+  })
+
+  it('treats Ctrl+[ as Escape in both modes', () => {
+    const insert = { ...INITIAL_VIM_STATE, mode: 'insert' as const }
+    const exited = press(insert, '[', { ctrl: true })
+    expect(exited.handled).toBe(true)
+    expect(exited.state.mode).toBe('normal')
+    expect(exited.command).toEqual({ type: 'exit-insert' })
+    expect(press(INITIAL_VIM_STATE, '[', { ctrl: true }).command).toEqual({
+      type: 'search-highlight-clear',
+    })
+    // A plain [ still opens the bracket prefix.
+    expect(press(INITIAL_VIM_STATE, '[').state.pending).toEqual({ kind: '[' })
+  })
+
+  it('spends an Escape that cancels something and drops the whole pending state', () => {
+    for (const keys of [['2'], ['d'], ['g'], ['2', 'd']]) {
+      const armed = run(...keys)
+      const escaped = press(armed.state, 'Escape')
+      expect(escaped.command, keys.join('')).toBeNull()
+      expect(escaped.state, keys.join('')).toEqual(INITIAL_VIM_STATE)
+    }
+  })
+
+  it('exports idle() that clears every in-flight field but keeps the mode', () => {
+    const dirty: VimState = {
+      ...INITIAL_VIM_STATE,
+      count: 4,
+      operatorCount: 2,
+      pendingOperator: 'd',
+      pending: { kind: 'g' },
+      register: 'a',
+    }
+    expect(idle(dirty)).toEqual(INITIAL_VIM_STATE)
+    expect(idle({ ...dirty, mode: 'visual' }).mode).toBe('visual')
+  })
+
+  it('resolves every prefix through PREFIX_TABLES and rejects z after an operator', () => {
+    expect(Object.keys(PREFIX_TABLES).sort()).toEqual(['[', ']', 'g', 'z'])
+    expect(run('d', 'g', 'g').command).toEqual({
+      type: 'operator',
+      operator: 'd',
+      motion: 'gg',
+      count: 0,
+    })
+    const dz = run('d', 'z')
+    expect(dz.state).toEqual(INITIAL_VIM_STATE)
+    expect(dz.command).toBeNull()
+  })
+
+  it('uses one rule for unclaimed keys after a prefix or an operator', () => {
+    for (const prefix of [['g'], ['z'], ['d']]) {
+      const printable = run(...prefix, 'Q')
+      expect(printable.handled, prefix.join('')).toBe(true)
+      expect(printable.command, prefix.join('')).toBeNull()
+      const fkey = run(...prefix, 'F5')
+      expect(fkey.handled, prefix.join('')).toBe(false)
+      expect(fkey.state, prefix.join('')).toEqual(INITIAL_VIM_STATE)
+    }
+  })
+})
+
+describe('reduceVimKey: pending argument keys', () => {
+  function run(...keys: string[]) {
+    let state: VimState = INITIAL_VIM_STATE
+    let last = press(state, keys[0]!)
+    state = last.state
+    for (const k of keys.slice(1)) {
+      last = press(state, k)
+      state = last.state
+    }
+    return last
+  }
+
+  const EDITING_KEYS = ['Backspace', 'Delete', 'Enter', 'Tab', 'ArrowLeft', 'ArrowDown', 'Home']
+
+  it('swallows editing keys that arrive while f / t / F / T wait for a character', () => {
+    for (const lead of ['f', 'F', 't', 'T']) {
+      for (const key of ['Backspace', 'Delete', 'ArrowLeft', 'ArrowDown', 'Home', 'Enter']) {
+        const result = run(lead, key)
+        expect(result.handled, `${lead}<${key}>`).toBe(true)
+        expect(result.command, `${lead}<${key}>`).toBeNull()
+        expect(result.state, `${lead}<${key}>`).toEqual(INITIAL_VIM_STATE)
+      }
+    }
+  })
+
+  it('treats <Tab> as the tab character for f / r', () => {
+    expect(run('f', 'Tab').command).toEqual({ type: 'motion', motion: 'f', count: 0, char: '\t' })
+    expect(run('r', 'Tab').command).toEqual({ type: 'replace-char', char: '\t', count: 1 })
+  })
+
+  it('r<CR> still replaces with a line break, but other editing keys cancel the replace', () => {
+    expect(run('r', 'Enter').command).toEqual({ type: 'replace-char', char: '\n', count: 1 })
+    for (const key of ['Backspace', 'Delete', 'ArrowLeft', 'Home']) {
+      const result = run('r', key)
+      expect(result.handled, key).toBe(true)
+      expect(result.command, key).toBeNull()
+      expect(result.state, key).toEqual(INITIAL_VIM_STATE)
+    }
+  })
+
+  it('cancels a pending register name, and an operator pending behind it', () => {
+    for (const key of EDITING_KEYS) {
+      const result = run('"', key)
+      expect(result.handled, key).toBe(true)
+      expect(result.command, key).toBeNull()
+      expect(result.state, key).toEqual(INITIAL_VIM_STATE)
+    }
+  })
+
+  it('cancels operator + i / a waiting for an object key, dropping the operator too', () => {
+    for (const around of ['i', 'a']) {
+      for (const key of EDITING_KEYS) {
+        const result = run('d', around, key)
+        expect(result.handled, `d${around}<${key}>`).toBe(true)
+        expect(result.command, `d${around}<${key}>`).toBeNull()
+        expect(result.state, `d${around}<${key}>`).toEqual(INITIAL_VIM_STATE)
+      }
+    }
+  })
+
+  it('cancels Visual r<BS> without leaving Visual', () => {
+    const visual = press(INITIAL_VIM_STATE, 'v').state
+    const result = press(press(visual, 'r').state, 'Backspace')
+    expect(result.handled).toBe(true)
+    expect(result.command).toBeNull()
+    expect(result.state.mode).toBe('visual')
+    expect(result.state.pending).toBeNull()
+  })
+
+  it('cancels a dangling g / z / [ prefix instead of running the editing key', () => {
+    for (const prefix of ['g', 'z', '[', ']']) {
+      for (const key of ['Backspace', 'Delete', 'Enter', 'ArrowRight']) {
+        const result = run(prefix, key)
+        expect(result.handled, `${prefix}<${key}>`).toBe(true)
+        expect(result.command, `${prefix}<${key}>`).toBeNull()
+        expect(result.state, `${prefix}<${key}>`).toEqual(INITIAL_VIM_STATE)
+      }
+    }
+  })
+
+  it('does not turn <Del> into x while an operator waits', () => {
+    const result = run('d', 'Delete')
+    expect(result.command).toBeNull()
+    expect(result.handled).toBe(true)
+    expect(result.state).toEqual(INITIAL_VIM_STATE)
+  })
+
+  it('Esc cancels every argument-taking pending state', () => {
+    for (const keys of [['f'], ['r'], ['"'], ['d', 'i'], ['d', 'a'], ['2', 'f']]) {
+      const armed = run(...keys)
+      const result = press(armed.state, 'Escape')
+      expect(result.handled, keys.join('')).toBe(true)
+      expect(result.command, keys.join('')).toBeNull()
+      expect(result.state, keys.join('')).toEqual(INITIAL_VIM_STATE)
+    }
+  })
+
+  it('still lets function keys through an argument wait', () => {
+    for (const lead of ['f', 'r', '"']) {
+      const result = run(lead, 'F5')
+      expect(result.handled).toBe(false)
+      expect(result.state).toEqual(INITIAL_VIM_STATE)
+    }
+  })
+})
+
+describe('isAwaitingCharArg', () => {
+  const after = (...keys: string[]) =>
+    keys.reduce<VimState>((state, key) => press(state, key).state, INITIAL_VIM_STATE)
+
+  it('is true while f / t / r / " / i / a wait for their argument', () => {
+    for (const keys of [['f'], ['F'], ['t'], ['T'], ['r'], ['"'], ['d', 'i'], ['y', 'a']]) {
+      expect(isAwaitingCharArg(after(...keys)), keys.join('')).toBe(true)
+    }
+    const visual = press(INITIAL_VIM_STATE, 'v').state
+    expect(isAwaitingCharArg(press(visual, 'r').state)).toBe(true)
+    expect(isAwaitingCharArg(press(visual, 'i').state)).toBe(true)
+  })
+
+  it('is false when idle, with an operator, a count or a prefix pending', () => {
+    for (const keys of [[], ['d'], ['3'], ['g'], ['z'], ['['], ['"', 'a'], ['2', 'd', '3']]) {
+      expect(isAwaitingCharArg(after(...keys)), keys.join('')).toBe(false)
+    }
+  })
+
+  it('is false again after the argument arrives', () => {
+    expect(isAwaitingCharArg(after('r', 'x'))).toBe(false)
+    expect(isAwaitingCharArg(after('f', ' '))).toBe(false)
+  })
+
+  it('takes Space as the argument of r / f, not as anything else', () => {
+    expect(press(after('r'), ' ').command).toEqual({ type: 'replace-char', char: ' ', count: 1 })
+    expect(press(after('f'), ' ').command).toEqual({
+      type: 'motion',
+      motion: 'f',
+      count: 0,
+      char: ' ',
+    })
+  })
+})
+
+describe('reduceVimKey: digits inside prefixes and counts', () => {
+  function run(...keys: string[]) {
+    let state: VimState = INITIAL_VIM_STATE
+    let last = press(state, keys[0]!)
+    state = last.state
+    for (const k of keys.slice(1)) {
+      last = press(state, k)
+      state = last.state
+    }
+    return last
+  }
+
+  it('g0 / g3 are not counts or motions: the prefix is cancelled and the key swallowed', () => {
+    for (const key of ['0', '3']) {
+      const result = run('g', key)
+      expect(result.handled, key).toBe(true)
+      expect(result.command, key).toBeNull()
+      expect(result.state, key).toEqual(INITIAL_VIM_STATE)
+      expect(result.unsupported, key).toBe(key)
+    }
+    // The next key starts fresh instead of inheriting a count.
+    expect(run('g', '3', 'j').command).toEqual({ type: 'motion', motion: 'j', count: 0 })
+  })
+
+  it('a count typed before the prefix survives into the prefixed command', () => {
+    expect(run('3', 'g', 'g').command).toEqual({ type: 'motion', motion: 'gg', count: 3 })
+    expect(run('2', 'z', 't').command).toEqual({ type: 'reveal-line', at: 'top', line: 2 })
+  })
+
+  it('2d3w multiplies the counts, and 2d3d / d2d keep both', () => {
+    expect(run('2', 'd', '3', 'w').command).toEqual({
+      type: 'operator',
+      operator: 'd',
+      motion: 'w',
+      count: 6,
+    })
+    expect(run('2', 'd', '3', 'd').command).toEqual({
+      type: 'linewise',
+      operator: 'd',
+      count: 6,
+    })
+    expect(run('d', '2', 'd').command).toEqual({ type: 'linewise', operator: 'd', count: 2 })
+  })
+
+  it('a count straddling a register and an operator is still multiplied', () => {
+    const result = run('"', 'a', '2', 'd', '3', 'w')
+    expect(result.command).toEqual({ type: 'operator', operator: 'd', motion: 'w', count: 6 })
+    expect(result.register).toBe('a')
+  })
+
+  it('10 and 0 after an operator count behave as digits, not as the line start', () => {
+    expect(run('d', '1', '0', 'j').command).toEqual({
+      type: 'operator',
+      operator: 'd',
+      motion: 'j',
+      count: 10,
+    })
+  })
+})
+
+describe('reduceVimKey: registers', () => {
+  const run = (...keys: string[]) =>
+    keys.reduce((acc, key) => press(acc.state, key), { state: INITIAL_VIM_STATE } as ReturnType<
+      typeof press
+    >)
+
+  it('accepts digits and - as register names', () => {
+    for (const name of ['1', '9', '-', '0', 'a', 'A', '_', '+']) {
+      expect(run('"', name, 'y', 'y').register, name).toBe(name)
+    }
+  })
+
+  it('treats "" as the unnamed register: the same as no register', () => {
+    const result = run('"', '"', 'y', 'y')
+    expect(result.register).toBeNull()
+    expect(result.command).toEqual({ type: 'linewise', operator: 'y', count: 1 })
+  })
+})
+
+describe('reduceVimKey: g v', () => {
+  it('reselects in Normal and in Visual, but not after an operator', () => {
+    expect(press(press(INITIAL_VIM_STATE, 'g').state, 'v').command).toEqual({
+      type: 'visual-reselect',
+    })
+    const visual = press(INITIAL_VIM_STATE, 'v').state
+    expect(press(press(visual, 'g').state, 'v').command).toEqual({ type: 'visual-reselect' })
+    const afterOperator = press(press(press(INITIAL_VIM_STATE, 'd').state, 'g').state, 'v')
+    expect(afterOperator.command).toBeNull()
+    expect(afterOperator.state).toEqual(INITIAL_VIM_STATE)
   })
 })

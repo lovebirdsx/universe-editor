@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { monaco } from '../../monaco/MonacoLoader.js'
 import { createVimEditorController } from '../vimEditorController.js'
+import { resetVimRegisterForTests, setVimRegister } from '../vimRegisters.js'
 import { getLastVimSearch, resetVimSearchForTests } from '../vimSearch.js'
 import type { VimEditor, VimRange } from '../vimTypes.js'
 
@@ -215,7 +216,10 @@ function createInputMethodService() {
 }
 
 describe('createVimEditorController', () => {
-  beforeEach(() => resetVimSearchForTests())
+  beforeEach(() => {
+    resetVimSearchForTests()
+    resetVimRegisterForTests()
+  })
 
   function createNormalHarness(
     lines: string[],
@@ -634,50 +638,6 @@ describe('createVimEditorController', () => {
     ;(config as unknown as { fire(key: string): void }).fire('vim.enabled')
     expect(vim.modes.get('editor:test')).toBe('normal')
     expect(controller.handleKeyDown(key('j'))).toBe(false)
-    controller.dispose()
-  })
-
-  it('joins as many lines as the count asks for', () => {
-    const fake = createFakeEditor(['one', 'two', 'three', 'four'])
-    const controller = createVimEditorController({
-      editor: fake.editor,
-      surfaceKey: 'editor:test',
-      configService: createFakeConfig({ 'vim.enabled': true }) as never,
-      contextKeyService: createContext() as never,
-      vimModeService: createVimModeService() as never,
-      inputMethodService: createInputMethodService() as never,
-    })
-    fake.focus()
-    vi.mocked(fake.editor.trigger).mockClear()
-
-    controller.handleKeyDown(key('3'))
-    controller.handleKeyDown(key('J'))
-
-    expect(vi.mocked(fake.editor.trigger).mock.calls).toEqual([
-      ['vim', 'editor.action.joinLines', null],
-      ['vim', 'editor.action.joinLines', null],
-    ])
-    controller.dispose()
-  })
-
-  it('joins once for a bare J', () => {
-    const fake = createFakeEditor(['one', 'two'])
-    const controller = createVimEditorController({
-      editor: fake.editor,
-      surfaceKey: 'editor:test',
-      configService: createFakeConfig({ 'vim.enabled': true }) as never,
-      contextKeyService: createContext() as never,
-      vimModeService: createVimModeService() as never,
-      inputMethodService: createInputMethodService() as never,
-    })
-    fake.focus()
-    vi.mocked(fake.editor.trigger).mockClear()
-
-    controller.handleKeyDown(key('J'))
-
-    expect(vi.mocked(fake.editor.trigger).mock.calls).toEqual([
-      ['vim', 'editor.action.joinLines', null],
-    ])
     controller.dispose()
   })
 
@@ -1315,7 +1275,7 @@ describe('createVimEditorController', () => {
     controller.handleKeyDown(key('K'))
     expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'editor.action.showHover', null)
     controller.handleKeyDown(key('%'))
-    expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'editor.action.jumpToBracket', null)
+    expect(fake.selection().startColumn).toBe(3)
     controller.handleKeyDown(key(']'))
     controller.handleKeyDown(key('d'))
     expect(fake.editor.trigger).toHaveBeenLastCalledWith(
@@ -1349,33 +1309,27 @@ describe('createVimEditorController', () => {
     controller.dispose()
   })
 
-  it('indents and outdents with >> and << including counts', () => {
-    const { fake, controller } = createNormalHarness(['abc'])
+  it('indents and outdents the counted lines with one command for >> and <<', () => {
+    const { fake, controller } = createNormalHarness(['abc', 'def', 'ghi'])
     controller.handleKeyDown(key('2'))
     controller.handleKeyDown(key('>'))
     controller.handleKeyDown(key('>'))
-    expect(fake.editor.trigger).toHaveBeenCalledTimes(2)
+    expect(fake.editor.setSelections).toHaveBeenLastCalledWith(
+      [
+        {
+          selectionStartLineNumber: 1,
+          selectionStartColumn: 1,
+          positionLineNumber: 2,
+          positionColumn: 4,
+        },
+      ],
+      'vim',
+    )
+    expect(fake.editor.trigger).toHaveBeenCalledTimes(1)
     expect(fake.editor.trigger).toHaveBeenNthCalledWith(1, 'vim', 'editor.action.indentLines', null)
     controller.handleKeyDown(key('<'))
     controller.handleKeyDown(key('<'))
     expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'editor.action.outdentLines', null)
-    controller.dispose()
-  })
-
-  it('changes text and enters Insert for cc, s and C', () => {
-    const { fake, vim, controller } = createNormalHarness(['abc', 'def'])
-    controller.handleKeyDown(key('c'))
-    controller.handleKeyDown(key('c'))
-    expect(fake.editor.executeEdits).toHaveBeenCalled()
-    expect(vim.modes.get('editor:test')).toBe('insert')
-    controller.handleKeyDown(key('Escape'))
-    controller.handleKeyDown(key('s'))
-    expect(fake.editor.executeEdits).toHaveBeenCalledTimes(2)
-    expect(vim.modes.get('editor:test')).toBe('insert')
-    controller.handleKeyDown(key('Escape'))
-    controller.handleKeyDown(key('C'))
-    expect(fake.editor.executeEdits).toHaveBeenCalledTimes(3)
-    expect(vim.modes.get('editor:test')).toBe('insert')
     controller.dispose()
   })
 
@@ -1931,6 +1885,188 @@ describe('createVimEditorController', () => {
         expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', commandId, null)
       }
 
+      controller.dispose()
+    })
+  })
+
+  describe('Insert exit, Ctrl+[ and idle Escape', () => {
+    const move = (fake: ReturnType<typeof createFakeEditor>, line: number, column: number) =>
+      fake.editor.setPosition({ lineNumber: line, column }, 'test')
+
+    it('steps the cursor back one column on Escape from Insert, never past column 1', () => {
+      const { fake, controller } = createNormalHarness(['abcdef'])
+      controller.handleKeyDown(key('i'))
+      move(fake, 1, 4)
+      controller.handleKeyDown(key('Escape'))
+      expect(fake.selection().startColumn).toBe(3)
+
+      controller.handleKeyDown(key('i'))
+      move(fake, 1, 1)
+      controller.handleKeyDown(key('Escape'))
+      expect(fake.selection().startColumn).toBe(1)
+      controller.dispose()
+    })
+
+    it('closes one undo group per Insert session', () => {
+      const { fake, controller } = createNormalHarness(['abc'])
+      controller.handleKeyDown(key('i'))
+      vi.mocked(fake.editor.pushUndoStop).mockClear()
+      controller.handleKeyDown(key('Escape'))
+      expect(fake.editor.pushUndoStop).toHaveBeenCalledTimes(1)
+      controller.dispose()
+    })
+
+    it('keeps cw and the text typed after it in one undo group', () => {
+      const { fake, controller } = createNormalHarness(['foo bar'])
+      const calls: string[] = []
+      vi.mocked(fake.editor.pushUndoStop).mockImplementation(() => {
+        calls.push('stop')
+        return true
+      })
+      vi.mocked(fake.editor.executeEdits).mockImplementation(() => {
+        calls.push('edit')
+        return true
+      })
+      controller.handleKeyDown(key('c'))
+      controller.handleKeyDown(key('w'))
+      // Opening stop and the edit, no closing stop: typing joins the group.
+      expect(calls).toEqual(['stop', 'edit'])
+      controller.handleKeyDown(key('Escape'))
+      expect(calls).toEqual(['stop', 'edit', 'stop'])
+      controller.dispose()
+    })
+
+    it('treats Ctrl+[ exactly like Escape in Insert mode', () => {
+      const { fake, vim, controller } = createNormalHarness(['abcdef'])
+      controller.handleKeyDown(key('i'))
+      move(fake, 1, 4)
+      const event = key('[', { ctrlKey: true })
+      expect(controller.handleKeyDown(event)).toBe(true)
+      expect(event.defaultPrevented).toBe(true)
+      expect(fake.selection().startColumn).toBe(3)
+      expect(vim.modes.get('editor:test')).toBe('normal')
+      controller.dispose()
+    })
+
+    it('focuses the editor tab strip on an Escape with nothing to clear', () => {
+      const executeCommand = vi.fn()
+      const { controller } = createNormalHarness(['abc'], { executeCommand })
+      controller.handleKeyDown(key('Escape'))
+      expect(executeCommand).toHaveBeenCalledTimes(1)
+      expect(executeCommand).toHaveBeenCalledWith('workbench.action.focusEditorTabs')
+      controller.dispose()
+    })
+
+    it('does not leave the editor when Escape cancels a pending prefix', () => {
+      const executeCommand = vi.fn()
+      const { controller } = createNormalHarness(['abc'], { executeCommand })
+      controller.handleKeyDown(key('d'))
+      controller.handleKeyDown(key('Escape'))
+      controller.handleKeyDown(key('2'))
+      controller.handleKeyDown(key('Escape'))
+      expect(executeCommand).not.toHaveBeenCalled()
+      controller.dispose()
+    })
+
+    it('clears hlsearch highlights first and only then hands focus away', async () => {
+      const executeCommand = vi.fn()
+      const config = createFakeConfig({ 'vim.enabled': true, 'vim.highlightSearch': true })
+      const fake = createFakeEditor(['foo foo'])
+      const controller = createVimEditorController({
+        editor: fake.editor,
+        surfaceKey: 'editor:test',
+        configService: config as never,
+        contextKeyService: createContext() as never,
+        vimModeService: createVimModeService() as never,
+        inputMethodService: createInputMethodService() as never,
+        executeCommand,
+      })
+      fake.focus()
+      controller.handleKeyDown(key('*'))
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(fake.decorationSets().length).toBeGreaterThan(0)
+      controller.handleKeyDown(key('Escape'))
+      expect(executeCommand).not.toHaveBeenCalled()
+      controller.handleKeyDown(key('Escape'))
+      expect(executeCommand).toHaveBeenCalledWith('workbench.action.focusEditorTabs')
+      controller.dispose()
+    })
+  })
+
+  describe('counts and word operators through the controller', () => {
+    it('deletes six words for 2d3w (counts multiply)', () => {
+      const { fake, controller } = createNormalHarness(['a b c d e f g h'])
+      for (const k of ['2', 'd', '3', 'w']) controller.handleKeyDown(key(k))
+      expect(fake.editor.executeEdits).toHaveBeenCalledWith('vim', [
+        {
+          range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 13 },
+          text: '',
+        },
+      ])
+      controller.dispose()
+    })
+
+    it('changes only the rest of the word for cw on a non-blank', () => {
+      const { fake, vim, controller } = createNormalHarness(['foo bar'])
+      controller.handleKeyDown(key('c'))
+      controller.handleKeyDown(key('w'))
+      expect(fake.editor.executeEdits).toHaveBeenCalledWith('vim', [
+        {
+          range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 4 },
+          text: '',
+        },
+      ])
+      expect(vim.modes.get('editor:test')).toBe('insert')
+      controller.dispose()
+    })
+
+    it('does nothing for dh at column 1', () => {
+      const { fake, vim, controller } = createNormalHarness(['abc'])
+      controller.handleKeyDown(key('d'))
+      controller.handleKeyDown(key('h'))
+      expect(fake.editor.executeEdits).not.toHaveBeenCalled()
+      expect(vim.modes.get('editor:test')).toBe('normal')
+      controller.dispose()
+    })
+
+    it('shifts the whole range once for >j', () => {
+      const { fake, controller } = createNormalHarness(['a', 'b', 'c'])
+      controller.handleKeyDown(key('>'))
+      controller.handleKeyDown(key('j'))
+      expect(fake.editor.trigger).toHaveBeenCalledTimes(1)
+      expect(fake.editor.trigger).toHaveBeenCalledWith('vim', 'editor.action.indentLines', null)
+      controller.dispose()
+    })
+  })
+
+  describe('paste cursor placement', () => {
+    it('lands on the last pasted character for a one-line charwise paste', () => {
+      const { fake, controller } = createNormalHarness(['abc'])
+      setVimRegister({ text: 'xy', linewise: false })
+      controller.handleKeyDown(key('p'))
+      expect(fake.selection().startColumn).toBe(3)
+      controller.dispose()
+    })
+
+    it('lands on the first non-blank of the first pasted line for a linewise paste', () => {
+      const { fake, controller } = createNormalHarness(['  one', 'two'])
+      setVimRegister({ text: '  pasted\n', linewise: true })
+      controller.handleKeyDown(key('p'))
+      expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 3 })
+      controller.dispose()
+    })
+
+    it('puts the cursor at the start of a multi-line charwise paste', () => {
+      const { fake, controller } = createNormalHarness(['ab'])
+      setVimRegister({ text: 'x\ny', linewise: false })
+      controller.handleKeyDown(key('p'))
+      expect(fake.editor.executeEdits).toHaveBeenCalledWith('vim', [
+        {
+          range: { startLineNumber: 1, startColumn: 2, endLineNumber: 1, endColumn: 2 },
+          text: 'x\ny',
+        },
+      ])
+      expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 2 })
       controller.dispose()
     })
   })

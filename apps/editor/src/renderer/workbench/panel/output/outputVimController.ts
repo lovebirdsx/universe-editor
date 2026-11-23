@@ -8,6 +8,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IDisposable } from '@universe-editor/platform'
+import {
+  consumeEvent,
+  isImeKeyEvent,
+  pageScrollPayload,
+  scrollViewportPayload,
+  toVimKeyInput,
+} from '../../editor/vim/vimKeyUtils.js'
+import { idle } from '../../editor/vim/vimKeymap.js'
 import { firstNonBlankColumn } from '../../editor/vim/vimMotions.js'
 import type { VimEditor } from '../../editor/vim/vimTypes.js'
 import {
@@ -64,26 +72,22 @@ export function createOutputVimController(
       }
       case 'scroll-viewport':
         options.onViewportScroll?.()
-        editor.trigger('vim', 'editorScroll', {
-          to: command.direction,
-          by: 'wrappedLine',
-          value: Math.max(1, command.count),
-          revealCursor: true,
-          select: false,
-        })
+        editor.trigger(
+          'vim',
+          'editorScroll',
+          scrollViewportPayload(command.direction, command.count),
+        )
         return
       case 'page':
         // `halfPage` / `page` are Monaco's viewport-relative units: they count
         // visual rows, so a wrapped log line cannot shrink the page. The
         // explicit cursor reveal keeps Vim's "move by a screen" behavior and
         // lets the normal cursor listener update the follow-tail lock.
-        editor.trigger('vim', 'editorScroll', {
-          to: command.direction,
-          by: command.fraction === 'half' ? 'halfPage' : 'page',
-          value: Math.max(1, command.count),
-          revealCursor: true,
-          select: false,
-        })
+        editor.trigger(
+          'vim',
+          'editorScroll',
+          pageScrollPayload(command.direction, command.fraction, command.count),
+        )
         return
       case 'goto': {
         if (command.line !== null) {
@@ -103,26 +107,18 @@ export function createOutputVimController(
   })
   const blurSubscription = editor.onDidBlurEditorText(() => {
     textFocused = false
-    state = INITIAL_OUTPUT_VIM_STATE
+    state = idle(state)
   })
 
   return {
     hasTextFocus: () => textFocused,
     handleKeyDown(event) {
       if (!textFocused) return false
-      if (event.isComposing || event.keyCode === 229) return false
-      const result = reduceOutputVimKey(state, {
-        key: event.key,
-        ctrl: event.ctrlKey,
-        alt: event.altKey,
-        meta: event.metaKey,
-        shift: event.shiftKey,
-      })
+      if (isImeKeyEvent(event)) return false
+      const result = reduceOutputVimKey(state, toVimKeyInput(event))
       state = result.state
       if (!result.handled) return false
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
+      consumeEvent(event)
       if (result.command !== null) execute(result.command)
       return true
     },

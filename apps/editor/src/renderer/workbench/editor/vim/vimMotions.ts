@@ -1,23 +1,62 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  Vim motions over plain line arrays. Normal-mode columns are 1-based and stop
- *  on the last *character* of a line (`$` is the last character, not the insert
- *  position after it). Word classes follow Vim's `iskeyword` default plus any
- *  letter/number — CJK text therefore forms words instead of one-character hops.
+ *  Vim motions as a declarative registry. Each `VimMotionDef` states its key(s),
+ *  its `kind` (how an operator derives a range from it) and a `resolve` that maps
+ *  a cursor to a destination. Adding a motion means adding one entry to
+ *  `VIM_MOTIONS` (plus the id to `VimMotion` and, for a new key, nothing else —
+ *  the reducer looks keys up here) and a test.
+ *
+ *  Motions read the buffer through a lazy `VimLineReader`, never a full line
+ *  array. Normal-mode columns are 1-based and stop on the last *character* of a
+ *  line (`$` is the last character, not the insert position after it). Word
+ *  classes follow Vim's `iskeyword` default plus any letter/number — CJK text
+ *  therefore forms words instead of one-character hops.
  *--------------------------------------------------------------------------------------------*/
 
-import type { VimMotion, VimPosition } from './vimTypes.js'
+import {
+  charClassAt,
+  classifyChar,
+  wordBackward,
+  wordEnd,
+  wordForward,
+  type VimCharClass,
+  type VimWordPos,
+} from './vimWordMotions.js'
+import type {
+  VimFindMotion,
+  VimFindState,
+  VimLineReader,
+  VimMotion,
+  VimMotionKind,
+  VimOperator,
+  VimPosition,
+} from './vimTypes.js'
 
-export type VimCharClass = 'blank' | 'keyword' | 'punct'
+export { classifyChar }
+export type { VimCharClass }
 
-export function classifyChar(ch: string): VimCharClass {
-  if (ch === '' || /\s/.test(ch)) return 'blank'
-  return /[\p{L}\p{N}_]/u.test(ch) ? 'keyword' : 'punct'
+/** Either a lazy reader (the Monaco model) or a plain line array (tests, pure callers). */
+export type VimLines = VimLineReader | readonly string[]
+
+export function toLineReader(lines: VimLines): VimLineReader {
+  if (!Array.isArray(lines)) return lines as VimLineReader
+  const array = lines as readonly string[]
+  return {
+    getLineCount: () => array.length,
+    getLineContent: (lineNumber) => array[lineNumber - 1] ?? '',
+  }
 }
 
-export function lineLength(lines: readonly string[], line: number): number {
-  return lines[line - 1]?.length ?? 0
+export function lineCountOf(lines: VimLines): number {
+  return Array.isArray(lines)
+    ? (lines as readonly string[]).length
+    : (lines as VimLineReader).getLineCount()
+}
+
+export function lineLength(lines: VimLines, line: number): number {
+  if (line < 1 || line > lineCountOf(lines)) return 0
+  return toLineReader(lines).getLineContent(line).length
 }
 
 export function firstNonBlankColumn(text: string): number {
@@ -27,9 +66,16 @@ export function firstNonBlankColumn(text: string): number {
   return 1
 }
 
+/** Number of leading blank characters (a blank-only line is all indent). */
+export function leadingBlankCount(text: string): number {
+  let i = 0
+  while (i < text.length && /\s/.test(text[i]!)) i++
+  return i
+}
+
 /** Clamp a normal-mode position onto a real character (empty lines sit at column 1). */
-export function clampNormalPosition(lines: readonly string[], position: VimPosition): VimPosition {
-  const lineCount = lines.length
+export function clampNormalPosition(lines: VimLines, position: VimPosition): VimPosition {
+  const lineCount = lineCountOf(lines)
   if (lineCount === 0) return { line: 1, column: 1 }
   const line = Math.max(1, Math.min(lineCount, position.line))
   const len = lineLength(lines, line)
@@ -37,214 +83,550 @@ export function clampNormalPosition(lines: readonly string[], position: VimPosit
   return { line, column }
 }
 
-interface FlatChar {
-  readonly ch: string
-  readonly line: number
-  readonly column: number
-  readonly newline: boolean
+/**
+ * Screen-row awareness injected by the host. Folds and the viewport live in the
+ * editor, not in the text, so row-counted motions (`j`, `k`, `<CR>`, paging) ask
+ * the host instead of doing line arithmetic.
+ */
+export interface VimScreenOps {
+  /** Move `steps` screen rows from `line`; a closed fold counts as one row. */
+  advanceRows(line: number, delta: 1 | -1, steps: number): number
+  /** Rows in the viewport; absent when there is no viewport, which disables paging. */
+  pageRows?(): number
 }
 
-function flatten(lines: readonly string[]): FlatChar[] {
-  const out: FlatChar[] = []
-  for (let i = 0; i < lines.length; i++) {
-    const text = lines[i] ?? ''
-    for (let c = 0; c < text.length; c++) {
-      out.push({ ch: text[c]!, line: i + 1, column: c + 1, newline: false })
-    }
-    if (i < lines.length - 1) {
-      out.push({ ch: '\n', line: i + 1, column: text.length + 1, newline: true })
-    }
+export function createPlainScreenOps(lines: VimLineReader): VimScreenOps {
+  return {
+    advanceRows: (line, delta, steps) =>
+      Math.max(1, Math.min(lines.getLineCount(), line + delta * steps)),
   }
-  return out
 }
 
-function indexOfPosition(
-  flat: readonly FlatChar[],
-  lines: readonly string[],
-  pos: VimPosition,
-): number {
-  // Binary-search the line-start offset, then offset within the line.
-  let start = 0
-  for (let line = 1; line < pos.line && line <= lines.length; line++) {
-    start += (lines[line - 1]?.length ?? 0) + 1
-  }
-  const columnOffset = Math.max(0, Math.min(lineLength(lines, pos.line) - 1, pos.column - 1))
-  return Math.min(flat.length - 1, Math.max(0, start + columnOffset))
+export interface VimMotionContext {
+  readonly lines: VimLineReader
+  /** Cursor position, 1-based, already clamped onto a character. */
+  readonly from: VimPosition
+  readonly screen: VimScreenOps
+  /** The character typed after `f`/`F`/`t`/`T`. */
+  readonly char?: string
+  /** What `;` / `,` repeat. */
+  readonly lastFind?: VimFindState | null
 }
 
-function classAt(flat: readonly FlatChar[], index: number, bigWord: boolean): VimCharClass {
-  const ch = flat[index]?.ch ?? ''
-  if (bigWord) return ch === '' || /\s/.test(ch) ? 'blank' : 'keyword'
-  return classifyChar(ch)
+/** What an operator needs from a motion: where it ends and how that end is interpreted. */
+export interface VimOperatorTarget {
+  readonly to: VimPosition
+  readonly kind: VimMotionKind
 }
 
-function moveWordForward(
-  flat: readonly FlatChar[],
-  start: number,
-  count: number,
-  bigWord: boolean,
-): number {
-  let i = start
-  for (let n = 0; n < count; n++) {
-    if (i >= flat.length - 1) return flat.length - 1
-    if (classAt(flat, i, bigWord) !== 'blank') {
-      const current = classAt(flat, i, bigWord)
-      while (i + 1 < flat.length && classAt(flat, i + 1, bigWord) === current) i++
-    }
-    while (i + 1 < flat.length && classAt(flat, i + 1, bigWord) === 'blank') i++
-    if (i + 1 < flat.length) i++
-  }
-  return i
+export interface VimMotionDef {
+  readonly id: VimMotion
+  /** Bare Normal-mode keys that trigger it. Motions reached through a prefix, a Ctrl chord or a navigation key list none. */
+  readonly keys: readonly string[]
+  readonly kind: VimMotionKind
+  /** One-line help text (English; localized by `vimKeyHelp.ts`). */
+  readonly description: string
+  /** Help-panel spelling when `keys` is empty or not how the user types it (`Ctrl+F`, `gg`). */
+  readonly helpKeys?: string
+  /** The motion waits for one more typed character (`fx`); the reducer opens a `find` prefix. */
+  readonly needsChar?: boolean
+  /**
+   * Counts screen rows via `ctx.screen` (folds, viewport), so the controller must
+   * not snap the result out of closed folds a second time.
+   */
+  readonly screenAware?: boolean
+  /** `count` is the raw typed count, 0 meaning "none" (`gg` / `G` read it as a line number). Null = the motion fails. */
+  resolve(ctx: VimMotionContext, count: number): VimPosition | null
+  /**
+   * Operator-pending destination when it differs from the cursor motion: `dw`
+   * stops at the end of the line, `cw` behaves like `ce`, `dl` may reach past the
+   * last character, `d}` follows the exclusive-to-linewise rule (see `paragraphTarget`).
+   */
+  resolveForOperator?(
+    ctx: VimMotionContext,
+    count: number,
+    operator: VimOperator,
+  ): VimOperatorTarget | null
 }
 
-function moveWordEnd(
-  flat: readonly FlatChar[],
-  start: number,
-  count: number,
-  bigWord: boolean,
-): number {
-  let i = start
-  for (let n = 0; n < count; n++) {
-    if (i + 1 < flat.length) i++
-    while (i < flat.length && classAt(flat, i, bigWord) === 'blank') i++
-    if (i >= flat.length) return flat.length - 1
-    const current = classAt(flat, i, bigWord)
-    while (i + 1 < flat.length && classAt(flat, i + 1, bigWord) === current) i++
-  }
-  return i
+function steps(count: number): number {
+  return Math.max(1, count)
 }
 
-function moveWordBackward(
-  flat: readonly FlatChar[],
-  start: number,
-  count: number,
-  bigWord: boolean,
-): number {
-  let i = start
-  for (let n = 0; n < count; n++) {
-    if (i > 0) i--
-    while (i > 0 && classAt(flat, i, bigWord) === 'blank') i--
-    const current = classAt(flat, i, bigWord)
-    while (i > 0 && classAt(flat, i - 1, bigWord) === current) i--
-  }
-  return i
+function toWordPos(position: VimPosition): VimWordPos {
+  return { line: position.line, col: position.column - 1 }
 }
 
-function flatToPosition(
-  flat: readonly FlatChar[],
-  index: number,
-  lines: readonly string[],
-): VimPosition {
-  const f = flat[index]
-  if (f === undefined) {
-    const lastLine = Math.max(1, lines.length)
-    return { line: lastLine, column: Math.max(1, lineLength(lines, lastLine)) }
-  }
-  if (f.newline) {
-    // A motion never rests on a line break; clamp onto the last character.
-    const len = lineLength(lines, f.line)
-    return { line: f.line, column: Math.max(1, len) }
-  }
-  return { line: f.line, column: f.column }
+/** Raw word-walk result (end-of-line slot allowed) as an exclusive 1-based endpoint. */
+function toRawPosition(pos: VimWordPos): VimPosition {
+  return { line: pos.line, column: pos.col + 1 }
 }
 
-function paragraphBoundary(lines: readonly string[], from: number, direction: 1 | -1): number {
-  for (let line = from + direction; line >= 1 && line <= lines.length; line += direction) {
-    if ((lines[line - 1] ?? '').trim() === '') return line
+function isNonBlankAt(lines: VimLineReader, position: VimPosition, bigWord: boolean): boolean {
+  return charClassAt(lines.getLineContent(position.line), position.column - 1, bigWord) !== 'blank'
+}
+
+function wordForwardMotion(id: 'w' | 'W'): VimMotionDef {
+  const bigWord = id === 'W'
+  return {
+    id,
+    keys: [id],
+    kind: 'exclusive',
+    description: bigWord ? 'Next WORD (whitespace-separated)' : 'Next word',
+    resolve: (ctx, count) =>
+      clampNormalPosition(
+        ctx.lines,
+        toRawPosition(wordForward(ctx.lines, toWordPos(ctx.from), steps(count), bigWord, false)),
+      ),
+    resolveForOperator: (ctx, count, operator) => {
+      // Vim special case: `cw` on a non-blank is `ce` — it changes the rest of the
+      // word and leaves the whitespace after it alone.
+      if (operator === 'c' && isNonBlankAt(ctx.lines, ctx.from, bigWord)) {
+        const end = wordEnd(ctx.lines, toWordPos(ctx.from), steps(count), bigWord, true)
+        return {
+          to: clampNormalPosition(ctx.lines, toRawPosition(end)),
+          kind: 'inclusive',
+        }
+      }
+      const end = wordForward(ctx.lines, toWordPos(ctx.from), steps(count), bigWord, true)
+      return { to: toRawPosition(end), kind: 'exclusive' }
+    },
   }
-  return direction === 1 ? lines.length : 1
+}
+
+function wordBackwardMotion(id: 'b' | 'B'): VimMotionDef {
+  const bigWord = id === 'B'
+  return {
+    id,
+    keys: [id],
+    kind: 'exclusive',
+    description: bigWord ? 'Previous WORD' : 'Previous word',
+    resolve: (ctx, count) =>
+      clampNormalPosition(
+        ctx.lines,
+        toRawPosition(wordBackward(ctx.lines, toWordPos(ctx.from), steps(count), bigWord)),
+      ),
+  }
+}
+
+function wordEndMotion(id: 'e' | 'E'): VimMotionDef {
+  const bigWord = id === 'E'
+  return {
+    id,
+    keys: [id],
+    kind: 'inclusive',
+    description: bigWord ? 'End of WORD' : 'End of word',
+    resolve: (ctx, count) =>
+      clampNormalPosition(
+        ctx.lines,
+        toRawPosition(wordEnd(ctx.lines, toWordPos(ctx.from), steps(count), bigWord)),
+      ),
+  }
+}
+
+/** Vim's `j`/`k` fail without moving when there is nowhere to go, and so does `dj`/`dk`. */
+function failsWhenStationary(
+  resolve: VimMotionDef['resolve'],
+): NonNullable<VimMotionDef['resolveForOperator']> {
+  return (ctx, count) => {
+    const to = resolve(ctx, count)
+    return to === null || to.line === ctx.from.line ? null : { to, kind: 'linewise' }
+  }
 }
 
 /**
- * Resolve a text motion to its destination. Paging motions return `null`; the
- * controller hands those to Monaco's own `cursorPageDown`/`cursorPageUp` so
- * viewport-relative movement stays consistent with the renderer.
+ * Vim's `findpar`: from the cursor line, skip to the next blank line that follows at
+ * least one non-blank line, `count` times. Fails (null) when a counted step runs off the buffer.
  */
-export function resolveMotion(
-  lines: readonly string[],
-  from: VimPosition,
-  motion: VimMotion,
+function findParagraph(
+  lines: VimLineReader,
+  from: number,
+  direction: 1 | -1,
   count: number,
-): VimPosition | null {
-  const steps = Math.max(1, count)
-  switch (motion) {
-    case 'h':
-      return clampNormalPosition(lines, { line: from.line, column: from.column - steps })
-    case 'l':
-      return clampNormalPosition(lines, { line: from.line, column: from.column + steps })
-    case 'j':
-      return clampNormalPosition(lines, { line: from.line + steps, column: from.column })
-    case 'k':
-      return clampNormalPosition(lines, { line: from.line - steps, column: from.column })
-    case '0':
-      return clampNormalPosition(lines, { line: from.line, column: 1 })
-    case '^':
-      return clampNormalPosition(lines, {
-        line: from.line,
-        column: firstNonBlankColumn(lines[from.line - 1] ?? ''),
-      })
-    case '$': {
-      // `N$` drops N-1 lines first, then stops on the last character there.
-      const line = Math.max(1, Math.min(lines.length, from.line + steps - 1))
-      const len = lineLength(lines, line)
-      return clampNormalPosition(lines, { line, column: Math.max(1, len) })
-    }
-    case 'gg':
-      return clampNormalPosition(lines, {
-        // A count is a line number for gg/G, not a repetition.
-        line: count > 0 ? count : 1,
-        column: firstNonBlankColumn(lines[(count > 0 ? count : 1) - 1] ?? ''),
-      })
-    case 'G': {
-      const lastLine = Math.max(1, lines.length)
-      const targetLine = count > 0 ? Math.min(count, lastLine) : lastLine
-      return clampNormalPosition(lines, {
-        line: targetLine,
-        column: firstNonBlankColumn(lines[targetLine - 1] ?? ''),
-      })
-    }
-    case 'enter': {
-      // `<CR>` (`+`): down `steps` lines onto the first non-blank. At EOF the
-      // motion fails and the cursor stays put.
-      if (from.line >= lines.length) return clampNormalPosition(lines, from)
-      const targetLine = Math.min(lines.length, from.line + steps)
-      return {
-        line: targetLine,
-        column: firstNonBlankColumn(lines[targetLine - 1] ?? ''),
+): number | null {
+  const lineCount = lines.getLineCount()
+  let line = from
+  for (let remaining = steps(count); remaining > 0; remaining--) {
+    let sawText = false
+    for (let first = true; ; first = false) {
+      const blank = lines.getLineContent(line).trim() === ''
+      if (!blank) sawText = true
+      if (!first && sawText && blank) break
+      line += direction
+      if (line < 1 || line > lineCount) {
+        if (remaining > 1) return null
+        line -= direction
+        break
       }
     }
-    case '{':
-      return clampNormalPosition(lines, {
-        line: paragraphBoundary(lines, from.line, -1),
-        column: 1,
-      })
-    case '}':
-      return clampNormalPosition(lines, {
-        line: paragraphBoundary(lines, from.line, 1),
-        column: 1,
-      })
-    case 'w':
-    case 'W':
-    case 'b':
-    case 'B':
-    case 'e':
-    case 'E': {
-      const flat = flatten(lines)
-      if (flat.length === 0) return clampNormalPosition(lines, from)
-      const start = indexOfPosition(flat, lines, from)
-      const bigWord = motion === 'W' || motion === 'B' || motion === 'E'
-      const index =
-        motion === 'w' || motion === 'W'
-          ? moveWordForward(flat, start, steps, bigWord)
-          : motion === 'e' || motion === 'E'
-            ? moveWordEnd(flat, start, steps, bigWord)
-            : moveWordBackward(flat, start, steps, bigWord)
-      return clampNormalPosition(lines, flatToPosition(flat, index, lines))
-    }
-    case 'pageDown':
-    case 'pageUp':
-    case 'halfPageDown':
-    case 'halfPageUp':
-      return null
   }
+  return line
+}
+
+/**
+ * `}` / `{` are exclusive charwise motions. Ending on the buffer's last line makes
+ * `}` land on its last character, inclusive; otherwise it stops in column 1 of the
+ * blank line, and `buildOperatorRange` applies Vim's "exclusive to linewise" rule.
+ */
+function paragraphTarget(ctx: VimMotionContext, count: number, direction: 1 | -1) {
+  const line = findParagraph(ctx.lines, ctx.from.line, direction, count)
+  if (line === null) return null
+  const length = ctx.lines.getLineContent(line).length
+  if (direction === 1 && line === ctx.lines.getLineCount() && length > 0) {
+    return { to: { line, column: length }, kind: 'inclusive' as const }
+  }
+  return { to: { line, column: 1 }, kind: 'exclusive' as const }
+}
+
+function paragraphMotion(id: '{' | '}'): VimMotionDef {
+  const direction = id === '}' ? 1 : -1
+  return {
+    id,
+    keys: [id],
+    kind: 'exclusive',
+    description: direction === 1 ? 'Next paragraph' : 'Previous paragraph',
+    resolve: (ctx, count) => paragraphTarget(ctx, count, direction)?.to ?? null,
+    resolveForOperator: (ctx, count) => paragraphTarget(ctx, count, direction),
+  }
+}
+
+function pageMotion(
+  id: VimMotion,
+  delta: 1 | -1,
+  divisor: number,
+  helpKeys: string,
+  description: string,
+): VimMotionDef {
+  return {
+    id,
+    keys: [],
+    kind: 'linewise',
+    description,
+    helpKeys,
+    screenAware: true,
+    resolve: (ctx) => {
+      const rows = ctx.screen.pageRows?.()
+      if (rows === undefined) return null
+      const line = ctx.screen.advanceRows(
+        ctx.from.line,
+        delta,
+        Math.max(1, Math.floor(rows / divisor)),
+      )
+      return clampNormalPosition(ctx.lines, { line, column: ctx.from.column })
+    },
+  }
+}
+
+function lineMotion(
+  id: VimMotion,
+  keys: readonly string[],
+  delta: 1 | -1,
+  description: string,
+): VimMotionDef {
+  const resolve: VimMotionDef['resolve'] = (ctx, count) =>
+    clampNormalPosition(ctx.lines, {
+      line: ctx.screen.advanceRows(ctx.from.line, delta, steps(count)),
+      column: ctx.from.column,
+    })
+  return {
+    id,
+    keys,
+    kind: 'linewise',
+    description,
+    screenAware: true,
+    resolve,
+    resolveForOperator: failsWhenStationary(resolve),
+  }
+}
+
+function gotoLine(ctx: VimMotionContext, line: number): VimPosition {
+  const target = Math.max(1, Math.min(ctx.lines.getLineCount(), line))
+  return clampNormalPosition(ctx.lines, {
+    line: target,
+    column: firstNonBlankColumn(ctx.lines.getLineContent(target)),
+  })
+}
+
+const OPPOSITE_FIND: Record<VimFindMotion, VimFindMotion> = { f: 'F', F: 'f', t: 'T', T: 't' }
+
+/**
+ * `fx` / `Fx` / `tx` / `Tx` (and `;` / `,`) on the cursor line. `repeat` is `;`/`,`:
+ * a repeated till-motion that already sits in front of the character skips it
+ * instead of standing still.
+ */
+function resolveFind(
+  ctx: VimMotionContext,
+  count: number,
+  motion: VimFindMotion,
+  char: string | undefined,
+  repeat: boolean,
+): VimOperatorTarget | null {
+  if (char === undefined || char === '') return null
+  const text = ctx.lines.getLineContent(ctx.from.line)
+  const forward = motion === 'f' || motion === 't'
+  const till = motion === 't' || motion === 'T'
+  const step = forward ? 1 : -1
+  const origin = ctx.from.column - 1
+  const skipAdjacent = repeat && till && steps(count) === 1 && text.startsWith(char, origin + step)
+  let remaining = steps(count)
+  let hit = -1
+  const first = origin + step + (skipAdjacent ? step : 0)
+  for (let index = first; index >= 0 && index < text.length; index += step) {
+    if (text.startsWith(char, index) && --remaining === 0) {
+      hit = index
+      break
+    }
+  }
+  if (hit < 0) return null
+  return {
+    to: { line: ctx.from.line, column: (till ? hit - step : hit) + 1 },
+    kind: forward ? 'inclusive' : 'exclusive',
+  }
+}
+
+const FIND_DESCRIPTIONS: Record<VimFindMotion, string> = {
+  f: 'To the next occurrence of a character on the line',
+  F: 'To the previous occurrence of a character on the line',
+  t: 'Till just before the next occurrence of a character',
+  T: 'Till just after the previous occurrence of a character',
+}
+
+function findMotion(id: VimFindMotion): VimMotionDef {
+  const forward = id === 'f' || id === 't'
+  const run = (ctx: VimMotionContext, count: number) => resolveFind(ctx, count, id, ctx.char, false)
+  return {
+    id,
+    keys: [id],
+    kind: forward ? 'inclusive' : 'exclusive',
+    description: FIND_DESCRIPTIONS[id],
+    needsChar: true,
+    resolve: (ctx, count) => run(ctx, count)?.to ?? null,
+    resolveForOperator: run,
+  }
+}
+
+function repeatFindMotion(id: ';' | ','): VimMotionDef {
+  const run = (ctx: VimMotionContext, count: number) => {
+    const last = ctx.lastFind
+    if (last === null || last === undefined) return null
+    const motion = id === ';' ? last.motion : OPPOSITE_FIND[last.motion]
+    return resolveFind(ctx, count, motion, last.char, true)
+  }
+  return {
+    id,
+    keys: [id],
+    kind: 'inclusive',
+    description:
+      id === ';' ? 'Repeat the last f/F/t/T' : 'Repeat the last f/F/t/T in the opposite direction',
+    resolve: (ctx, count) => run(ctx, count)?.to ?? null,
+    resolveForOperator: run,
+  }
+}
+
+const OPEN_BRACKETS = '([{'
+const CLOSE_BRACKETS = ')]}'
+
+/** The bracket matching the one at `from` (or the first one after it on the line); `null` if unbalanced. */
+export function findMatchingBracket(lines: VimLineReader, from: VimPosition): VimPosition | null {
+  const text = lines.getLineContent(from.line)
+  let column = from.column - 1
+  const isBracket = (ch: string | undefined): boolean =>
+    ch !== undefined && (OPEN_BRACKETS.includes(ch) || CLOSE_BRACKETS.includes(ch))
+  while (column < text.length && !isBracket(text[column])) column++
+  if (column >= text.length) return null
+  const bracket = text[column]!
+  const forward = OPEN_BRACKETS.includes(bracket)
+  const partner = forward
+    ? CLOSE_BRACKETS[OPEN_BRACKETS.indexOf(bracket)]!
+    : OPEN_BRACKETS[CLOSE_BRACKETS.indexOf(bracket)]!
+  const lineCount = lines.getLineCount()
+  const delta = forward ? 1 : -1
+  let depth = 0
+  let line = from.line
+  let current = text
+  let index = column
+  for (;;) {
+    const ch = current[index]
+    if (ch === bracket) depth++
+    else if (ch === partner && --depth === 0) return { line, column: index + 1 }
+    index += delta
+    while (index < 0 || index >= current.length) {
+      line += delta
+      if (line < 1 || line > lineCount) return null
+      current = lines.getLineContent(line)
+      index = forward ? 0 : current.length - 1
+    }
+  }
+}
+
+function bracketMatchMotion(): VimMotionDef {
+  const resolve: VimMotionDef['resolve'] = (ctx, count) => {
+    // `N%` is "N percent into the file", linewise.
+    if (count > 0) return gotoLine(ctx, Math.ceil((count * ctx.lines.getLineCount()) / 100))
+    return findMatchingBracket(ctx.lines, ctx.from)
+  }
+  return {
+    id: '%',
+    keys: ['%'],
+    kind: 'inclusive',
+    description: 'Jump to the matching bracket (N%: N percent into the file)',
+    resolve,
+    resolveForOperator: (ctx, count) => {
+      const to = resolve(ctx, count)
+      if (to === null) return null
+      return { to, kind: count > 0 ? 'linewise' : 'inclusive' }
+    },
+  }
+}
+
+/** Every motion the Normal-mode reducer and the operators know. One entry per motion. */
+export const VIM_MOTIONS: readonly VimMotionDef[] = [
+  {
+    id: 'h',
+    keys: ['h'],
+    description: 'Move left',
+    kind: 'exclusive',
+    resolve: (ctx, count) =>
+      clampNormalPosition(ctx.lines, {
+        line: ctx.from.line,
+        column: ctx.from.column - steps(count),
+      }),
+    // dh at column 1 fails: no empty range, so the register stays untouched.
+    resolveForOperator: (ctx, count) =>
+      ctx.from.column <= 1
+        ? null
+        : {
+            to: { line: ctx.from.line, column: Math.max(1, ctx.from.column - steps(count)) },
+            kind: 'exclusive',
+          },
+  },
+  {
+    id: 'l',
+    keys: ['l'],
+    description: 'Move right',
+    kind: 'exclusive',
+    resolve: (ctx, count) =>
+      clampNormalPosition(ctx.lines, {
+        line: ctx.from.line,
+        column: ctx.from.column + steps(count),
+      }),
+    // `dl` / `x` may take the last character, so the operator end can sit one past it.
+    // On an empty line there is nothing to take: fail instead of an empty range.
+    resolveForOperator: (ctx, count) =>
+      ctx.lines.getLineContent(ctx.from.line).length === 0
+        ? null
+        : {
+            to: {
+              line: ctx.from.line,
+              column: Math.min(
+                ctx.lines.getLineContent(ctx.from.line).length + 1,
+                ctx.from.column + steps(count),
+              ),
+            },
+            kind: 'exclusive',
+          },
+  },
+  lineMotion('j', ['j'], 1, 'Move down'),
+  lineMotion('k', ['k'], -1, 'Move up'),
+  {
+    id: 'enter',
+    keys: [],
+    helpKeys: 'Enter',
+    description: 'Down to the first non-blank of the next line',
+    kind: 'linewise',
+    screenAware: true,
+    resolve: (ctx, count) => {
+      const line = ctx.screen.advanceRows(ctx.from.line, 1, steps(count))
+      // At the end of the buffer (or of a fold reaching it) `<CR>` fails in place.
+      if (line === ctx.from.line) return clampNormalPosition(ctx.lines, ctx.from)
+      return gotoLine(ctx, line)
+    },
+    resolveForOperator: (ctx, count) => {
+      const line = ctx.screen.advanceRows(ctx.from.line, 1, steps(count))
+      return line === ctx.from.line ? null : { to: { line, column: 1 }, kind: 'linewise' }
+    },
+  },
+  {
+    id: '0',
+    keys: ['0'],
+    description: 'Start of line',
+    kind: 'exclusive',
+    resolve: (ctx) => clampNormalPosition(ctx.lines, { line: ctx.from.line, column: 1 }),
+  },
+  {
+    id: '^',
+    keys: ['^'],
+    description: 'First non-blank character of the line',
+    kind: 'exclusive',
+    resolve: (ctx) =>
+      clampNormalPosition(ctx.lines, {
+        line: ctx.from.line,
+        column: firstNonBlankColumn(ctx.lines.getLineContent(ctx.from.line)),
+      }),
+  },
+  {
+    id: '$',
+    keys: ['$'],
+    description: 'End of line (with a count, N-1 lines down)',
+    kind: 'inclusive',
+    resolve: (ctx, count) => {
+      // `N$` drops N-1 lines first, then stops on the last character there.
+      const line = Math.max(1, Math.min(ctx.lines.getLineCount(), ctx.from.line + steps(count) - 1))
+      return clampNormalPosition(ctx.lines, {
+        line,
+        column: Math.max(1, ctx.lines.getLineContent(line).length),
+      })
+    },
+  },
+  {
+    id: 'gg',
+    keys: [],
+    helpKeys: 'gg',
+    description: 'First line (or line N)',
+    kind: 'linewise',
+    // A count is a line number for gg/G, not a repetition.
+    resolve: (ctx, count) => gotoLine(ctx, count > 0 ? count : 1),
+  },
+  {
+    id: 'G',
+    keys: ['G'],
+    description: 'Last line (or line N)',
+    kind: 'linewise',
+    resolve: (ctx, count) => gotoLine(ctx, count > 0 ? count : ctx.lines.getLineCount()),
+  },
+  paragraphMotion('{'),
+  paragraphMotion('}'),
+  wordForwardMotion('w'),
+  wordForwardMotion('W'),
+  wordBackwardMotion('b'),
+  wordBackwardMotion('B'),
+  wordEndMotion('e'),
+  wordEndMotion('E'),
+  pageMotion('pageDown', 1, 1, 'Ctrl+F / PageDown', 'Page down'),
+  pageMotion('pageUp', -1, 1, 'Ctrl+B / PageUp', 'Page up'),
+  pageMotion('halfPageDown', 1, 2, 'Ctrl+D', 'Half page down'),
+  pageMotion('halfPageUp', -1, 2, 'Ctrl+U', 'Half page up'),
+  findMotion('f'),
+  findMotion('F'),
+  findMotion('t'),
+  findMotion('T'),
+  repeatFindMotion(';'),
+  repeatFindMotion(','),
+  bracketMatchMotion(),
+]
+
+const MOTIONS_BY_ID = new Map<VimMotion, VimMotionDef>(VIM_MOTIONS.map((def) => [def.id, def]))
+const MOTIONS_BY_KEY = new Map<string, VimMotionDef>(
+  VIM_MOTIONS.flatMap((def) => def.keys.map((key) => [key, def] as const)),
+)
+
+export function getVimMotion(id: VimMotion): VimMotionDef {
+  const def = MOTIONS_BY_ID.get(id)
+  if (def === undefined) throw new Error(`[vim] motion "${id}" is not registered`)
+  return def
+}
+
+/** The motion a bare Normal-mode key triggers, if any. */
+export function findVimMotionByKey(key: string): VimMotionDef | undefined {
+  return MOTIONS_BY_KEY.get(key)
 }

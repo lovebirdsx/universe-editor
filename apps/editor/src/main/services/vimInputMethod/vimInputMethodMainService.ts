@@ -109,10 +109,11 @@ export class VimInputMethodMainService implements IVimInputMethodService {
   }
 
   async switchToEnglish(): Promise<boolean> {
-    // Already switched by this window: English is (still) active.
-    if (this.saved !== null) return true
     const api = await this.loadApi()
     if (api === null) return false
+    // A saved state only proves we switched once; the user (or another app) may
+    // have flipped back since, so check what is really active before trusting it.
+    if (this.saved !== null) return this.reassertEnglish(api, this.saved)
     try {
       const hwnd = api.GetForegroundWindow()
       if (hwnd === 0) return false
@@ -132,11 +133,13 @@ export class VimInputMethodMainService implements IVimInputMethodService {
       }
 
       // No en-US layout installed: flip the IME's own Chinese/English mode.
-      if (!this.setConversionMode(api, hwnd, false)) {
+      const outcome = this.setConversionMode(api, hwnd, false)
+      if (outcome === 'failed') {
         this.logger.warn('[vim] could not switch the IME to English (no en-US layout)')
         return false
       }
-      this.saved = { kind: 'conversion', hwnd }
+      // Already English: nothing to restore later, but English is active.
+      if (outcome === 'changed') this.saved = { kind: 'conversion', hwnd }
       return true
     } catch (error) {
       this.logger.warn('[vim] failed to switch input method to English', error)
@@ -144,46 +147,77 @@ export class VimInputMethodMainService implements IVimInputMethodService {
     }
   }
 
+  /** English was switched on earlier; make sure it still is, without losing the state to restore. */
+  private reassertEnglish(api: Win32Imports, saved: SavedInputMethod): boolean {
+    try {
+      if (saved.kind === 'conversion') {
+        return this.setConversionMode(api, saved.hwnd, false) !== 'failed'
+      }
+      const threadId = api.GetWindowThreadProcessId(saved.hwnd, [null])
+      if (threadId === 0) return false
+      const englishHkl = api.LoadKeyboardLayoutW(EN_US_KLID, KLF_LOAD_ONLY)
+      if (englishHkl === 0) return false
+      if (api.GetKeyboardLayout(threadId) === englishHkl) return true
+      if (api.PostMessageW(saved.hwnd, WM_INPUTLANGCHANGEREQUEST, 0, englishHkl) === 0) {
+        this.logger.warn(`[vim] failed to re-request English for hwnd ${saved.hwnd}`)
+        return false
+      }
+      return true
+    } catch (error) {
+      this.logger.warn('[vim] failed to re-assert English input method', error)
+      return false
+    }
+  }
+
   async restore(): Promise<void> {
     const saved = this.saved
     if (saved === null) return
-    this.saved = null
     const api = await this.loadApi()
     if (api === null) return
+    // `saved` is cleared only once the OS accepted the restore: a transient
+    // failure must stay retryable, or the user is stranded in English.
     try {
       if (saved.kind === 'layout') {
         if (api.PostMessageW(saved.hwnd, WM_INPUTLANGCHANGEREQUEST, 0, saved.hkl) === 0) {
           this.logger.warn(`[vim] failed to restore input language for hwnd ${saved.hwnd}`)
+          return
         }
+      } else if (this.setConversionMode(api, saved.hwnd, true) === 'failed') {
+        this.logger.warn('[vim] failed to restore the IME conversion mode')
         return
       }
-      if (!this.setConversionMode(api, saved.hwnd, true)) {
-        this.logger.warn('[vim] failed to restore the IME conversion mode')
-      }
+      if (this.saved === saved) this.saved = null
     } catch (error) {
       this.logger.warn('[vim] failed to restore input method', error)
     }
   }
 
-  private setConversionMode(api: Win32Imports, hwnd: number, native: boolean): boolean {
+  /** `unchanged` means the IME was already in the requested mode. */
+  private setConversionMode(
+    api: Win32Imports,
+    hwnd: number,
+    native: boolean,
+  ): 'changed' | 'unchanged' | 'failed' {
     const threadId = api.GetWindowThreadProcessId(hwnd, [null])
-    if (threadId === 0) return false
+    if (threadId === 0) return 'failed'
     const currentThread = api.GetCurrentThreadId()
     // The IME context lives on the window's UI thread; attach before touching it.
     const attached = api.AttachThreadInput(currentThread, threadId, 1) !== 0
     try {
       const himc = api.ImmGetContext(hwnd)
-      if (himc === 0) return false
+      if (himc === 0) return 'failed'
       try {
         const conversion: [number | null] = [null]
         const sentence: [number | null] = [null]
-        if (api.ImmGetConversionStatus(himc, conversion, sentence) === 0) return false
+        if (api.ImmGetConversionStatus(himc, conversion, sentence) === 0) return 'failed'
         const currentConversion = conversion[0] ?? 0
-        if (((currentConversion & IME_CMODE_NATIVE) !== 0) === native) return false
+        if (((currentConversion & IME_CMODE_NATIVE) !== 0) === native) return 'unchanged'
         const nextConversion = native
           ? currentConversion | IME_CMODE_NATIVE
           : currentConversion & ~IME_CMODE_NATIVE
         return api.ImmSetConversionStatus(himc, nextConversion, sentence[0] ?? 0) !== 0
+          ? 'changed'
+          : 'failed'
       } finally {
         api.ImmReleaseContext(hwnd, himc)
       }

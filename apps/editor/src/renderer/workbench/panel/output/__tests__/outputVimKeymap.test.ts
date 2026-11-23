@@ -123,7 +123,10 @@ describe('reduceOutputVimKey', () => {
     expect(printable.command).toBeNull()
     expect(printable.state).toEqual(INITIAL_OUTPUT_VIM_STATE)
 
-    const dangling = reduceOutputVimKey({ count: 0, pendingG: true }, key('x'))
+    const dangling = reduceOutputVimKey(
+      { ...INITIAL_OUTPUT_VIM_STATE, pending: { kind: 'g' } },
+      key('x'),
+    )
     expect(dangling.handled).toBe(true)
     expect(dangling.command).toBeNull()
 
@@ -132,13 +135,16 @@ describe('reduceOutputVimKey', () => {
     const pageDown = reduceOutputVimKey(INITIAL_OUTPUT_VIM_STATE, key('PageDown'))
     expect(pageDown.handled).toBe(false)
 
-    const danglingF5 = reduceOutputVimKey({ count: 0, pendingG: true }, key('F5'))
+    const danglingF5 = reduceOutputVimKey(
+      { ...INITIAL_OUTPUT_VIM_STATE, pending: { kind: 'g' } },
+      key('F5'),
+    )
     expect(danglingF5.handled).toBe(false)
     expect(danglingF5.state).toEqual(INITIAL_OUTPUT_VIM_STATE)
   })
 
   it('leaves Escape, Alt/Meta chords and unknown Ctrl chords to Monaco', () => {
-    const escape = reduceOutputVimKey({ count: 3, pendingG: false }, key('Escape'))
+    const escape = reduceOutputVimKey({ ...INITIAL_OUTPUT_VIM_STATE, count: 3 }, key('Escape'))
     expect(escape.handled).toBe(false)
     expect(escape.state).toEqual(INITIAL_OUTPUT_VIM_STATE)
 
@@ -164,5 +170,45 @@ describe('reduceOutputVimKey', () => {
       expect(result.command, printable).toBeNull()
       expect(result.handled, printable).toBe(true)
     }
+  })
+
+  it('drops operators and non-g prefixes instead of leaving them pending', () => {
+    for (const keys of [['d'], ['2', 'd'], ['z'], [']'], ['[']]) {
+      const result = press(INITIAL_OUTPUT_VIM_STATE, ...keys.map((k) => key(k)))
+      expect(result.state, keys.join('')).toEqual(INITIAL_OUTPUT_VIM_STATE)
+      expect(result.command, keys.join('')).toBeNull()
+    }
+    // gg after a stray operator still works: the prefix state did not leak.
+    expect(press(INITIAL_OUTPUT_VIM_STATE, key('d'), key('g'), key('g')).command).toEqual({
+      type: 'goto',
+      target: 'first',
+      line: null,
+    })
+  })
+
+  it('treats Ctrl+[ like Escape and leaves it to Monaco', () => {
+    expect(reduceOutputVimKey(INITIAL_OUTPUT_VIM_STATE, key('[', { ctrl: true })).handled).toBe(
+      false,
+    )
+  })
+
+  it('shares the file-editor count rules: the operator-less count multiplies nothing', () => {
+    expect(press(INITIAL_OUTPUT_VIM_STATE, key('1'), key('0'), key('0'), key('G')).command).toEqual(
+      { type: 'goto', target: 'last', line: 100 },
+    )
+  })
+  it('rejects Visual mode: v / V / Ctrl+V are swallowed and never leave the state in Visual', () => {
+    for (const stroke of [key('v'), key('V'), key('v', { ctrl: true })]) {
+      const result = reduceOutputVimKey(INITIAL_OUTPUT_VIM_STATE, stroke)
+      expect(result.handled).toBe(true)
+      expect(result.command).toBeNull()
+      expect(result.state.mode).toBe('normal')
+    }
+    // j after v still moves as a plain Normal-mode command.
+    expect(press(INITIAL_OUTPUT_VIM_STATE, key('v'), key('j')).command).toEqual({
+      type: 'move',
+      direction: 'down',
+      count: 1,
+    })
   })
 })

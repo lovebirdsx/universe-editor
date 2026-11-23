@@ -21,10 +21,9 @@ import {
   localize,
 } from '@universe-editor/platform'
 import { useOptionalService, useService } from '../useService.js'
-import { registerVimSurface } from '@universe-editor/workbench-ui'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
-import { createVimEditorController } from './vim/vimEditorController.js'
+import { attachVim, type VimAttachment } from './vim/attachVim.js'
 import { editorVimSurfaceKey } from './vim/vimSurfaceKeys.js'
 import { IVimInputMethodService } from '../../../shared/ipc/vimInputMethodService.js'
 import { IVimModeService } from '../../services/vim/vimModeService.js'
@@ -100,6 +99,9 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   // leaving the set-model effect's later flush reading a dead editor (empty state →
   // scroll reset when switching diff↔file and back).
   const viewStateRef = useRef<IDisposable | null>(null)
+  // The Vim attachment must go before the editor it observes: React runs the
+  // create-effect cleanup (which disposes the editor) ahead of the set-model one.
+  const vimRef = useRef<VimAttachment | null>(null)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
 
   // Load Monaco on demand.
@@ -140,6 +142,8 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       // this one on unmount and would otherwise flush against a dead editor.
       viewStateRef.current?.dispose()
       viewStateRef.current = null
+      vimRef.current?.dispose()
+      vimRef.current = null
       hoverGuard.dispose()
       ed.dispose()
       diffEditorRef.current = null
@@ -247,11 +251,10 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     // editable (live working-tree) diff is a text surface: a read-only snapshot
     // diff would report Insert mode while every keystroke was dropped.
     const vimSurfaceKey = (): string => editorVimSurfaceKey(group?.id, diffInput.id)
-    let vimController: ReturnType<typeof createVimEditorController> | undefined
-    let vimRegistration: { dispose(): void } | undefined
+    let vim: VimAttachment | undefined
     if (modifiedEditable && vimModeService !== undefined && vimInputMethodService !== undefined) {
       const modifiedEditor = ed.getModifiedEditor()
-      vimController = createVimEditorController({
+      vim = attachVim({
         editor: modifiedEditor,
         surfaceKey: vimSurfaceKey,
         configService,
@@ -260,6 +263,8 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
         inputMethodService: vimInputMethodService,
         getLineHeight: () =>
           modifiedEditor.getOption(MonacoLoader.get().editor.EditorOption.lineHeight),
+        isReadOnly: () =>
+          modifiedEditor.getOption(MonacoLoader.get().editor.EditorOption.readOnly) === true,
         ...(commandService !== undefined
           ? {
               executeCommand: (id: string, args?: unknown) =>
@@ -267,17 +272,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
             }
           : {}),
       })
-      vimRegistration = registerVimSurface({
-        get id() {
-          return vimSurfaceKey()
-        },
-        kind: 'editor',
-        getElement: () => modifiedEditor.getContainerDomNode(),
-        focus: 'within',
-        getSurfaceKey: vimSurfaceKey,
-        defaultMode: 'normal',
-        actions: { handleStroke: (event) => vimController?.handleKeyDown(event) ?? false },
-      })
+      vimRef.current = vim
     }
     // Focus does not move on an in-place model swap, so republish the surface
     // while the modified side owns the keyboard (mode memory is per input).
@@ -319,8 +314,8 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
         viewStateRef.current = null
       }
       DiffEditorRegistry.unregister(diffInput, ed)
-      vimRegistration?.dispose()
-      vimController?.dispose()
+      vim?.dispose()
+      if (vimRef.current === vim) vimRef.current = null
       if (group !== null && groupsService.groups?.includes?.(group) === false) {
         // The whole group is going away (its closeAll event carries no editor).
         vimModeService?.forgetSurface(vimSurfaceKey())

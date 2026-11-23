@@ -3,9 +3,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { linewiseRange, resolveOperatorRange } from '../vimOperators.js'
+import { linewiseOperatorRange, resolveOperatorRange } from '../vimOperators.js'
 
-describe('linewiseRange', () => {
+const linewiseRange = (lines: string[], start: number, end: number) =>
+  linewiseOperatorRange(lines, start, end).range
+
+describe('linewise ranges', () => {
   it('includes the trailing break for a middle line', () => {
     expect(linewiseRange(['a', 'b', 'c'], 1, 1)).toEqual({
       startLineNumber: 1,
@@ -137,20 +140,58 @@ describe('resolveOperatorRange', () => {
     })
   })
 
-  it('keeps the blank paragraph line for d}/d{', () => {
+  it('makes d} linewise from the start of a paragraph and spares the blank line', () => {
     const paragraphs = ['a', '', 'b', '', 'c']
-    expect(resolveOperatorRange(paragraphs, { line: 1, column: 1 }, '}', 0)?.range).toEqual({
-      startLineNumber: 1,
-      startColumn: 1,
-      endLineNumber: 2,
-      endColumn: 1,
+    expect(resolveOperatorRange(paragraphs, { line: 1, column: 1 }, '}', 0)).toMatchObject({
+      linewise: true,
+      range: { startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 1 },
     })
-    expect(resolveOperatorRange(paragraphs, { line: 3, column: 1 }, '{', 0)?.range).toEqual({
-      startLineNumber: 3,
+  })
+
+  it('makes d{ on the first line after a blank take that blank line (Vim exclusive-to-linewise)', () => {
+    const paragraphs = ['a', '', 'b', '', 'c']
+    expect(resolveOperatorRange(paragraphs, { line: 3, column: 1 }, '{', 0)).toMatchObject({
+      linewise: true,
+      range: { startLineNumber: 2, startColumn: 1, endLineNumber: 3, endColumn: 1 },
+    })
+  })
+
+  it('keeps d} charwise from the middle of a line: only up to the end of the paragraph', () => {
+    const lines = ['abc def', 'ghi', '', 'x']
+    expect(resolveOperatorRange(lines, { line: 1, column: 5 }, '}', 0)).toMatchObject({
+      linewise: false,
+      range: { startLineNumber: 1, startColumn: 5, endLineNumber: 2, endColumn: 4 },
+    })
+    expect(resolveOperatorRange(lines, { line: 1, column: 5 }, '}', 0, 'y')?.linewise).toBe(false)
+    expect(resolveOperatorRange(lines, { line: 1, column: 5 }, '}', 0, 'c')?.linewise).toBe(false)
+  })
+
+  it('keeps d{ charwise when the cursor is mid-line: from the blank line to the cursor', () => {
+    const lines = ['a', '', 'bcd']
+    expect(resolveOperatorRange(lines, { line: 3, column: 3 }, '{', 0)).toMatchObject({
+      linewise: false,
+      range: { startLineNumber: 2, startColumn: 1, endLineNumber: 3, endColumn: 3 },
+    })
+  })
+
+  it('d} with no blank line below runs to the last character, inclusive', () => {
+    expect(resolveOperatorRange(['ab', 'cd'], { line: 1, column: 2 }, '}', 0)?.range).toEqual({
+      startLineNumber: 1,
+      startColumn: 2,
+      endLineNumber: 2,
+      endColumn: 3,
+    })
+  })
+
+  it('counts paragraphs: 2} skips the first blank run, and fails past the buffer', () => {
+    const lines = ['a', '', 'b', '', 'c']
+    expect(resolveOperatorRange(lines, { line: 1, column: 1 }, '}', 2)?.range).toEqual({
+      startLineNumber: 1,
       startColumn: 1,
       endLineNumber: 4,
       endColumn: 1,
     })
+    expect(resolveOperatorRange(lines, { line: 1, column: 1 }, '}', 4)).toBeNull()
   })
 
   it('deletes to line start without including the cursor for 0/^', () => {
@@ -179,5 +220,61 @@ describe('resolveOperatorRange', () => {
 
   it('returns null for paging motions', () => {
     expect(resolveOperatorRange(['a'], { line: 1, column: 1 }, 'pageDown', 1)).toBeNull()
+  })
+})
+
+describe('resolveOperatorRange: cw / cW / dh / dl / > / <', () => {
+  const origin = { line: 1, column: 1 }
+  const single = (startColumn: number, endColumn: number) => ({
+    startLineNumber: 1,
+    startColumn,
+    endLineNumber: 1,
+    endColumn,
+  })
+
+  it('makes cw on a non-blank act like ce and keep the trailing blank', () => {
+    expect(resolveOperatorRange(['foo bar'], origin, 'w', 1, 'c')?.range).toEqual(single(1, 4))
+    expect(resolveOperatorRange(['foo bar'], { line: 1, column: 2 }, 'w', 1, 'c')?.range).toEqual(
+      single(2, 4),
+    )
+    // d keeps the plain exclusive dw range.
+    expect(resolveOperatorRange(['foo bar'], origin, 'w', 1, 'd')?.range).toEqual(single(1, 5))
+  })
+
+  it('honours a count and the big-word variant for cw / cW', () => {
+    expect(resolveOperatorRange(['foo bar baz'], origin, 'w', 2, 'c')?.range).toEqual(single(1, 8))
+    expect(resolveOperatorRange(['a.b c'], origin, 'W', 1, 'c')?.range).toEqual(single(1, 4))
+    expect(resolveOperatorRange(['a.b c'], origin, 'w', 1, 'c')?.range).toEqual(single(1, 2))
+  })
+
+  it('keeps cw on a blank as a plain word-forward change', () => {
+    expect(resolveOperatorRange(['a   b'], { line: 1, column: 2 }, 'w', 1, 'c')?.range).toEqual(
+      single(2, 5),
+    )
+  })
+
+  it('handles dh and dl, including dl on the last character', () => {
+    expect(resolveOperatorRange(['abc'], { line: 1, column: 3 }, 'h', 1)?.range).toEqual(
+      single(2, 3),
+    )
+    expect(resolveOperatorRange(['abc'], { line: 1, column: 1 }, 'l', 2)?.range).toEqual(
+      single(1, 3),
+    )
+    expect(resolveOperatorRange(['abc'], { line: 1, column: 3 }, 'l', 1)?.range).toEqual(
+      single(3, 4),
+    )
+    expect(resolveOperatorRange(['abc'], { line: 1, column: 1 }, 'h', 1)).toBeNull()
+  })
+
+  it('does not stall or cross lines on dl over an empty line', () => {
+    expect(resolveOperatorRange(['', 'x'], origin, 'l', 1)).toBeNull()
+  })
+
+  it('treats > and < as linewise operators over j', () => {
+    for (const operator of ['>', '<'] as const) {
+      const target = resolveOperatorRange(['a', 'b', 'c'], origin, 'j', 1, operator)
+      expect(target?.linewise).toBe(true)
+      expect(target?.range.startLineNumber).toBe(1)
+    }
   })
 })

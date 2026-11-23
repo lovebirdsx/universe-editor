@@ -6,9 +6,27 @@ import { describe, expect, it } from 'vitest'
 import {
   clampNormalPosition,
   classifyChar,
+  createPlainScreenOps,
   firstNonBlankColumn,
-  resolveMotion,
+  getVimMotion,
+  toLineReader,
+  type VimLines,
 } from '../vimMotions.js'
+import type { VimMotion, VimPosition } from '../vimTypes.js'
+
+/** Resolve a motion through the public registry, as the controller does. */
+function resolveMotion(
+  lines: VimLines,
+  from: VimPosition,
+  motion: VimMotion,
+  count: number,
+): VimPosition | null {
+  const reader = toLineReader(lines)
+  return getVimMotion(motion).resolve(
+    { lines: reader, from, screen: createPlainScreenOps(reader) },
+    count,
+  )
+}
 
 describe('classifyChar', () => {
   it('splits blanks, keywords and punctuation', () => {
@@ -128,5 +146,34 @@ describe('resolveMotion', () => {
   it('returns null for paging motions (the controller hands those to Monaco)', () => {
     expect(resolveMotion(lines, { line: 1, column: 1 }, 'pageDown', 1)).toBeNull()
     expect(resolveMotion(lines, { line: 1, column: 1 }, 'halfPageUp', 1)).toBeNull()
+  })
+})
+
+describe('resolveMotion: empty lines and word boundaries', () => {
+  const lines = ['foo', '', 'bar']
+
+  it('stops w on an empty line, as Vim does', () => {
+    expect(resolveMotion(lines, { line: 1, column: 1 }, 'w', 1)).toEqual({ line: 2, column: 1 })
+    expect(resolveMotion(lines, { line: 2, column: 1 }, 'w', 1)).toEqual({ line: 3, column: 1 })
+  })
+
+  it('stops b on an empty line', () => {
+    expect(resolveMotion(lines, { line: 3, column: 1 }, 'b', 1)).toEqual({ line: 2, column: 1 })
+    expect(resolveMotion(lines, { line: 2, column: 1 }, 'b', 1)).toEqual({ line: 1, column: 1 })
+  })
+
+  it('skips an empty line with e (it has no word end)', () => {
+    expect(resolveMotion(lines, { line: 1, column: 3 }, 'e', 1)).toEqual({ line: 3, column: 3 })
+  })
+
+  it('treats a run of blank-only lines as separate empty-line words only for w/b', () => {
+    const blanks = ['a', '', '', 'b']
+    expect(resolveMotion(blanks, { line: 1, column: 1 }, 'w', 2)).toEqual({ line: 3, column: 1 })
+  })
+
+  it('treats W like w but over whitespace-delimited words', () => {
+    const text = ['foo.bar baz']
+    expect(resolveMotion(text, { line: 1, column: 1 }, 'W', 1)).toEqual({ line: 1, column: 9 })
+    expect(resolveMotion(text, { line: 1, column: 1 }, 'w', 1)).toEqual({ line: 1, column: 4 })
   })
 })

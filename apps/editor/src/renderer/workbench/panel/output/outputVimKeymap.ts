@@ -1,23 +1,27 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  A deliberately reduced Vim keymap for the read-only Output editor. It shares
- *  the Normal-mode scrolling vocabulary with file editors but none of their
- *  editing / search / Insert state — the buffer can never be modified, so the
- *  full `reduceVimKey` would only add commands this surface must not run.
+ *  The read-only Output editor's keymap: a projection of the file editor's
+ *  `reduceVimKey`. Counts, `g` prefixes, motion keys and Ctrl chords are parsed by
+ *  the one shared reducer, so the two surfaces cannot drift; this module only
+ *  decides which of the resulting commands a read-only buffer may run (cursor
+ *  moves, `gg`/`G`, paging, viewport scroll) and swallows the rest. To let Output
+ *  run one more motion, add a `case` in `project` — never a second key table.
  *--------------------------------------------------------------------------------------------*/
 
-export interface OutputVimState {
-  /** Accumulated count; 0 means "none entered". */
-  readonly count: number
-  /** `g` was pressed and we are waiting for the second `g`. */
-  readonly pendingG: boolean
-}
+import { isFunctionKeyName } from '../../editor/vim/vimKeyUtils.js'
+import { idle, reduceVimKey } from '../../editor/vim/vimKeymap.js'
+import {
+  INITIAL_VIM_STATE,
+  type VimCommand,
+  type VimKeyInput,
+  type VimState,
+} from '../../editor/vim/vimTypes.js'
 
-export const INITIAL_OUTPUT_VIM_STATE: OutputVimState = {
-  count: 0,
-  pendingG: false,
-}
+export type OutputVimState = VimState
+export type OutputVimKeyInput = VimKeyInput
+
+export const INITIAL_OUTPUT_VIM_STATE: OutputVimState = INITIAL_VIM_STATE
 
 export type OutputVimCommand =
   | { readonly type: 'move'; readonly direction: 'up' | 'down'; readonly count: number }
@@ -35,14 +39,6 @@ export type OutputVimCommand =
   /** `gg` / `G`; a count is a target line number, like Vim. */
   | { readonly type: 'goto'; readonly target: 'first' | 'last'; readonly line: number | null }
 
-export interface OutputVimKeyInput {
-  readonly key: string
-  readonly ctrl: boolean
-  readonly alt: boolean
-  readonly meta: boolean
-  readonly shift: boolean
-}
-
 export interface OutputVimKeyResult {
   readonly state: OutputVimState
   readonly command: OutputVimCommand | null
@@ -50,104 +46,73 @@ export interface OutputVimKeyResult {
   readonly handled: boolean
 }
 
-function emit(command: OutputVimCommand): OutputVimKeyResult {
-  return { state: INITIAL_OUTPUT_VIM_STATE, command, handled: true }
+/** The subset of reducer commands a read-only buffer can execute; `null` means "swallow". */
+function project(command: VimCommand): OutputVimCommand | null {
+  switch (command.type) {
+    case 'scroll-viewport':
+      return { type: 'scroll-viewport', direction: command.direction, count: command.count }
+    case 'motion': {
+      const count = Math.max(1, command.count)
+      switch (command.motion) {
+        case 'j':
+          return { type: 'move', direction: 'down', count }
+        case 'k':
+          return { type: 'move', direction: 'up', count }
+        case 'gg':
+        case 'G':
+          return {
+            type: 'goto',
+            target: command.motion === 'gg' ? 'first' : 'last',
+            line: command.count > 0 ? command.count : null,
+          }
+        case 'pageDown':
+          return { type: 'page', direction: 'down', fraction: 'full', count }
+        case 'pageUp':
+          return { type: 'page', direction: 'up', fraction: 'full', count }
+        case 'halfPageDown':
+          return { type: 'page', direction: 'down', fraction: 'half', count }
+        case 'halfPageUp':
+          return { type: 'page', direction: 'up', fraction: 'half', count }
+        default:
+          return null
+      }
+    }
+    default:
+      return null
+  }
 }
 
-function swallow(): OutputVimKeyResult {
-  return { state: INITIAL_OUTPUT_VIM_STATE, command: null, handled: true }
-}
-
-/** Same rule as the file-editor keymap: `ArrowDown` is a key name, `😀` is text. */
-function isFunctionKeyName(key: string): boolean {
-  return key.length > 1 && /^[A-Za-z][A-Za-z0-9]*$/.test(key)
+function passthrough(): OutputVimKeyResult {
+  return { state: idle(INITIAL_OUTPUT_VIM_STATE), command: null, handled: false }
 }
 
 export function reduceOutputVimKey(
   state: OutputVimState,
   input: OutputVimKeyInput,
 ): OutputVimKeyResult {
-  if (input.ctrl && !input.alt && !input.meta) {
-    if (!input.shift) {
-      const count = Math.max(1, state.count)
-      switch (input.key.toLowerCase()) {
-        case 'e':
-          return emit({ type: 'scroll-viewport', direction: 'down', count })
-        case 'y':
-          return emit({ type: 'scroll-viewport', direction: 'up', count })
-        case 'd':
-          return emit({ type: 'page', direction: 'down', fraction: 'half', count })
-        case 'u':
-          return emit({ type: 'page', direction: 'up', fraction: 'half', count })
-        case 'f':
-          return emit({ type: 'page', direction: 'down', fraction: 'full', count })
-        case 'b':
-          return emit({ type: 'page', direction: 'up', fraction: 'full', count })
-      }
-    }
-    // Other chords belong to the workbench / Monaco; a pending count does not
-    // survive the detour.
-    return { state: INITIAL_OUTPUT_VIM_STATE, command: null, handled: false }
-  }
-  if (input.alt || input.meta) {
-    return { state: INITIAL_OUTPUT_VIM_STATE, command: null, handled: false }
-  }
+  // Escape stays with Monaco (the find widget's own Escape must close it), and
+  // function keys (arrows, PageUp/Down, F-keys) keep their native meaning.
+  const isEscape = input.key === 'Escape' || (input.ctrl && input.key === '[')
+  if (isEscape || isFunctionKeyName(input.key)) return passthrough()
 
-  const key = input.key
+  const result = reduceVimKey(state, input)
+  if (!result.handled) return passthrough()
 
-  // Escape stays with Monaco: the find widget's own Escape must close it.
-  if (key === 'Escape') return { state: INITIAL_OUTPUT_VIM_STATE, command: null, handled: false }
+  // An operator, or a prefix other than `g`, would wait for a key this surface
+  // can never act on: drop it so the next stroke starts clean.
+  const next = result.state
+  // A read-only buffer has no Visual / Insert mode: `v` would leave the state in a
+  // mode whose keys (`d`, `y`, `<Esc>`) this surface cannot run, so refuse the switch.
+  if (next.mode !== 'normal') {
+    return { state: { ...idle(next), mode: 'normal' }, command: null, handled: true }
+  }
+  const dangling =
+    next.pendingOperator !== null || (next.pending !== null && next.pending.kind !== 'g')
+  if (dangling) return { state: idle(next), command: null, handled: true }
 
-  if (state.pendingG) {
-    if (key === 'g') {
-      return emit({
-        type: 'goto',
-        target: 'first',
-        line: state.count > 0 ? state.count : null,
-      })
-    }
-    if (isFunctionKeyName(key)) {
-      return { state: INITIAL_OUTPUT_VIM_STATE, command: null, handled: false }
-    }
-    return swallow()
+  return {
+    state: next,
+    command: result.command === null ? null : project(result.command),
+    handled: true,
   }
-
-  if (key === 'g') return { state: { ...state, pendingG: true }, command: null, handled: true }
-  if (key === 'G') {
-    return emit({
-      type: 'goto',
-      target: 'last',
-      line: state.count > 0 ? state.count : null,
-    })
-  }
-  if (key === 'j' || key === 'k') {
-    return emit({
-      type: 'move',
-      direction: key === 'j' ? 'down' : 'up',
-      count: Math.max(1, state.count),
-    })
-  }
-
-  if (key >= '1' && key <= '9') {
-    return {
-      state: { count: state.count * 10 + Number(key), pendingG: false },
-      command: null,
-      handled: true,
-    }
-  }
-  if (key === '0' && state.count > 0) {
-    return {
-      state: { count: state.count * 10, pendingG: false },
-      command: null,
-      handled: true,
-    }
-  }
-
-  // Function keys (arrows, PageUp/Down, F-keys) keep their native meaning.
-  if (isFunctionKeyName(key)) {
-    return { state: INITIAL_OUTPUT_VIM_STATE, command: null, handled: false }
-  }
-  // Every other printable key is swallowed so a stray `d` cannot start an
-  // operator the read-only surface has no business executing.
-  return swallow()
 }
