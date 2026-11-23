@@ -13,6 +13,7 @@
 
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/electronApp.js'
+import { setVimEnabled } from '../pages/vimHelpers.js'
 
 const OUTPUT_MARKER = '__E2E_VIM_TERMINAL_OUTPUT__'
 const INSERT_MARKER = '__E2E_VIM_TERMINAL_INSERT__'
@@ -25,22 +26,6 @@ const CLIPBOARD_SENTINEL = '__E2E_VIM_TERMINAL_SENTINEL__'
  */
 async function viewportY(page: Page, id: string): Promise<number> {
   return page.evaluate((terminalId) => window.__E2E__!.terminalViewportY(terminalId), id)
-}
-
-async function setVimEnabled(page: Page, enabled: boolean): Promise<void> {
-  await page.evaluate(() => window.__E2E__!.whenUserSettingsInitialized())
-  await page.evaluate(
-    (value) => window.__E2E__!.runCommand('_workbench.updateConfiguration', 'vim.enabled', value),
-    enabled,
-  )
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (key) => window.__E2E__!.runCommand('_workbench.getConfiguration', key),
-        'vim.enabled',
-      ),
-    )
-    .toBe(enabled)
 }
 
 test.describe('@p1 vim terminal normal mode', () => {

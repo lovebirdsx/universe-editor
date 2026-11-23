@@ -12,22 +12,7 @@
 
 import type { Page } from '@playwright/test'
 import { expect, test } from '../fixtures/sharedApp.js'
-
-async function setVimModeEnabled(page: Page, enabled: boolean): Promise<void> {
-  await page.evaluate(() => window.__E2E__!.whenUserSettingsInitialized())
-  await page.evaluate(
-    (value) => window.__E2E__!.runCommand('_workbench.updateConfiguration', 'vim.enabled', value),
-    enabled,
-  )
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (key) => window.__E2E__!.runCommand('_workbench.getConfiguration', key),
-        'vim.enabled',
-      ),
-    )
-    .toBe(enabled)
-}
+import { setVimEnabled } from '../pages/vimHelpers.js'
 
 function focusedRowKey(page: Page): Promise<string | undefined> {
   return page.evaluate(
@@ -47,7 +32,7 @@ test.describe('@p1 vim settings', () => {
   test.beforeEach(async ({ page, workbench }) => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     await workbench.runCommand('workbench.action.openSettings')
     await expect(page.locator('input[type=search]')).toBeFocused()
   })

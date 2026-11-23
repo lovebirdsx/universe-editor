@@ -11,23 +11,8 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { setVimEnabled } from '../pages/vimHelpers.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
-
-async function setVimModeEnabled(page: Page, enabled: boolean): Promise<void> {
-  await page.evaluate(() => window.__E2E__!.whenUserSettingsInitialized())
-  await page.evaluate(
-    (value) => window.__E2E__!.runCommand('_workbench.updateConfiguration', 'vim.enabled', value),
-    enabled,
-  )
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (key) => window.__E2E__!.runCommand('_workbench.getConfiguration', key),
-        'vim.enabled',
-      ),
-    )
-    .toBe(enabled)
-}
 
 const activeEditorUri = (page: Page) => page.evaluate(() => window.__E2E__!.getActiveEditorUri())
 
@@ -51,7 +36,7 @@ test.describe('vim tabs and container headers', () => {
     const files = ['a.txt', 'b.txt', 'c.txt'].map((name) => join(dir, name))
     for (const file of files) writeFileSync(file, `${file}\n`, 'utf8')
     await workbench.openWorkspace(dir)
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
 
     await openEditors(page, files)
     await expect.poll(() => activeEditorUri(page)).toContain('c.txt')

@@ -42,6 +42,13 @@ import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
+import {
+  firstVisibleLine,
+  foldingState,
+  setText,
+  text,
+  visibleLineCount,
+} from '../pages/vimHelpers.js'
 
 const IS_LINUX = process.platform === 'linux'
 
@@ -206,21 +213,8 @@ interface RegisteredBinding {
   readonly weight: number
 }
 
-const text = (page: Page) => page.evaluate(() => window.__E2E__!.getActiveEditorText())
 const selCount = (page: Page) =>
   page.evaluate(() => window.__E2E__!.getActiveEditorSelectionCount())
-const firstVisibleLine = (page: Page) =>
-  page.evaluate(() => window.__E2E__!.getActiveEditorFirstVisibleLine())
-const visibleLineCount = (page: Page) =>
-  page.evaluate(() => window.__E2E__!.getActiveEditorVisibleLineCount())
-const foldingState = (page: Page) =>
-  page.evaluate(() => window.__E2E__!.getActiveEditorFoldingState())
-
-async function setText(page: Page, body: string): Promise<void> {
-  await expect
-    .poll(() => page.evaluate((t) => window.__E2E__!.setActiveEditorText(t), body))
-    .toBe(true)
-}
 
 async function registry(page: Page): Promise<readonly RegisteredBinding[]> {
   return page.evaluate(() => window.__E2E__!.getAllKeybindings())

@@ -12,26 +12,10 @@ import { join } from 'node:path'
 import type { ElectronApplication, Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
+import { focusExplorerTree, setVimEnabled, statusIcon } from '../pages/vimHelpers.js'
 
-const RESTORE_WINDOW_MS = 1700
 const BODY = 'alpha beta\ngamma delta\n'
 const TOGGLE_PANEL = 'workbench.action.togglePanel'
-
-async function setVimModeEnabled(page: Page, enabled: boolean): Promise<void> {
-  await page.evaluate(() => window.__E2E__!.whenUserSettingsInitialized())
-  await page.evaluate(
-    (value) => window.__E2E__!.runCommand('_workbench.updateConfiguration', 'vim.enabled', value),
-    enabled,
-  )
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (key) => window.__E2E__!.runCommand('_workbench.getConfiguration', key),
-        'vim.enabled',
-      ),
-    )
-    .toBe(enabled)
-}
 
 async function writeUserKeybindings(
   electronApp: ElectronApplication,
@@ -53,23 +37,6 @@ async function waitForKeybinding(page: Page, key: string, command: string): Prom
 
 async function panelVisible(page: Page): Promise<boolean> {
   return page.evaluate(() => window.__E2E__!.getContextKey('panelVisible') as boolean)
-}
-
-async function statusIcon(page: Page): Promise<string | undefined> {
-  const entries = await page.evaluate(() => window.__E2E__!.getStatusBarEntries())
-  return entries.find((entry) => entry.entryId === 'vim-mode')?.icon
-}
-
-async function focusTree(page: Page): Promise<void> {
-  const alpha = page.locator('[role="treeitem"]', { hasText: 'alpha.txt' })
-  await expect(alpha).toBeVisible({ timeout: 5000 })
-  await alpha.click()
-  await page.waitForTimeout(RESTORE_WINDOW_MS)
-  await alpha.click()
-  await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
-  await expect
-    .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('focusedView')))
-    .toBe('workbench.view.explorer.tree')
 }
 
 test.describe('@p0 vim priority', () => {
@@ -98,13 +65,13 @@ test.describe('@p0 vim priority', () => {
     test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     const dir = mkTempDir('universe-editor-e2e-vim-priority-j-')
     for (const name of ['alpha.txt', 'beta.txt']) {
       writeFileSync(join(dir, name), name, 'utf8')
     }
     await workbench.openWorkspace(dir)
-    await focusTree(page)
+    await focusExplorerTree(page)
 
     await writeUserKeybindings(electronApp, [
       {
@@ -132,7 +99,7 @@ test.describe('@p0 vim priority', () => {
     test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     const dir = mkTempDir('universe-editor-e2e-vim-priority-i-')
     const filePath = join(dir, 'plain.txt')
     writeFileSync(filePath, BODY, 'utf8')
@@ -163,7 +130,7 @@ test.describe('@p0 vim priority', () => {
     test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     const dir = mkTempDir('universe-editor-e2e-vim-priority-reserved-')
     const filePath = join(dir, 'plain.txt')
     writeFileSync(filePath, BODY, 'utf8')
@@ -194,7 +161,8 @@ test.describe('@p0 vim priority', () => {
       )
       .toEqual(['escape', 'ctrl+[', 'a', ':', '/', '?', '<leader>'])
 
-    await page.keyboard.press('Escape')
+    // The editor is already Normal; an idle Escape would move focus to the tab strip.
+    await expect.poll(() => workbench.getContextKey<boolean>('editorTextFocus')).toBe(true)
     await expect.poll(() => statusIcon(page)).toBe('vim-normal')
     const before = await panelVisible(page)
     const textBefore = await page.evaluate(() => window.__E2E__!.getActiveEditorText())

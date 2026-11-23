@@ -8,33 +8,17 @@
 
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { setVimEnabled } from '../pages/vimHelpers.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const HTML_DOC = '<!DOCTYPE html><html><body><h1 id="title">Hello</h1></body></html>'
-
-async function setVimModeEnabled(page: Page, enabled: boolean): Promise<void> {
-  await page.evaluate(() => window.__E2E__!.whenUserSettingsInitialized())
-  await page.evaluate(
-    (value) => window.__E2E__!.runCommand('_workbench.updateConfiguration', 'vim.enabled', value),
-    enabled,
-  )
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (key) => window.__E2E__!.runCommand('_workbench.getConfiguration', key),
-        'vim.enabled',
-      ),
-    )
-    .toBe(enabled)
-}
 
 test.describe('@p1 vim webview', () => {
   test('focus inside the html preview iframe keeps Vim out', async ({ page, workbench }) => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
 
     const dir = mkTempDir('universe-editor-e2e-vimwebview-')
     const htmlFile = join(dir, 'index.html')

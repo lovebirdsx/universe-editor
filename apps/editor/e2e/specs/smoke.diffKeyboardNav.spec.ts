@@ -11,6 +11,7 @@ import { expect, test } from '../fixtures/sharedApp.js'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mkTempDir } from '@universe-editor/e2e-harness'
+import { focusExplorerTree } from '../pages/vimHelpers.js'
 
 const LINE_COUNT = 120
 const FIRST_CHANGE_LINE = 40
@@ -88,10 +89,7 @@ test.describe('@p1 diff keyboard navigation', () => {
     // Focus the Explorer tree first — a `list` surface. Single-clicking a row
     // opens the file, so open the diff afterwards with `preserveFocus` to keep
     // the tree focused while the diff becomes the active editor.
-    const row = page.locator('[role="treeitem"]', { hasText: 'a.txt' })
-    await expect(row).toBeVisible({ timeout: 5000 })
-    await row.click()
-    await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
+    await focusExplorerTree(page, 'a.txt')
 
     await page.evaluate(
       ([original, modified]) =>

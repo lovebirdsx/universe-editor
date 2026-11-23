@@ -10,7 +10,7 @@ Playwright + `_electron` 冒烟栈。跑的是 `out/` 打包产物，通过 `win
 
 ```
 fixtures/     两套 Electron 启动 fixture 的薄 shim + 扩展专属 fixture(perforce/swarm)
-pages/        WorkbenchPO.js 薄 shim，re-export 自 harness
+pages/        WorkbenchPO 薄 shim + vimHelpers(Vim 驱动)
 specs/        smoke.*.spec.ts(+ 1 个 visual.*.spec.ts)
 baselines/    视觉回归基线截图(仅 Linux CI 生成，勿在本机更新)
 test-results/ 运行产物(trace/video/screenshot)，勿提交

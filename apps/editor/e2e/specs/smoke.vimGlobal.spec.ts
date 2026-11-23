@@ -12,34 +12,16 @@
 
 import { writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
-
-/**
- * A workspace change opens a ~1.5s window in which the workbench restores focus
- * to the active editor. Interactions that must land in the Explorer wait it out
- * first — same constant as smoke.explorerSelection.
- */
-const RESTORE_WINDOW_MS = 1700
+import {
+  focusExplorerTree,
+  selectedTreeRow,
+  setVimEnabled,
+  statusIcon,
+} from '../pages/vimHelpers.js'
 
 const BODY = 'alpha beta\ngamma delta\n'
-
-async function setVimModeEnabled(page: Page, enabled: boolean): Promise<void> {
-  await page.evaluate(() => window.__E2E__!.whenUserSettingsInitialized())
-  await page.evaluate(
-    (value) => window.__E2E__!.runCommand('_workbench.updateConfiguration', 'vim.enabled', value),
-    enabled,
-  )
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (key) => window.__E2E__!.runCommand('_workbench.getConfiguration', key),
-        'vim.enabled',
-      ),
-    )
-    .toBe(enabled)
-}
 
 function seedTreeFiles(dir: string): void {
   for (const name of ['alpha.txt', 'beta.txt', 'gamma.txt']) {
@@ -47,53 +29,39 @@ function seedTreeFiles(dir: string): void {
   }
 }
 
-async function focusExplorerTree(page: Page): Promise<void> {
-  const alpha = page.locator('[role="treeitem"]', { hasText: 'alpha.txt' })
-  await expect(alpha).toBeVisible({ timeout: 5000 })
-  await alpha.click()
-  await page.waitForTimeout(RESTORE_WINDOW_MS)
-  await alpha.click()
-  await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
-  await expect(alpha).toHaveAttribute('aria-selected', 'true')
-}
-
-function selectedRow(page: Page) {
-  return page.locator('[role="treeitem"][aria-selected="true"]')
-}
-
 test.describe('@p0 vim global', () => {
   test('bare keys drive the Explorer tree with counts and gg/G', async ({ page, workbench }) => {
     test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     const dir = mkTempDir('universe-editor-e2e-vim-global-')
     seedTreeFiles(dir)
     await workbench.openWorkspace(dir)
     await focusExplorerTree(page)
 
     await page.keyboard.press('j')
-    await expect.poll(() => selectedRow(page).textContent()).toContain('beta.txt')
+    await expect.poll(() => selectedTreeRow(page).textContent()).toContain('beta.txt')
     await page.keyboard.press('j')
-    await expect.poll(() => selectedRow(page).textContent()).toContain('gamma.txt')
+    await expect.poll(() => selectedTreeRow(page).textContent()).toContain('gamma.txt')
     await page.keyboard.press('k')
-    await expect.poll(() => selectedRow(page).textContent()).toContain('beta.txt')
+    await expect.poll(() => selectedTreeRow(page).textContent()).toContain('beta.txt')
 
     await page.keyboard.press('G')
-    await expect.poll(() => selectedRow(page).textContent()).toContain('gamma.txt')
+    await expect.poll(() => selectedTreeRow(page).textContent()).toContain('gamma.txt')
     await page.keyboard.press('g')
     await page.keyboard.press('g')
-    await expect.poll(() => selectedRow(page).textContent()).toContain(basename(dir))
+    await expect.poll(() => selectedTreeRow(page).textContent()).toContain(basename(dir))
 
     // Visible order: workspace root, alpha, beta, gamma.
     await page.keyboard.press('3')
     await page.keyboard.press('j')
-    await expect.poll(() => selectedRow(page).textContent()).toContain('gamma.txt')
+    await expect.poll(() => selectedTreeRow(page).textContent()).toContain('gamma.txt')
 
     // An unmapped printable key is claimed by Vim: no selection change and no
     // leak into Quick Open / find.
     await page.keyboard.press('e')
-    await expect.poll(() => selectedRow(page).textContent()).toContain('gamma.txt')
+    await expect.poll(() => selectedTreeRow(page).textContent()).toContain('gamma.txt')
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
     await expect.poll(() => workbench.getContextKey<boolean>('findWidgetVisible')).toBe(false)
     await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
@@ -106,7 +74,7 @@ test.describe('@p0 vim global', () => {
     test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     const dir = mkTempDir('universe-editor-e2e-vim-leader-p-')
     seedTreeFiles(dir)
     await workbench.openWorkspace(dir)
@@ -129,7 +97,7 @@ test.describe('@p0 vim global', () => {
     test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     const dir = mkTempDir('universe-editor-e2e-vim-leader-e-')
     seedTreeFiles(dir)
     const filePath = join(dir, 'alpha.txt')
@@ -163,7 +131,7 @@ test.describe('@p0 vim global', () => {
     test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     const dir = mkTempDir('universe-editor-e2e-vim-input-')
     seedTreeFiles(dir)
     await workbench.openWorkspace(dir)
@@ -188,7 +156,7 @@ test.describe('@p0 vim global', () => {
     test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     const dir = mkTempDir('universe-editor-e2e-vim-editor-leader-')
     seedTreeFiles(dir)
     const filePath = join(dir, 'alpha.txt')
@@ -212,7 +180,7 @@ test.describe('@p0 vim global', () => {
     test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     const dir = mkTempDir('universe-editor-e2e-vim-off-')
     seedTreeFiles(dir)
     const filePath = join(dir, 'plain.txt')
@@ -220,7 +188,8 @@ test.describe('@p0 vim global', () => {
     await workbench.openWorkspace(dir)
     await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
     await expect.poll(() => workbench.getContextKey<boolean>('editorTextFocus')).toBe(true)
-    await setVimModeEnabled(page, false)
+    await setVimEnabled(page, false)
+    await expect.poll(() => statusIcon(page)).toBeUndefined()
 
     await expect
       .poll(() => page.evaluate((body) => window.__E2E__!.setActiveEditorText(body), BODY))

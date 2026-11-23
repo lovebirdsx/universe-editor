@@ -21,26 +21,11 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { setVimEnabled } from '../pages/vimHelpers.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 const POLL = { timeout: 15000 }
-
-async function setVimModeEnabled(page: Page, enabled: boolean): Promise<void> {
-  await page.evaluate(() => window.__E2E__!.whenUserSettingsInitialized())
-  await page.evaluate(
-    (value) => window.__E2E__!.runCommand('_workbench.updateConfiguration', 'vim.enabled', value),
-    enabled,
-  )
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (key) => window.__E2E__!.runCommand('_workbench.getConfiguration', key),
-        'vim.enabled',
-      ),
-    )
-    .toBe(enabled)
-}
 
 async function startEchoSessionWithOptions(page: Page): Promise<void> {
   await page.evaluate(([id, p, e]) => window.__E2E__!.installAcpEchoAgent(id, p, e), [
@@ -103,7 +88,7 @@ test.describe('@p1 vim chat', () => {
   test('timeline list surface, card menu and focus-input handoff', async ({ page, workbench }) => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     await startEchoSessionWithOptions(page)
     await page.evaluate(() => window.__E2E__!.sendAcpPrompt('first question'))
     await page.evaluate(() => window.__E2E__!.sendAcpPrompt('second question'))
@@ -153,7 +138,7 @@ test.describe('@p1 vim chat', () => {
   }) => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
-    await setVimModeEnabled(page, true)
+    await setVimEnabled(page, true)
     await startEchoSessionWithOptions(page)
 
     // Alt+1 is gated on the editor area holding focus with the session editor
