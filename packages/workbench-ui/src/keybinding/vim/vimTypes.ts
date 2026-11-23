@@ -16,7 +16,23 @@ export type VimSurfaceKind =
   | 'activityBar'
   | 'viewContainerTabs'
   | 'terminal'
+  /** Read-only scrollable content (markdown preview): only scroll keys, the rest passes through. */
+  | 'reader'
   | 'webview'
+
+/** Every surface kind, for validating user-authored `surfaces` lists. */
+export const VIM_SURFACE_KINDS: readonly VimSurfaceKind[] = [
+  'editor',
+  'list',
+  'menu',
+  'overlay',
+  'tabs',
+  'activityBar',
+  'viewContainerTabs',
+  'terminal',
+  'reader',
+  'webview',
+]
 
 export type VimSurfaceMode = 'normal' | 'insert' | 'terminal-normal'
 
@@ -28,7 +44,8 @@ export type VimPageDirection = 'up' | 'down'
  * One keymap entry. `keys` uses normalized Vim key tokens (`j`, `G`, `ctrl+d`,
  * `<leader>`); multi-token arrays are sequences (`gg`, `<leader>e`). The last
  * token may be a command, not a prefix. `surfaces` narrows the entry to the
- * listed surface kinds; omitted means every non-editor surface.
+ * listed surface kinds; omitted means every non-editor surface (plus the editor
+ * when the sequence starts with `<leader>`, the only keys it routes here).
  */
 export interface IVimKeymapEntry {
   readonly id: string
@@ -37,10 +54,19 @@ export interface IVimKeymapEntry {
   readonly args?: unknown
   readonly when?: string
   readonly surfaces?: readonly VimSurfaceKind[]
+  /**
+   * Set by the keymap merge for entries a surface declared itself: they only
+   * exist while that surface is active, so they win over kind-wide entries.
+   */
+  readonly scope?: 'surface'
 }
 
 export interface IVimSurfaceActions {
   readonly move?: (direction: VimDirection, count: number) => void
+  /**
+   * `gg` / `G`. `count` is 0 when no count was typed (go to the edge) and the
+   * typed number otherwise, so `1G` (item 1) and `G` (last item) differ.
+   */
   readonly first?: (count: number) => void
   readonly last?: (count: number) => void
   readonly page?: (direction: VimPageDirection, count: number) => void
@@ -59,12 +85,20 @@ export interface IVimSurfaceActions {
   readonly next?: (count: number) => void
   readonly previous?: (count: number) => void
   readonly escape?: (count: number) => void
+  /** `/`: open the host's own filter / find box (type-to-filter trees). */
+  readonly find?: () => void
   /**
    * Editor surfaces only. Receives the raw keydown while the surface owns the
    * keyboard; returning true means Vim consumed the stroke. The editor's Vim
    * core owns counts/operators/search, so it bypasses the sequence engine.
    */
   readonly handleStroke?: (event: KeyboardEvent) => boolean
+  /**
+   * Editor surfaces only. True while the editor core waits for a literal
+   * character (`r`, `f`/`t`, `"` register name…): the next key — even the leader
+   * — is that character and must reach `handleStroke`, not start a leader sequence.
+   */
+  readonly isAwaitingCharArg?: () => boolean
 }
 
 export interface IVimSurfaceRegistration {
@@ -83,6 +117,13 @@ export interface IVimSurfaceRegistration {
   readonly enabled?: boolean | undefined
   readonly defaultMode: VimSurfaceMode
   readonly actions: IVimSurfaceActions
+  /**
+   * Keys only this surface understands (a settings list's `/`, a graph's
+   * search). Merged after the kind-wide table and tried first; `surfaces` is
+   * ignored. Keep the array identity stable across renders (module constant or
+   * `useMemo`) so the keymap cache is not rebuilt on every stroke.
+   */
+  readonly keymap?: readonly IVimKeymapEntry[] | undefined
 }
 
 const DOM_KEY_TOKENS: Readonly<Record<string, string>> = {
@@ -129,4 +170,42 @@ export function vimKeyToken(event: VimKeyEventLike): string {
   if (event.shiftKey) parts.push('shift')
   parts.push(base)
   return parts.join('+')
+}
+
+const NAMED_KEY_TOKENS: ReadonlySet<string> = new Set(Object.values(DOM_KEY_TOKENS))
+const MODIFIER_ORDER = ['ctrl', 'alt', 'meta', 'shift'] as const
+
+/**
+ * Why `token` can never be produced by {@link vimKeyToken}, or undefined when
+ * it can. Keymap authors (`vim.keymap`) write tokens by hand, so a typo such as
+ * `Ctrl+D` or `shift+g` would otherwise bind a key nobody can press.
+ */
+export function describeInvalidVimToken(token: string): string | undefined {
+  if (token === '<leader>') return undefined
+  let rest = token
+  const modifiers: string[] = []
+  let order = 0
+  while (rest.length > 1) {
+    const index = MODIFIER_ORDER.findIndex((name) => rest.startsWith(`${name}+`))
+    if (index < 0) break
+    if (index < order) return `modifiers must be written in the order ctrl+alt+meta+shift`
+    const name = MODIFIER_ORDER[index]!
+    modifiers.push(name)
+    order = index + 1
+    rest = rest.slice(name.length + 1)
+  }
+  if (rest.length === 0) return 'empty key'
+  const single = [...rest].length === 1
+  if (!single && !NAMED_KEY_TOKENS.has(rest)) {
+    return `unknown key name '${rest}' (named keys are lowercase: ${[...NAMED_KEY_TOKENS].join(', ')})`
+  }
+  if (modifiers.length > 0 && single) {
+    const functional = modifiers.some((name) => name !== 'shift')
+    if (!functional) {
+      return `'${token}' is never produced; write the shifted character itself (e.g. 'G')`
+    }
+    if (rest !== rest.toLowerCase())
+      return `with ctrl/alt/meta the key is lowercase ('${rest.toLowerCase()}')`
+  }
+  return undefined
 }

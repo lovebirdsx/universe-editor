@@ -32,9 +32,9 @@ import {
   type Ref,
 } from 'react'
 import { VirtualList } from '../list/VirtualList.js'
-import { resolveIndexNavigation } from '../list/listKeyboard.js'
+import { LIST_PAGE_STEP, resolveIndexNavigation } from '../list/listKeyboard.js'
 import { hasTrustworthyViewport } from '../list/scrollElementLayout.js'
-import { scrollViewportByRows } from '../list/scrollViewport.js'
+import { createIndexListVimActions } from '../keybinding/vimIndexActions.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
@@ -56,7 +56,6 @@ import {
 } from '../dom/ownerWindow.js'
 import treeStyles from './Tree.module.css'
 
-const PAGE_STEP = 10
 const DEFAULT_ROW_HEIGHT = 22
 const DEFAULT_THRESHOLD = 200
 const DEFAULT_INDENT_WIDTH = 12
@@ -214,6 +213,11 @@ export interface ITreeProps<T> {
    * a per-instance auto key.
    */
   readonly vimSurfaceId?: string | undefined
+  /**
+   * Vim `/` (`list.find`): open the view's own filter box. Only views with a
+   * type-to-filter / find box pass it; without it `/` does nothing on this tree.
+   */
+  readonly onVimFind?: (() => void) | undefined
 }
 
 export function Tree<T>(props: ITreeProps<T>) {
@@ -241,6 +245,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     scrollStateKey,
     scrollStatePersister,
     vimSurfaceId,
+    onVimFind,
   } = props
 
   const { selectionVersion, structureVersion, visibleNodes } = useTreeModel(model)
@@ -760,6 +765,27 @@ export function Tree<T>(props: ITreeProps<T>) {
   // not claimed: they keep their global workbench meaning (toggle panel / chord
   // leader / replace / expand-line-selection), and movement uses the bare keys
   // above or the arrow keys.
+  const focusedVisibleIndex = (): number => {
+    const focusedId = model.focused
+    return focusedId ? model.getVisibleNodes().findIndex((n) => n.id === focusedId) : -1
+  }
+  const listActions = createIndexListVimActions({
+    getCount: () => model.getVisibleNodes().length,
+    getIndex: focusedVisibleIndex,
+    setIndex: (index) => {
+      const target = model.getVisibleNodes()[index]
+      if (target) model.setSelection([target.id], target.id)
+    },
+    scroller: {
+      getElement: () => containerRef.current,
+      getRowHeight: () => {
+        const current = model.getVisibleNodes().find((node) => node.id === model.focused)
+        const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
+        return (current === undefined ? undefined : resolve?.(current)) ?? fallback
+      },
+    },
+  })
+
   useVimSurface({
     id: vimSurfaceKey,
     kind: 'list',
@@ -768,53 +794,10 @@ export function Tree<T>(props: ITreeProps<T>) {
     getSurfaceKey: () => vimSurfaceKey,
     defaultMode: 'normal',
     actions: {
+      ...listActions,
       move: (direction, count) => {
-        if (direction === 'left' || direction === 'right') {
-          model.navigate(direction)
-          return
-        }
-        const vis = model.getVisibleNodes()
-        if (vis.length === 0) return
-        const focusedId = model.focused
-        const currentIndex = focusedId ? vis.findIndex((n) => n.id === focusedId) : -1
-        const steps = Math.max(1, count)
-        const from = currentIndex < 0 ? (direction === 'down' ? -1 : 0) : currentIndex
-        const target =
-          vis[Math.max(0, Math.min(vis.length - 1, from + (direction === 'down' ? steps : -steps)))]
-        if (target) model.setSelection([target.id], target.id)
-      },
-      first: () => {
-        const vis = model.getVisibleNodes()
-        const target = vis[0]
-        if (target) model.setSelection([target.id], target.id)
-      },
-      last: () => {
-        const vis = model.getVisibleNodes()
-        const target = vis[vis.length - 1]
-        if (target) model.setSelection([target.id], target.id)
-      },
-      page: (direction, count) => {
-        const vis = model.getVisibleNodes()
-        if (vis.length === 0) return
-        const focusedId = model.focused
-        const currentIndex = focusedId ? vis.findIndex((n) => n.id === focusedId) : -1
-        const next = resolveIndexNavigation(direction === 'down' ? 'PageDown' : 'PageUp', {
-          index: currentIndex,
-          count: vis.length,
-          pageSize: PAGE_STEP * Math.max(1, count),
-        })
-        const target = next === undefined ? undefined : vis[next]
-        if (target) model.setSelection([target.id], target.id)
-      },
-      scrollViewport: (direction, count) => {
-        const current = model.getVisibleNodes().find((node) => node.id === model.focused)
-        const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
-        scrollViewportByRows(
-          containerRef.current,
-          (current === undefined ? undefined : resolve?.(current)) ?? fallback,
-          direction,
-          count,
-        )
+        if (direction === 'left' || direction === 'right') model.navigate(direction)
+        else listActions.move(direction, count)
       },
       expand: () => {
         const vis = model.getVisibleNodes()
@@ -842,6 +825,7 @@ export function Tree<T>(props: ITreeProps<T>) {
         openKeyboardContextMenu(current ?? null)
       },
       escape: () => model.collapseSelectionToFocus(),
+      ...(onVimFind === undefined ? {} : { find: onVimFind }),
     },
   })
 
@@ -920,7 +904,7 @@ export function Tree<T>(props: ITreeProps<T>) {
           const next = resolveIndexNavigation(e.key, {
             index: currentIndex,
             count: vis.length,
-            pageSize: PAGE_STEP,
+            pageSize: LIST_PAGE_STEP,
           })
           if (next === undefined) return
           handled()

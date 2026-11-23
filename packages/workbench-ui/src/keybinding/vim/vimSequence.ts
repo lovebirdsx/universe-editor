@@ -15,11 +15,16 @@ export type VimSequenceStep =
   | { readonly kind: 'none' }
   /** The stroke was consumed; wait for more tokens or the timeout. */
   | { readonly kind: 'pending'; readonly count: number; readonly prefix: readonly string[] }
-  /** A full sequence matched. */
+  /**
+   * A full sequence matched. `replay` is set when the fed token only *ended* a
+   * deferred match (`z` waiting for `za`, then `j`): run the matches, then feed
+   * the same token again — the engine is already reset — so it is not lost.
+   */
   | {
       readonly kind: 'execute'
       readonly matches: readonly IVimKeymapEntry[]
       readonly count: number
+      readonly replay?: true
     }
   /** Esc cancelled a pending count/prefix. */
   | { readonly kind: 'cancel' }
@@ -67,6 +72,16 @@ export class VimSequenceEngine {
     return this._count
   }
 
+  /** Tokens typed so far after the count (empty while only a count is pending). */
+  get prefix(): readonly string[] {
+    return this._prefix
+  }
+
+  /** A complete entry is waiting on the timeout because a longer one shares its prefix. */
+  get hasDeferredMatch(): boolean {
+    return this._deferred !== undefined
+  }
+
   reset(): void {
     this._count = 0
     this._prefix = []
@@ -112,11 +127,12 @@ export class VimSequenceEngine {
       return { kind: 'execute', matches: exact, count }
     }
 
-    // The next token broke an ambiguous prefix: fire what was already complete.
+    // The next token broke an ambiguous prefix: fire what was already complete
+    // and hand the token back to the caller to feed again.
     if (this._deferred !== undefined) {
       const deferred = this._deferred
       this.reset()
-      return { kind: 'execute', matches: deferred.matches, count: deferred.count }
+      return { kind: 'execute', matches: deferred.matches, count: deferred.count, replay: true }
     }
 
     // Incomplete prefix matched nothing: cancel and let the caller route it.

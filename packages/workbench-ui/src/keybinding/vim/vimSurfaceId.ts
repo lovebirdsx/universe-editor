@@ -10,11 +10,16 @@ import { useRef } from 'react'
 
 let nextAutoSurfaceId = 1
 
+/** The key {@link useVimSurfaceKey} yields for an explicit id. */
+export function vimSurfaceKeyFor(kind: string, id: string): string {
+  return `${kind}:${id}`
+}
+
 /** `<kind>:<id>` for explicit ids, `<kind>:auto:<n>` otherwise. */
 export function useVimSurfaceKey(kind: string, explicitId?: string | undefined): string {
   const autoRef = useRef<string | null>(null)
   if (autoRef.current === null) autoRef.current = `${kind}:auto:${nextAutoSurfaceId++}`
   return explicitId === undefined || explicitId.length === 0
     ? autoRef.current
-    : `${kind}:${explicitId}`
+    : vimSurfaceKeyFor(kind, explicitId)
 }

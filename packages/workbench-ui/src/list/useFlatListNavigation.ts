@@ -35,7 +35,8 @@ import { isOpenTargetEnter } from '@universe-editor/platform'
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { LIST_PAGE_STEP, resolveIndexNavigation } from './listKeyboard.js'
-import { findScrollableElement, measureRowHeight, scrollViewportByRows } from './scrollViewport.js'
+import { findScrollableElement, measureRowHeight } from './scrollViewport.js'
+import { createIndexListVimActions } from '../keybinding/vimIndexActions.js'
 import {
   dispatchKeyboardContextMenu,
   findRowElement,
@@ -214,6 +215,38 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
   // the workbench dispatcher; the actions below drive the same focus model as
   // the arrow-key handler. Counts resolve to one target index so a `5j` is a
   // single focus change and a single reveal.
+  const listActions = createIndexListVimActions({
+    getCount: () => optionsRef.current.count,
+    getIndex: () => optionsRef.current.focusedIndex,
+    setIndex: focusRow,
+    getPageSize: () => optionsRef.current.getPageSize?.() ?? LIST_PAGE_STEP,
+    scroller: {
+      getElement: () => {
+        const { getContainer, getScrollElement } = optionsRef.current
+        return getScrollElement?.() ?? findScrollableElement(getContainer())
+      },
+      getRowHeight: () => {
+        const {
+          count: total,
+          focusedIndex,
+          getContainer,
+          getItemKey,
+          rowDataAttr,
+          getRowHeight,
+        } = optionsRef.current
+        const explicit = getRowHeight?.()
+        if (explicit !== undefined) return explicit
+        const container = getContainer()
+        const rowIndex = focusedIndex >= 0 && focusedIndex < total ? focusedIndex : 0
+        const row =
+          container !== null && total > 0
+            ? findRowElement(container, rowDataAttr ?? DEFAULT_ROW_ATTR, getItemKey(rowIndex))
+            : null
+        return measureRowHeight(row)
+      },
+    },
+  })
+
   useVimSurface({
     id: vimSurfaceKey,
     kind: 'list',
@@ -222,50 +255,16 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
     getSurfaceKey: () => vimSurfaceKey,
     defaultMode: 'normal',
     actions: {
+      ...listActions,
       move: (direction, count) => {
-        const { count: total, focusedIndex, onMoveHorizontal } = optionsRef.current
-        if (total === 0) return
         if (direction === 'left' || direction === 'right') {
-          if (onMoveHorizontal === undefined) return
+          const { count: total, focusedIndex, onMoveHorizontal } = optionsRef.current
+          if (total === 0 || onMoveHorizontal === undefined) return
           if (focusedIndex < 0 || focusedIndex >= total) return
           onMoveHorizontal(direction, focusedIndex)
           return
         }
-        const steps = Math.max(1, count)
-        const from = focusedIndex < 0 ? (direction === 'down' ? -1 : 0) : focusedIndex
-        const delta = direction === 'down' ? steps : -steps
-        focusRow(Math.max(0, Math.min(total - 1, from + delta)))
-      },
-      first: () => focusRow(0),
-      last: () => focusRow(optionsRef.current.count - 1),
-      page: (direction, count) => {
-        const { count: total, focusedIndex, getPageSize } = optionsRef.current
-        const pageSize = (getPageSize?.() ?? LIST_PAGE_STEP) * Math.max(1, count)
-        const next = resolveIndexNavigation(direction === 'down' ? 'PageDown' : 'PageUp', {
-          index: focusedIndex,
-          count: total,
-          pageSize,
-        })
-        if (next !== undefined) focusRow(next)
-      },
-      scrollViewport: (direction, count) => {
-        const {
-          count: total,
-          focusedIndex,
-          getContainer,
-          getItemKey,
-          rowDataAttr,
-          getScrollElement,
-          getRowHeight,
-        } = optionsRef.current
-        const container = getContainer()
-        const scroller = getScrollElement?.() ?? findScrollableElement(container)
-        const rowIndex = focusedIndex >= 0 && focusedIndex < total ? focusedIndex : 0
-        const row =
-          container !== null && total > 0
-            ? findRowElement(container, rowDataAttr ?? DEFAULT_ROW_ATTR, getItemKey(rowIndex))
-            : null
-        scrollViewportByRows(scroller, getRowHeight?.() ?? measureRowHeight(row), direction, count)
+        listActions.move(direction, count)
       },
       activate: (_count, preview) => {
         const { count: total, focusedIndex, onActivate } = optionsRef.current

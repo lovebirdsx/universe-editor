@@ -26,6 +26,8 @@ import { cx } from './cx.js'
 import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
+import { resolveVimGotoIndex } from '../keybinding/vimIndexActions.js'
+import { LIST_PAGE_STEP } from '../list/listKeyboard.js'
 import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
 import styles from './Select.module.css'
 
@@ -49,6 +51,17 @@ function stepEnabled<T extends string>(
     if (options[index]?.disabled !== true) return index
   }
   return undefined
+}
+
+/** Option index for `gg` / `G` (with count); the count walks enabled options only. */
+function nthEnabled<T extends string>(
+  options: readonly SelectOption<T>[],
+  edge: 'first' | 'last',
+  count: number,
+): number | undefined {
+  const enabled = options.flatMap((o, i) => (o.disabled === true ? [] : [i]))
+  const target = resolveVimGotoIndex(edge, count, enabled.length)
+  return target < 0 ? undefined : enabled[target]
 }
 
 export interface SelectOption<T extends string> {
@@ -227,9 +240,10 @@ export function Select<T extends string>({
           if (direction === 'down') moveBy(1, count)
           else if (direction === 'up') moveBy(-1, count)
         },
-        first: () => moveTo(stepEnabled(options, null, 1)),
-        last: () => moveTo(stepEnabled(options, null, -1)),
-        page: (direction, count) => moveBy(direction === 'down' ? 1 : -1, 10 * Math.max(1, count)),
+        first: (count) => moveTo(nthEnabled(options, 'first', count)),
+        last: (count) => moveTo(nthEnabled(options, 'last', count)),
+        page: (direction, count) =>
+          moveBy(direction === 'down' ? 1 : -1, LIST_PAGE_STEP * Math.max(1, count)),
         activate: () => {
           const index = activeIndexRef.current ?? selectedIndex
           if (index >= 0) select(index)

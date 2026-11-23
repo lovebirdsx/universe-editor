@@ -8,40 +8,51 @@
  *  Entries name command ids, never implementations — the dispatcher executes
  *  them through ICommandService so extensions and user keybindings see the same
  *  surface.
+ *
+ *  Only the generic navigation vocabulary lives here (`list.*` / `surface.*`
+ *  commands for lists, menus, overlays, readers and the chrome strips). Entries
+ *  naming application commands (leader chords, terminal, chat, views with their
+ *  own search box) belong to the host app's keymap; a view's own keys are
+ *  declared on its surface (`IVimSurfaceRegistration.keymap`).
  *--------------------------------------------------------------------------------------------*/
 
 import type { IVimKeymapEntry, VimSurfaceKind } from './vimTypes.js'
 
 const LIST_LIKE: readonly VimSurfaceKind[] = ['list', 'menu', 'overlay']
+/**
+ * Read-only readers (markdown preview) take the motion keys only; Enter, `o`,
+ * `dd`... stay unbound there so the content's own keys keep working.
+ */
+const MOTION: readonly VimSurfaceKind[] = ['list', 'menu', 'overlay', 'reader']
 /** Menus have no vertical viewport of their own, so no `Ctrl+E/Y` there. */
-const SCROLLABLE_LIST_LIKE: readonly VimSurfaceKind[] = ['list', 'overlay']
+const SCROLLABLE: readonly VimSurfaceKind[] = ['list', 'overlay', 'reader']
 
 export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
   // -- lists, menus, overlays -------------------------------------------------
-  { id: 'list.focusDown', keys: ['j'], command: 'list.focusDown', surfaces: LIST_LIKE },
-  { id: 'list.focusUp', keys: ['k'], command: 'list.focusUp', surfaces: LIST_LIKE },
-  { id: 'list.focusLeft', keys: ['h'], command: 'list.focusLeft', surfaces: LIST_LIKE },
-  { id: 'list.focusRight', keys: ['l'], command: 'list.focusRight', surfaces: LIST_LIKE },
-  { id: 'list.focusFirst', keys: ['g', 'g'], command: 'list.focusFirst', surfaces: LIST_LIKE },
-  { id: 'list.focusLast', keys: ['G'], command: 'list.focusLast', surfaces: LIST_LIKE },
+  { id: 'list.focusDown', keys: ['j'], command: 'list.focusDown', surfaces: MOTION },
+  { id: 'list.focusUp', keys: ['k'], command: 'list.focusUp', surfaces: MOTION },
+  { id: 'list.focusLeft', keys: ['h'], command: 'list.focusLeft', surfaces: MOTION },
+  { id: 'list.focusRight', keys: ['l'], command: 'list.focusRight', surfaces: MOTION },
+  { id: 'list.focusFirst', keys: ['g', 'g'], command: 'list.focusFirst', surfaces: MOTION },
+  { id: 'list.focusLast', keys: ['G'], command: 'list.focusLast', surfaces: MOTION },
   {
     id: 'list.pageDown',
     keys: ['ctrl+d'],
     command: 'list.pageDown',
-    surfaces: LIST_LIKE,
+    surfaces: MOTION,
   },
-  { id: 'list.pageUp', keys: ['ctrl+u'], command: 'list.pageUp', surfaces: LIST_LIKE },
+  { id: 'list.pageUp', keys: ['ctrl+u'], command: 'list.pageUp', surfaces: MOTION },
   {
     id: 'list.scrollViewportDown',
     keys: ['ctrl+e'],
     command: 'list.scrollViewportDown',
-    surfaces: SCROLLABLE_LIST_LIKE,
+    surfaces: SCROLLABLE,
   },
   {
     id: 'list.scrollViewportUp',
     keys: ['ctrl+y'],
     command: 'list.scrollViewportUp',
-    surfaces: SCROLLABLE_LIST_LIKE,
+    surfaces: SCROLLABLE,
   },
   {
     id: 'list.activate.enter',
@@ -60,97 +71,11 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
   { id: 'list.expand', keys: ['z', 'o'], command: 'list.expand', surfaces: LIST_LIKE },
   { id: 'list.collapse', keys: ['z', 'c'], command: 'list.collapse', surfaces: LIST_LIKE },
   { id: 'list.contextMenu', keys: ['m'], command: 'list.contextMenu', surfaces: LIST_LIKE },
+  // Only trees that own a filter box implement `find`; elsewhere it is a no-op.
+  { id: 'list.find', keys: ['/'], command: 'list.find', surfaces: ['list'] },
   { id: 'list.copy', keys: ['y', 'y'], command: 'list.copy', surfaces: LIST_LIKE },
   { id: 'list.delete', keys: ['d', 'd'], command: 'list.delete', surfaces: LIST_LIKE },
   { id: 'surface.escape', keys: ['escape'], command: 'surface.escape', surfaces: LIST_LIKE },
-
-  // A diff previewed from a view keeps focus in the list, so the editor
-  // surface's `]c` / `[c` never sees the stroke there. Route them to the
-  // compare editor while one is visible; the commands navigate hunks without
-  // stealing focus back.
-  {
-    id: 'list.nextChange',
-    keys: [']', 'c'],
-    command: 'workbench.action.compareEditor.nextChange',
-    surfaces: ['list'],
-    when: 'textCompareEditorVisible',
-  },
-  {
-    id: 'list.previousChange',
-    keys: ['[', 'c'],
-    command: 'workbench.action.compareEditor.previousChange',
-    surfaces: ['list'],
-    when: 'textCompareEditorVisible',
-  },
-
-  // -- running before the generic list entries so the first `when` match wins -
-  // Settings rows and TOC: `/` hands focus to the settings search box.
-  {
-    id: 'list.focusSettingsSearch',
-    keys: ['/'],
-    command: 'workbench.action.focusSettingsSearch',
-    surfaces: ['list'],
-    when: "vimSurfaceId == 'list:settings' || vimSurfaceId == 'list:settings-toc'",
-  },
-  // Other list views that already expose a focus-search command.
-  {
-    id: 'list.focusKeybindingsSearch',
-    keys: ['/'],
-    command: 'keybindings.editor.searchKeybindings',
-    surfaces: ['list'],
-    when: "vimSurfaceId == 'list:keybindings'",
-  },
-  {
-    id: 'list.focusPerforceGraphSearch',
-    keys: ['/'],
-    command: 'perforce-graph.focusSearch',
-    surfaces: ['list'],
-    when: "vimSurfaceId == 'list:perforce-graph'",
-  },
-  {
-    id: 'list.focusGitGraphSearch',
-    keys: ['/'],
-    command: 'git-graph.focusSearch',
-    surfaces: ['list'],
-    when: "vimSurfaceId == 'list:git-graph'",
-  },
-  // Chat timeline: only while the chat owns DOM focus, so the same letters stay
-  // inert on other lists (and the prompt input still types them).
-  {
-    id: 'chat.focusInput',
-    keys: ['i'],
-    command: 'workbench.action.agent.focusInput',
-    surfaces: ['list'],
-    when: 'acpChatFocused',
-  },
-  {
-    id: 'chat.scrollTimelineToTop',
-    keys: ['a'],
-    command: 'workbench.action.agent.scrollTimelineToTop',
-    surfaces: ['list'],
-    when: 'acpChatFocused',
-  },
-  {
-    id: 'chat.scrollTimelineToBottom',
-    keys: ['e'],
-    command: 'workbench.action.agent.scrollTimelineToBottom',
-    surfaces: ['list'],
-    when: 'acpChatFocused',
-  },
-  {
-    id: 'chat.scrollTimelineDown',
-    keys: ['j'],
-    command: 'workbench.action.agent.scrollTimelineDown',
-    surfaces: ['list'],
-    when: 'acpChatFocused',
-  },
-  {
-    id: 'chat.scrollTimelineUp',
-    keys: ['k'],
-    command: 'workbench.action.agent.scrollTimelineUp',
-    surfaces: ['list'],
-    when: 'acpChatFocused',
-  },
 
   // -- overlay: x dismisses the focused notification --------------------------
   { id: 'overlay.delete', keys: ['x'], command: 'list.delete', surfaces: ['overlay'] },
@@ -248,294 +173,5 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
     keys: ['escape'],
     command: 'surface.escape',
     surfaces: ['viewContainerTabs'],
-  },
-
-  // -- terminal normal mode ---------------------------------------------------
-  {
-    id: 'terminal.scrollLineDown',
-    keys: ['j'],
-    command: 'workbench.action.terminal.normalScrollLineDown',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.scrollLineUp',
-    keys: ['k'],
-    command: 'workbench.action.terminal.normalScrollLineUp',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.scrollViewportDown',
-    keys: ['ctrl+e'],
-    command: 'workbench.action.terminal.normalScrollLineDown',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.scrollViewportUp',
-    keys: ['ctrl+y'],
-    command: 'workbench.action.terminal.normalScrollLineUp',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.scrollHalfPageDown',
-    keys: ['ctrl+d'],
-    command: 'workbench.action.terminal.normalScrollHalfPageDown',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.scrollHalfPageUp',
-    keys: ['ctrl+u'],
-    command: 'workbench.action.terminal.normalScrollHalfPageUp',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.scrollPageDown',
-    keys: ['ctrl+f'],
-    command: 'workbench.action.terminal.normalScrollPageDown',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.scrollPageUp',
-    keys: ['ctrl+b'],
-    command: 'workbench.action.terminal.normalScrollPageUp',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.scrollToTop',
-    keys: ['g', 'g'],
-    command: 'workbench.action.terminal.normalScrollToTop',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.scrollToBottom',
-    keys: ['G'],
-    command: 'workbench.action.terminal.normalScrollToBottom',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.startSelection',
-    keys: ['v'],
-    command: 'workbench.action.terminal.normalStartSelection',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.copySelection',
-    keys: ['y'],
-    command: 'workbench.action.terminal.normalCopySelection',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.exitNormal.i',
-    keys: ['i'],
-    command: 'workbench.action.terminal.exitNormalMode',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.exitNormal.escape',
-    keys: ['escape'],
-    command: 'workbench.action.terminal.exitNormalMode',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.exitNormal.a',
-    keys: ['a'],
-    command: 'workbench.action.terminal.exitNormalMode',
-    surfaces: ['terminal'],
-  },
-  {
-    id: 'terminal.exitNormal.q',
-    keys: ['q'],
-    command: 'workbench.action.terminal.exitNormalMode',
-    surfaces: ['terminal'],
-  },
-
-  // -- leader ----------------------------------------------------------------
-  { id: 'leader.explorer', keys: ['<leader>', 'e'], command: 'workbench.view.explorer' },
-  { id: 'leader.quickOpen', keys: ['<leader>', 'f'], command: 'workbench.action.quickOpen' },
-  {
-    id: 'leader.showCommands',
-    keys: ['<leader>', 'p'],
-    command: 'workbench.action.showCommands',
-  },
-  {
-    id: 'leader.findInFiles',
-    keys: ['<leader>', 's'],
-    command: 'workbench.action.findInFiles',
-  },
-  { id: 'leader.scm', keys: ['<leader>', 'g'], command: 'workbench.view.scm' },
-  { id: 'leader.extensions', keys: ['<leader>', 'x'], command: 'workbench.view.extensions' },
-  {
-    id: 'leader.sideBar',
-    keys: ['<leader>', 'b'],
-    command: 'workbench.action.focusSideBar',
-  },
-  { id: 'leader.panel', keys: ['<leader>', 'j'], command: 'workbench.action.focusPanel' },
-  {
-    id: 'leader.terminal',
-    keys: ['<leader>', 't'],
-    command: 'workbench.action.terminal.focus',
-  },
-  { id: 'leader.outline', keys: ['<leader>', 'o'], command: 'outline.focus' },
-  {
-    id: 'leader.closeEditor',
-    keys: ['<leader>', 'q'],
-    command: 'workbench.action.closeActiveEditor',
-  },
-  {
-    id: 'leader.nextEditor',
-    keys: ['<leader>', 'n'],
-    command: 'workbench.action.nextEditor',
-  },
-  {
-    id: 'leader.previousEditor',
-    keys: ['<leader>', 'N'],
-    command: 'workbench.action.previousEditor',
-  },
-  {
-    id: 'leader.groupLeft',
-    keys: ['<leader>', 'w', 'h'],
-    command: 'workbench.action.focusLeftGroup',
-  },
-  {
-    id: 'leader.groupDown',
-    keys: ['<leader>', 'w', 'j'],
-    command: 'workbench.action.focusBelowGroup',
-  },
-  {
-    id: 'leader.groupUp',
-    keys: ['<leader>', 'w', 'k'],
-    command: 'workbench.action.focusAboveGroup',
-  },
-  {
-    id: 'leader.groupRight',
-    keys: ['<leader>', 'w', 'l'],
-    command: 'workbench.action.focusRightGroup',
-  },
-  {
-    id: 'leader.groupWrap',
-    keys: ['<leader>', 'w', 'w'],
-    command: 'workbench.action.focusNextGroup',
-  },
-  {
-    id: 'leader.split',
-    keys: ['<leader>', 'w', 's'],
-    command: 'workbench.action.splitEditorDown',
-  },
-  {
-    id: 'leader.closeGroup',
-    keys: ['<leader>', 'w', 'c'],
-    command: 'workbench.action.closeActiveEditor',
-  },
-
-  // -- editor: code navigation & actions ------------------------------------
-  // The native keys (`gd`, `gr`, …) live in the editor Vim core; these leader
-  // entries are the discoverable aliases and the only way to reach the actions
-  // that have no native mapping.
-  {
-    id: 'editor.definition',
-    keys: ['<leader>', 'd'],
-    command: 'editor.action.revealDefinition',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.peekDefinition',
-    keys: ['<leader>', 'D'],
-    command: 'editor.action.peekDefinition',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.references',
-    keys: ['<leader>', 'r'],
-    command: 'editor.action.goToReferences',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.peekReferences',
-    keys: ['<leader>', 'R'],
-    command: 'editor.action.referenceSearch.trigger',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.typeDefinition',
-    keys: ['<leader>', 'y'],
-    command: 'editor.action.goToTypeDefinition',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.implementation',
-    keys: ['<leader>', 'i'],
-    command: 'editor.action.goToImplementation',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.hover',
-    keys: ['<leader>', 'k'],
-    command: 'editor.action.showHover',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.quickFix',
-    keys: ['<leader>', 'a'],
-    command: 'editor.action.quickFix',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.comment',
-    keys: ['<leader>', 'c'],
-    command: 'editor.action.commentLine',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.rename',
-    keys: ['<leader>', 'm'],
-    command: 'editor.action.rename',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.format',
-    keys: ['<leader>', 'F'],
-    command: 'editor.action.formatDocument',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.organizeImports',
-    keys: ['<leader>', 'I'],
-    command: 'editor.action.organizeImports',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.gotoLine',
-    keys: ['<leader>', 'G'],
-    command: 'editor.action.gotoLine',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.symbols',
-    keys: ['<leader>', 'O'],
-    command: 'editor.action.quickOutline',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.workspaceSymbols',
-    keys: ['<leader>', 'S'],
-    command: 'workbench.action.showAllSymbols',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.goBack',
-    keys: ['<leader>', 'h'],
-    command: 'workbench.action.goBack',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.goForward',
-    keys: ['<leader>', 'l'],
-    command: 'workbench.action.goForward',
-    surfaces: ['editor'],
-  },
-  {
-    id: 'editor.gotoParentFold',
-    keys: ['<leader>', 'z'],
-    command: 'editor.gotoParentFold',
-    surfaces: ['editor'],
   },
 ]

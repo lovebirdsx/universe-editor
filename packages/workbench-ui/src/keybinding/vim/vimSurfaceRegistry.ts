@@ -15,12 +15,13 @@ import { useContext, useEffect, useRef } from 'react'
 import { OwnerDocumentContext } from '../../overlay/ownerDocumentContext.js'
 import { pickNavigationLayer, type INavigationLayerView } from './navigationLayers.js'
 import { VimSequenceEngine } from './vimSequence.js'
-import type { IVimSurfaceRegistration, VimSurfaceKind } from './vimTypes.js'
+import type { IVimKeymapEntry, IVimSurfaceRegistration, VimSurfaceKind } from './vimTypes.js'
 
 const KIND_PRIORITY: Record<VimSurfaceKind, number> = {
   menu: 8,
   overlay: 7,
   list: 6,
+  reader: 6,
   terminal: 5,
   editor: 4,
   tabs: 3,
@@ -48,14 +49,33 @@ function defaultFocus(kind: VimSurfaceKind): 'self' | 'within' {
     : 'within'
 }
 
+interface KeymapSources {
+  readonly sources: readonly (readonly IVimKeymapEntry[])[]
+  readonly merged: readonly IVimKeymapEntry[]
+}
+
 interface SurfaceEntry extends INavigationLayerView {
   readonly read: () => IVimSurfaceRegistration
   readonly engine: VimSequenceEngine
+  /** Last concatenation of the surface's keymap sources, reused while they are unchanged. */
+  keymapMemo: KeymapSources | undefined
+}
+
+interface KeymapContribution {
+  readonly surfaceId: string
+  readonly read: () => readonly IVimKeymapEntry[]
 }
 
 interface DocumentState {
   readonly surfaces: Map<symbol, SurfaceEntry>
+  readonly keymaps: Map<symbol, KeymapContribution>
   readonly listeners: Set<() => void>
+}
+
+const NO_ENTRIES: readonly IVimKeymapEntry[] = []
+
+function isDocumentIdle(state: DocumentState): boolean {
+  return state.surfaces.size === 0 && state.keymaps.size === 0 && state.listeners.size === 0
 }
 
 const documents = new Map<Document, DocumentState>()
@@ -71,9 +91,7 @@ export function onDidChangeVimSurfaces(doc: Document, listener: () => void): { d
       if (!state.listeners.delete(listener)) return
       // Do not keep a closed document (and its DOM) alive through an empty
       // state entry once its last surface and listener are gone.
-      if (state.surfaces.size === 0 && state.listeners.size === 0) {
-        if (documents.get(doc) === state) documents.delete(doc)
-      }
+      if (isDocumentIdle(state) && documents.get(doc) === state) documents.delete(doc)
     },
   }
 }
@@ -82,7 +100,7 @@ function ensureDocument(doc: Document): DocumentState | undefined {
   const existing = documents.get(doc)
   if (existing !== undefined) return existing
   if (doc.defaultView === null) return undefined
-  const state: DocumentState = { surfaces: new Map(), listeners: new Set() }
+  const state: DocumentState = { surfaces: new Map(), keymaps: new Map(), listeners: new Set() }
   documents.set(doc, state)
   return state
 }
@@ -109,15 +127,71 @@ function addSurface(doc: Document, read: () => IVimSurfaceRegistration): { dispo
     },
     read,
     engine: new VimSequenceEngine(),
+    keymapMemo: undefined,
   })
   notify(state)
   return {
     dispose: () => {
       if (!state.surfaces.delete(id)) return
       notify(state)
-      if (state.surfaces.size === 0 && state.listeners.size === 0) documents.delete(doc)
+      if (isDocumentIdle(state)) documents.delete(doc)
     },
   }
+}
+
+/**
+ * Attach extra keymap entries to the surface registered under `surfaceId`.
+ * For hosts that reach their surface through a shared adapter (Tree, FlatList)
+ * and so cannot pass `keymap` in the registration themselves. Several
+ * contributions to the same surface are concatenated in registration order.
+ */
+export function registerVimSurfaceKeymap(
+  surfaceId: string,
+  read: () => readonly IVimKeymapEntry[],
+  doc?: Document,
+): { dispose(): void } {
+  const target = doc ?? (typeof document === 'undefined' ? undefined : document)
+  const state = target === undefined ? undefined : ensureDocument(target)
+  if (state === undefined || target === undefined) return { dispose: () => undefined }
+  const id = Symbol('vimSurfaceKeymap')
+  state.keymaps.set(id, { surfaceId, read })
+  return {
+    dispose: () => {
+      if (!state.keymaps.delete(id)) return
+      if (isDocumentIdle(state) && documents.get(target) === state) documents.delete(target)
+    },
+  }
+}
+
+function sameSources(
+  a: readonly (readonly IVimKeymapEntry[])[],
+  b: readonly (readonly IVimKeymapEntry[])[],
+): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
+/** Registration keymap + sidecar contributions; the same array while nothing changed. */
+function resolveSurfaceKeymap(
+  state: DocumentState,
+  entry: SurfaceEntry,
+  surface: IVimSurfaceRegistration,
+): readonly IVimKeymapEntry[] {
+  const sources: (readonly IVimKeymapEntry[])[] = []
+  if (surface.keymap !== undefined && surface.keymap.length > 0) sources.push(surface.keymap)
+  for (const contribution of state.keymaps.values()) {
+    if (contribution.surfaceId !== surface.id) continue
+    const entries = contribution.read()
+    if (entries.length > 0) sources.push(entries)
+  }
+  if (sources.length === 0) return NO_ENTRIES
+  if (sources.length === 1) return sources[0]!
+  const memo = entry.keymapMemo
+  if (memo !== undefined && sameSources(memo.sources, sources)) return memo.merged
+  const merged = sources.flat()
+  entry.keymapMemo = { sources, merged }
+  return merged
 }
 
 /** Register a surface directly (non-React callers such as the Ctrl-alias bridge). */
@@ -137,6 +211,8 @@ export interface IActiveVimSurface {
   readonly surface: IVimSurfaceRegistration
   readonly sequence: VimSequenceEngine
   readonly surfaceKey: string
+  /** Entries the surface declared itself (registration `keymap` + sidecar), possibly empty. */
+  readonly keymap: readonly IVimKeymapEntry[]
 }
 
 /**
@@ -151,7 +227,12 @@ export function getActiveVimSurface(doc: Document): IActiveVimSurface | undefine
   const entry = pickNavigationLayer(state.surfaces.values(), doc, isAlwaysActive, priority)
   if (entry === undefined) return undefined
   const surface = entry.read()
-  return { surface, sequence: entry.engine, surfaceKey: surface.getSurfaceKey() }
+  return {
+    surface,
+    sequence: entry.engine,
+    surfaceKey: surface.getSurfaceKey(),
+    keymap: resolveSurfaceKeymap(state, entry, surface),
+  }
 }
 
 /**
@@ -198,6 +279,28 @@ export function useVimSurface(
     if (doc === undefined) return undefined
     return addSurface(doc, () => registrationRef.current).dispose
   }, [contextDoc, elementDoc, targetDocument])
+}
+
+/**
+ * React binding for {@link registerVimSurfaceKeymap}. `keymap` is read through a
+ * ref, so a new array per render is correct (a stable one avoids rebuilding the
+ * merged keymap).
+ */
+export function useVimSurfaceKeymap(
+  surfaceId: string,
+  keymap: readonly IVimKeymapEntry[],
+  targetDocument?: Document,
+): void {
+  const contextDoc = useContext(OwnerDocumentContext)
+  const keymapRef = useRef(keymap)
+  keymapRef.current = keymap
+  useEffect(() => {
+    return registerVimSurfaceKeymap(
+      surfaceId,
+      () => keymapRef.current,
+      targetDocument ?? contextDoc,
+    ).dispose
+  }, [surfaceId, contextDoc, targetDocument])
 }
 
 /** Test-only: drop every registered surface and listener. */

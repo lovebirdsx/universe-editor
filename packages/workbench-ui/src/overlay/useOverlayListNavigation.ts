@@ -50,12 +50,9 @@ import {
 import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
-import { LIST_PAGE_STEP, resolveIndexNavigation } from '../list/listKeyboard.js'
-import {
-  findScrollableElement,
-  measureRowHeight,
-  scrollViewportByRows,
-} from '../list/scrollViewport.js'
+import { resolveIndexNavigation } from '../list/listKeyboard.js'
+import { findScrollableElement, measureRowHeight } from '../list/scrollViewport.js'
+import { createIndexListVimActions } from '../keybinding/vimIndexActions.js'
 
 /** Typeahead buffer lifetime — a pause longer than this starts a fresh query. */
 const TYPEAHEAD_RESET_MS = 500
@@ -292,6 +289,24 @@ export function useOverlayListNavigation(
   // Bare Vim keys (j/k/h/l, gg/G, Ctrl+d/u, Enter, Esc) arrive as commands from
   // the workbench dispatcher. Counts move in one pass; horizontal strokes go to
   // the host, which owns the "step out of this nested overlay" semantics.
+  const listActions = createIndexListVimActions({
+    getCount: () => optionsRef.current.count,
+    getIndex: () => activeIndexRef.current,
+    setIndex: setActiveIndex,
+    scroller: {
+      // Hosts often put the focusable row container inside the panel that
+      // actually scrolls (AnchoredSurface); walk up so Ctrl+E/Y moves the
+      // visible scroller instead of a zero-overflow inner div.
+      getElement: () => findScrollableElement(containerElRef.current),
+      getRowHeight: () => {
+        const container = containerElRef.current
+        return measureRowHeight(
+          container?.querySelector('[data-active="true"]') ?? container?.firstElementChild ?? null,
+        )
+      },
+    },
+  })
+
   useVimSurface(
     {
       id: vimSurfaceKey,
@@ -301,38 +316,14 @@ export function useOverlayListNavigation(
       getSurfaceKey: () => vimSurfaceKey,
       defaultMode: 'normal',
       actions: {
+        ...listActions,
+        // Vertical steps keep the host's wrap / end-of-list exit semantics.
         move: (direction, count) => {
           if (direction === 'up' || direction === 'down') {
             moveIndex(direction === 'down' ? 'ArrowDown' : 'ArrowUp', count)
           } else {
             handleHorizontal(direction === 'left' ? 'ArrowLeft' : 'ArrowRight')
           }
-        },
-        first: () => moveIndex('Home', 1),
-        last: () => moveIndex('End', 1),
-        page: (direction, count) => {
-          const total = optionsRef.current.count
-          if (total <= 0) return
-          const next = resolveIndexNavigation(direction === 'down' ? 'PageDown' : 'PageUp', {
-            index: activeIndexRef.current,
-            count: total,
-            pageSize: LIST_PAGE_STEP * Math.max(1, count),
-          })
-          if (next !== undefined) setActiveIndex(next)
-        },
-        scrollViewport: (direction, count) => {
-          const container = containerElRef.current
-          const row =
-            container?.querySelector('[data-active="true"]') ?? container?.firstElementChild ?? null
-          // Hosts often put the focusable row container inside the panel that
-          // actually scrolls (AnchoredSurface); walk up so Ctrl+E/Y moves the
-          // visible scroller instead of a zero-overflow inner div.
-          scrollViewportByRows(
-            findScrollableElement(container),
-            measureRowHeight(row),
-            direction,
-            count,
-          )
         },
         activate: (_count, preview) => {
           const total = optionsRef.current.count

@@ -80,15 +80,18 @@ function TreeHost({
   onActivate,
   onRowMenu,
   vimSurfaceId,
+  onVimFind,
 }: {
   readonly model: TreeModel<Node>
   readonly onActivate: (node: Node) => void
   readonly onRowMenu: (id: string) => void
   readonly vimSurfaceId?: string | undefined
+  readonly onVimFind?: (() => void) | undefined
 }) {
   return (
     <Tree<Node>
       model={model}
+      {...(onVimFind !== undefined ? { onVimFind } : {})}
       onActivate={(node) => onActivate(node.element)}
       {...(vimSurfaceId !== undefined ? { vimSurfaceId } : {})}
       renderRow={(ctx) => (
@@ -112,6 +115,25 @@ function selectedRows(): string[] {
 }
 
 describe('Tree as a Vim list surface', () => {
+  it('exposes find only when the host owns a filter box', () => {
+    const onFind = vi.fn()
+    const { rerender } = render(
+      <TreeHost model={makeTreeModel()} onActivate={() => {}} onRowMenu={() => {}} />,
+    )
+    act(() => screen.getByRole('tree').focus())
+    expect(surfaceActions().find).toBeUndefined()
+    rerender(
+      <TreeHost
+        model={makeTreeModel()}
+        onActivate={() => {}}
+        onRowMenu={() => {}}
+        onVimFind={onFind}
+      />,
+    )
+    act(() => surfaceActions().find?.())
+    expect(onFind).toHaveBeenCalledTimes(1)
+  })
+
   it('registers with the host id and drives hjkl / gg / G / counts / Ctrl+d', () => {
     const model = makeTreeModel()
     render(
@@ -121,7 +143,7 @@ describe('Tree as a Vim list surface', () => {
     expect(getActiveVimSurface(document)?.surfaceKey).toBe('list:explorer')
 
     const actions = surfaceActions()
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
     expect(selectedRows()).toEqual(['p'])
 
     // A count resolves to one selection change.
@@ -130,14 +152,30 @@ describe('Tree as a Vim list surface', () => {
     act(() => actions.move?.('up', 2))
     expect(selectedRows()).toEqual(['r0'])
 
-    act(() => actions.last?.(1))
+    act(() => actions.last?.(0))
     expect(selectedRows()).toEqual(['r19'])
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
     expect(selectedRows()).toEqual(['p'])
 
     act(() => actions.page?.('down', 1))
     expect(selectedRows()).toEqual(['r9'])
     act(() => actions.page?.('up', 1))
+    expect(selectedRows()).toEqual(['p'])
+  })
+
+  it('treats a count on gg / G as the 1-based target row', () => {
+    const model = makeTreeModel()
+    render(<TreeHost model={model} onActivate={() => {}} onRowMenu={() => {}} />)
+    act(() => screen.getByRole('tree').focus())
+    const actions = surfaceActions()
+    // Visible rows: p, r0, r1, ... (the parent is collapsed).
+    act(() => actions.first?.(5))
+    expect(selectedRows()).toEqual(['r3'])
+    act(() => actions.last?.(3))
+    expect(selectedRows()).toEqual(['r1'])
+    act(() => actions.last?.(999))
+    expect(selectedRows()).toEqual(['r19'])
+    act(() => actions.first?.(0))
     expect(selectedRows()).toEqual(['p'])
   })
 
@@ -148,7 +186,7 @@ describe('Tree as a Vim list surface', () => {
     expect(getActiveVimSurface(document)?.surfaceKey).toMatch(/^list:auto:/)
 
     const actions = surfaceActions()
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
     expect(document.querySelector('[data-row-key="p"]')?.getAttribute('data-expanded')).toBe(
       'false',
     )
@@ -167,7 +205,7 @@ describe('Tree as a Vim list surface', () => {
     render(<TreeHost model={model} onActivate={() => {}} onRowMenu={() => {}} />)
     act(() => screen.getByRole('tree').focus())
     const actions = surfaceActions()
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
 
     const tree = screen.getByRole('tree')
     tree.scrollTop = 100
@@ -186,7 +224,7 @@ describe('Tree as a Vim list surface', () => {
     act(() => screen.getByRole('tree').focus())
 
     const actions = surfaceActions()
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
     act(() => actions.move?.('down', 1))
     act(() => actions.activate?.(1, true))
     expect(onActivate).toHaveBeenCalledTimes(1)
@@ -249,26 +287,40 @@ describe('FlatList as a Vim list surface', () => {
     expect(getActiveVimSurface(document)?.surfaceKey).toBe('list:extensions')
 
     const actions = surfaceActions()
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
     expect(flatSelection()).toEqual(['row-0'])
     act(() => actions.move?.('down', 3))
     expect(flatSelection()).toEqual(['row-3'])
     act(() => actions.move?.('up', 2))
     expect(flatSelection()).toEqual(['row-1'])
-    act(() => actions.last?.(1))
+    act(() => actions.last?.(0))
     expect(flatSelection()).toEqual(['row-19'])
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
     act(() => actions.page?.('down', 1))
     expect(flatSelection()).toEqual(['row-10'])
     act(() => actions.page?.('up', 1))
     expect(flatSelection()).toEqual(['row-0'])
   })
 
+  it('treats a count on gg / G as the 1-based target row', () => {
+    render(<FlatListHost />)
+    act(() => screen.getByTestId('list').focus())
+    const actions = surfaceActions()
+    act(() => actions.first?.(5))
+    expect(flatSelection()).toEqual(['row-4'])
+    act(() => actions.last?.(3))
+    expect(flatSelection()).toEqual(['row-2'])
+    act(() => actions.last?.(999))
+    expect(flatSelection()).toEqual(['row-19'])
+    act(() => actions.last?.(0))
+    expect(flatSelection()).toEqual(['row-19'])
+  })
+
   it('scrolls the viewport without moving the focused row', () => {
     render(<FlatListHost vimSurfaceId="extensions" />)
     act(() => screen.getByTestId('list').focus())
     const actions = surfaceActions()
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
 
     const list = screen.getByTestId('list')
     list.scrollTop = 100
@@ -292,7 +344,7 @@ describe('FlatList as a Vim list surface', () => {
     render(<FlatListHost itemCount={3} onActivate={() => {}} />)
     act(() => screen.getByTestId('list').focus())
     const actions = surfaceActions()
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
     act(() => actions.move?.('right', 1))
     expect(onMoveHorizontal).not.toHaveBeenCalled()
 
@@ -301,7 +353,7 @@ describe('FlatList as a Vim list surface', () => {
     render(<FlatListHost itemCount={3} onMoveHorizontal={onMoveHorizontal} />)
     act(() => screen.getByTestId('list').focus())
     const withHorizontal = getActiveVimSurface(document)
-    act(() => withHorizontal!.surface.actions.first?.(1))
+    act(() => withHorizontal!.surface.actions.first?.(0))
     act(() => withHorizontal!.surface.actions.move?.('right', 1))
     expect(onMoveHorizontal).toHaveBeenCalledWith('right', 0)
   })
@@ -356,11 +408,22 @@ describe('Overlay as a Vim overlay surface', () => {
     act(() => actions.activate?.(1, true))
     expect(onActivate).toHaveBeenCalledWith(2, { preview: true })
 
-    act(() => actions.last?.(1))
+    act(() => actions.last?.(0))
     expect(activeOverlayIndex()).toBe(7)
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
     expect(activeOverlayIndex()).toBe(0)
     act(() => actions.page?.('down', 1))
+    expect(activeOverlayIndex()).toBe(7)
+  })
+
+  it('treats a count on gg / G as the 1-based target row', () => {
+    render(<OverlayHost onActivate={() => {}} />)
+    const actions = surfaceActions()
+    act(() => actions.last?.(5))
+    expect(activeOverlayIndex()).toBe(4)
+    act(() => actions.first?.(3))
+    expect(activeOverlayIndex()).toBe(2)
+    act(() => actions.last?.(99))
     expect(activeOverlayIndex()).toBe(7)
   })
 
@@ -439,9 +502,26 @@ describe('Menu as a Vim menu surface', () => {
     act(() => actions.activate?.(1, false))
     expect(runE).toHaveBeenCalledTimes(1)
 
-    act(() => actions.first?.(1))
+    act(() => actions.first?.(0))
     act(() => actions.activate?.(1, false))
     expect(runA).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts only navigable rows for 2gg / 3G', () => {
+    const { rows, runA, runB, runE } = makeMenuRows()
+    render(<MenuHost rows={rows} onDismiss={() => {}} />)
+    const actions = surfaceActions()
+    // Navigable rows: a, b, s (submenu), e — the separator and disabled d are skipped.
+    act(() => actions.first?.(2))
+    act(() => actions.activate?.(1, false))
+    expect(runB).toHaveBeenCalledTimes(1)
+    act(() => actions.last?.(4))
+    act(() => actions.activate?.(1, false))
+    expect(runE).toHaveBeenCalledTimes(1)
+    act(() => actions.last?.(99))
+    act(() => actions.activate?.(1, false))
+    expect(runE).toHaveBeenCalledTimes(2)
+    expect(runA).not.toHaveBeenCalled()
   })
 
   it('jumps to the ends with gg/G and pages, and escapes the surface', () => {
@@ -450,13 +530,51 @@ describe('Menu as a Vim menu surface', () => {
     render(<MenuHost rows={rows} onDismiss={onDismiss} />)
 
     const actions = surfaceActions()
-    act(() => actions.last?.(1))
+    act(() => actions.last?.(0))
     act(() => actions.activate?.(1, false))
     expect(runE).toHaveBeenCalledTimes(1)
 
     act(() => actions.page?.('up', 1))
     act(() => actions.escape?.(1))
     expect(onDismiss).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Menu page / count handling on a five-row menu', () => {
+  function fiveRows() {
+    const runs = ['a', 'b', 'c', 'd', 'e'].map(() => vi.fn())
+    const rows: RowModel[] = ['a', 'b', 'c', 'd', 'e'].map((id, i) => ({
+      kind: 'item' as const,
+      id,
+      label: id.toUpperCase(),
+      icon: undefined,
+      run: runs[i]!,
+    }))
+    return { rows, runs }
+  }
+
+  it('Ctrl+D lands on the last row and Ctrl+U on the first', () => {
+    const { rows, runs } = fiveRows()
+    render(<MenuHost rows={rows} onDismiss={() => {}} />)
+    const actions = surfaceActions()
+    act(() => actions.page?.('down', 1))
+    act(() => actions.activate?.(1, false))
+    expect(runs[4]).toHaveBeenCalledTimes(1)
+    act(() => actions.page?.('up', 1))
+    act(() => actions.activate?.(1, false))
+    expect(runs[0]).toHaveBeenCalledTimes(1)
+  })
+
+  it('G is the last row while 1G is the first', () => {
+    const { rows, runs } = fiveRows()
+    render(<MenuHost rows={rows} onDismiss={() => {}} />)
+    const actions = surfaceActions()
+    act(() => actions.last?.(0))
+    act(() => actions.activate?.(1, false))
+    expect(runs[4]).toHaveBeenCalledTimes(1)
+    act(() => actions.last?.(1))
+    act(() => actions.activate?.(1, false))
+    expect(runs[0]).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -481,6 +599,24 @@ describe('Select as a Vim overlay surface', () => {
     act(() => active!.surface.actions.activate?.(1, false))
     expect(onChange).toHaveBeenCalledWith('b')
     expect(screen.queryByRole('listbox')).toBeNull()
+  })
+
+  it('treats a count on G as the 1-based target option, skipping disabled ones', () => {
+    const onChange = vi.fn()
+    const options = [
+      { value: 'a', label: 'a' },
+      { value: 'x', label: 'x', disabled: true },
+      { value: 'b', label: 'b' },
+      { value: 'c', label: 'c' },
+    ] as const
+    render(<Select value="a" options={options} onChange={onChange} data-testid="sel" />)
+    fireEvent.click(screen.getByTestId('sel'))
+    act(() => (screen.getByRole('option', { name: 'a' }) as HTMLElement).focus())
+    const actions = getActiveVimSurface(document)!.surface.actions
+    // Enabled options are a, b, c; the 2nd is b.
+    act(() => actions.last?.(2))
+    act(() => actions.activate?.(1, false))
+    expect(onChange).toHaveBeenCalledWith('b')
   })
 
   it('closes on escape', () => {

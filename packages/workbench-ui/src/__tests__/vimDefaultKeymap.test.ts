@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  Built-in keymap shape: each chrome surface gets its own directional keys and
- *  the scoped entries (`when`) that only fire on one view.
+ *  Generic built-in keymap shape: each chrome surface gets its own directional
+ *  keys. Workbench-command entries are covered by `vimAppKeymap.test.ts` in the app.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
@@ -61,40 +61,10 @@ describe('VIM_DEFAULT_KEYMAP', () => {
     expect(commandFor('list', ['x'])).toBeUndefined()
   })
 
-  it('settings-only `/` focuses the settings search box', () => {
-    const entries = entriesFor('list', ['/'])
-    expect(entries.map((entry) => entry.command)).toContain('workbench.action.focusSettingsSearch')
-    const entry = entries.find((candidate) => candidate.command.includes('focusSettingsSearch'))
-    expect(entry?.when).toContain("vimSurfaceId == 'list:settings'")
-    expect(entry?.when).toContain("vimSurfaceId == 'list:settings-toc'")
-  })
-
-  it('chat-only i/a/e/j/k map to the existing agent commands while acpChatFocused', () => {
-    const expectations: ReadonlyArray<readonly [string, string]> = [
-      ['i', 'workbench.action.agent.focusInput'],
-      ['a', 'workbench.action.agent.scrollTimelineToTop'],
-      ['e', 'workbench.action.agent.scrollTimelineToBottom'],
-      ['j', 'workbench.action.agent.scrollTimelineDown'],
-      ['k', 'workbench.action.agent.scrollTimelineUp'],
-    ]
-    for (const [key, command] of expectations) {
-      const entries = entriesFor('list', [key])
-      const entry = entries.find((candidate) => candidate.command === command)
-      expect(entry, `${key} -> ${command}`).toBeDefined()
-      expect(entry?.when).toBe('acpChatFocused')
-    }
-  })
-
-  it('navigates compare-editor hunks from a list while a diff is visible', () => {
-    for (const [keys, command] of [
-      [[']', 'c'], 'workbench.action.compareEditor.nextChange'],
-      [['[', 'c'], 'workbench.action.compareEditor.previousChange'],
-    ] as const) {
-      const entry = entriesFor('list', keys).find((candidate) => candidate.command === command)
-      expect(entry, keys.join(' ')).toBeDefined()
-      expect(entry?.when).toBe('textCompareEditorVisible')
-      expect(commandFor('menu', keys)).toBeUndefined()
-      expect(commandFor('editor', keys)).toBeUndefined()
+  it('/ opens the host filter on lists only', () => {
+    expect(commandFor('list', ['/'])).toBe('list.find')
+    for (const kind of ['menu', 'overlay', 'tabs', 'reader'] as const) {
+      expect(commandFor(kind, ['/'])).toBeUndefined()
     }
   })
 
@@ -106,37 +76,20 @@ describe('VIM_DEFAULT_KEYMAP', () => {
     expect(commandFor('menu', ['ctrl+e'])).toBeUndefined()
     expect(commandFor('menu', ['ctrl+y'])).toBeUndefined()
   })
+})
 
-  it('scrolls terminal normal mode lines with Ctrl+e/y', () => {
-    expect(commandFor('terminal', ['ctrl+e'])).toBe(
-      'workbench.action.terminal.normalScrollLineDown',
-    )
-    expect(commandFor('terminal', ['ctrl+y'])).toBe('workbench.action.terminal.normalScrollLineUp')
+describe('VIM_DEFAULT_KEYMAP layering', () => {
+  it('names no workbench command and no app context key', () => {
+    for (const entry of VIM_DEFAULT_KEYMAP) {
+      expect(entry.command, entry.id).toMatch(/^(list|surface)\./)
+      expect(entry.when ?? '', entry.id).not.toMatch(
+        /acpChatFocused|textCompareEditorVisible|vimSurfaceId/,
+      )
+    }
   })
 
-  it('editor leader aliases stay on the editor surface', () => {
-    const expectations = [
-      [['<leader>', 'd'], 'editor.action.revealDefinition'],
-      [['<leader>', 'D'], 'editor.action.peekDefinition'],
-      [['<leader>', 'r'], 'editor.action.goToReferences'],
-      [['<leader>', 'R'], 'editor.action.referenceSearch.trigger'],
-      [['<leader>', 'y'], 'editor.action.goToTypeDefinition'],
-      [['<leader>', 'i'], 'editor.action.goToImplementation'],
-      [['<leader>', 'k'], 'editor.action.showHover'],
-      [['<leader>', 'a'], 'editor.action.quickFix'],
-      [['<leader>', 'c'], 'editor.action.commentLine'],
-      [['<leader>', 'm'], 'editor.action.rename'],
-      [['<leader>', 'F'], 'editor.action.formatDocument'],
-      [['<leader>', 'I'], 'editor.action.organizeImports'],
-      [['<leader>', 'G'], 'editor.action.gotoLine'],
-      [['<leader>', 'O'], 'editor.action.quickOutline'],
-      [['<leader>', 'S'], 'workbench.action.showAllSymbols'],
-      [['<leader>', 'h'], 'workbench.action.goBack'],
-      [['<leader>', 'l'], 'workbench.action.goForward'],
-    ] as const
-    for (const [keys, command] of expectations) {
-      expect(commandFor('editor', keys), keys.join(' ')).toBe(command)
-      expect(commandFor('list', keys), keys.join(' ')).toBeUndefined()
-    }
+  it('has unique ids', () => {
+    const ids = VIM_DEFAULT_KEYMAP.map((entry) => entry.id)
+    expect(new Set(ids).size).toBe(ids.length)
   })
 })

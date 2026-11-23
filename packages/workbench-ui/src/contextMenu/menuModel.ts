@@ -6,6 +6,8 @@
  *  panels) only ever sees this shape, so the two flavours cannot drift apart.
  *--------------------------------------------------------------------------------------------*/
 
+import { resolveVimGotoIndex } from '../keybinding/vimIndexActions.js'
+
 export interface MenuEntry {
   kind: 'item'
   id: string
@@ -76,6 +78,20 @@ export function stepIndex(
     if (isNavigable(rows[cursor])) return cursor
   }
   return undefined
+}
+
+/**
+ * Row index for `gg` / `G` (with count): the count walks navigable rows only,
+ * so separators and disabled rows never count as an "n-th item".
+ */
+export function nthNavigableIndex(
+  rows: readonly RowModel[],
+  edge: 'first' | 'last',
+  count: number,
+): number | undefined {
+  const navigable = rows.flatMap((row, i) => (isNavigable(row) ? [i] : []))
+  const target = resolveVimGotoIndex(edge, count, navigable.length)
+  return target < 0 ? undefined : navigable[target]
 }
 
 /**

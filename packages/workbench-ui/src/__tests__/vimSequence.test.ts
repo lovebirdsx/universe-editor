@@ -96,6 +96,28 @@ describe('VimSequenceEngine', () => {
     expect(e.feed('q')).toMatchObject({ kind: 'execute', matches: [entries[4]] })
   })
 
+  it('marks the interrupting token for replay so it is not dropped', () => {
+    const e = engine()
+    e.feed('z')
+    const step = e.feed('j')
+    expect(step).toMatchObject({ kind: 'execute', matches: [entries[4]], replay: true })
+    expect(e.isPending).toBe(false)
+    // The caller feeds the same token again; it then runs as its own command.
+    expect(e.feed('j')).toEqual({ kind: 'execute', matches: [entries[0]], count: 0 })
+  })
+
+  it('keeps a count on the replayed token chain independent of the deferred one', () => {
+    const e = engine()
+    e.feed('3')
+    e.feed('z')
+    expect(e.feed('j')).toMatchObject({ kind: 'execute', count: 3, replay: true })
+    expect(e.feed('j')).toMatchObject({ kind: 'execute', count: 0 })
+  })
+
+  it('does not set replay for a plain match', () => {
+    expect(engine().feed('j')).not.toHaveProperty('replay')
+  })
+
   it('flushes an incomplete prefix as a no-op cancel', () => {
     const e = engine()
     e.feed('g')
@@ -116,5 +138,22 @@ describe('VimSequenceEngine', () => {
     e.feed('4')
     e.setEntries([{ id: 'x', keys: ['x'], command: 'x' }])
     expect(e.feed('x')).toMatchObject({ kind: 'execute', count: 4 })
+  })
+
+  it('exposes the typed prefix and whether a complete match waits on the timeout', () => {
+    const e = engine()
+    expect(e.prefix).toEqual([])
+    e.feed('3')
+    expect(e.prefix).toEqual([])
+    e.feed('g')
+    expect(e.prefix).toEqual(['g'])
+    expect(e.hasDeferredMatch).toBe(false)
+    e.reset()
+    e.feed('z')
+    expect(e.prefix).toEqual(['z'])
+    expect(e.hasDeferredMatch).toBe(true)
+    e.reset()
+    expect(e.prefix).toEqual([])
+    expect(e.hasDeferredMatch).toBe(false)
   })
 })

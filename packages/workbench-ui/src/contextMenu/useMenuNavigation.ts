@@ -25,7 +25,7 @@ import {
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
-import { rowsAtLevel, stepIndex, type RowModel } from './menuModel.js'
+import { nthNavigableIndex, rowsAtLevel, stepIndex, type RowModel } from './menuModel.js'
 
 /**
  * Hovering a sibling row does not tear the open panel down straight away: a
@@ -296,12 +296,12 @@ export function useMenuNavigation(
   )
 
   const jumpToEnd = useCallback(
-    (end: 'first' | 'last'): void => {
+    (end: 'first' | 'last', count = 0): void => {
       const s = stateRef.current
       const level = activeLevel(s)
       const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
       if (!levelRows) return
-      const next = stepIndex(levelRows, undefined, end === 'first' ? 1 : -1)
+      const next = nthNavigableIndex(levelRows, end, count)
       if (next === undefined) return
       cancelClose()
       setState({
@@ -355,8 +355,8 @@ export function useMenuNavigation(
           }
           moveVertical(direction, count)
         },
-        first: () => jumpToEnd('first'),
-        last: () => jumpToEnd('last'),
+        first: (count) => jumpToEnd('first', count),
+        last: (count) => jumpToEnd('last', count),
         // A menu has no viewport to page by; Ctrl+d/u land on the ends, which is
         // what a page gesture means for the handful of rows a menu has.
         page: (direction) => jumpToEnd(direction === 'down' ? 'last' : 'first'),
