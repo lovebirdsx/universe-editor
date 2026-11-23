@@ -34,7 +34,7 @@ import { createVimEdits, visualStartPosition } from './vimEdits.js'
 import { releaseInputMethod, requestInputMethod } from './vimInputMethod.js'
 import { consumeEvent, isImeKeyEvent, toVimKeyInput } from './vimKeyUtils.js'
 import { formatPendingKeys, idle, isAwaitingCharArg, reduceVimKey } from './vimKeymap.js'
-import { clampNormalPosition, lineLength } from './vimMotions.js'
+import { clampNormalPosition } from './vimMotions.js'
 import { getVimRegister, isVimClipboardRegister, type VimRegisterContent } from './vimRegisters.js'
 import { createVimSearchController } from './vimSearchController.js'
 import {
@@ -63,7 +63,6 @@ import {
   type VimState,
 } from './vimTypes.js'
 import {
-  orderedEnds,
   selectionFromExtent,
   visualEolAfterMotion,
   visualExtent,

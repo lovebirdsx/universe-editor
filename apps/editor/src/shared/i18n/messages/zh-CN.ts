@@ -404,7 +404,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'vim.keyHelp.Till_just_after_the_previous_occurrence_of_a_character': '跳到本行前面指定字符之后',
   'vim.keyHelp.Repeat_the_last_f_F_t_T': '重复上一次 f/F/t/T',
   'vim.keyHelp.Repeat_the_last_f_F_t_T_in_the_opposite_direction': '反方向重复上一次 f/F/t/T',
-  'vim.keyHelp.Jump_to_the_matching_bracket_N_N_percent_into_the_file': '跳到匹配的括号（N%：跳到文件的 N%）',
+  'vim.keyHelp.Jump_to_the_matching_bracket_N_N_percent_into_the_file':
+    '跳到匹配的括号（N%：跳到文件的 N%）',
   'vim.keyHelp.Delete': '删除',
   'vim.keyHelp.Yank_copy': '复制（yank）',
   'vim.keyHelp.Change_delete_and_enter_Insert': '修改（删除并进入插入模式）',
@@ -515,11 +516,13 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'vim.keyHelp.Start_Visual_mode_linewise': '进入行可视模式',
   'vim.keyHelp.Start_Visual_mode_blockwise': '进入块可视模式',
   'vim.keyHelp.Go_to_the_other_end_of_the_selection': '跳到选区的另一端',
-  'vim.keyHelp.Block_mode_insert_before_after_the_block_on_every_row': '块模式：在每行的块前 / 块后插入',
+  'vim.keyHelp.Block_mode_insert_before_after_the_block_on_every_row':
+    '块模式：在每行的块前 / 块后插入',
   'vim.keyHelp.Extend_the_selection_by_a_text_object': '用文本对象扩展选区',
   'vim.keyHelp.Leave_Visual_mode': '退出可视模式',
   'vim.keyHelp.Repeat_the_last_change': '重复上一次修改',
-  'vim.keyHelp.Use_a_register_for_the_next_delete_yank_or_paste': '为下一次删除、复制或粘贴指定寄存器',
+  'vim.keyHelp.Use_a_register_for_the_next_delete_yank_or_paste':
+    '为下一次删除、复制或粘贴指定寄存器',
   'vim.keyHelp.Black_hole_register_discard_what_is_deleted': '黑洞寄存器：丢弃被删除的内容',
   'vim.keyHelp.System_clipboard_register': '系统剪贴板寄存器',
   'vim.keyHelp.Append_to_the_named_register': '追加到具名寄存器',

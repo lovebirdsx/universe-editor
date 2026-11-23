@@ -923,11 +923,7 @@ export function PromptInput({
         try {
           const bytes = await fileService.readFile(uri)
           const mimeType = mimeTypeForFileName(fileName)
-          const reason = validateImage(
-            { mimeType, byteSize: bytes.byteLength },
-            count,
-            imageLimits,
-          )
+          const reason = validateImage({ mimeType, byteSize: bytes.byteLength }, count, imageLimits)
           if (reason !== null) {
             rejection ??= reason
             continue
@@ -936,11 +932,7 @@ export function PromptInput({
           // Compression may change the MIME (PNG → WebP), so derive it from the
           // resulting blob rather than the file name.
           const compressed = await downscaleImage(raw)
-          const image = await blobToPromptImage(
-            compressed,
-            generateUuid(),
-            fileName || undefined,
-          )
+          const image = await blobToPromptImage(compressed, generateUuid(), fileName || undefined)
           accepted.push(image)
           count++
         } catch {

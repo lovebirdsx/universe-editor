@@ -30,7 +30,10 @@ function makeCanvas(output: Blob): {
   return { canvas, drawImage }
 }
 
-function depsFor(bitmap: FakeBitmap, output: Blob): ImageCompressionDeps & {
+function depsFor(
+  bitmap: FakeBitmap,
+  output: Blob,
+): ImageCompressionDeps & {
   readonly drawImage: ReturnType<typeof vi.fn>
   readonly canvas: HTMLCanvasElement
 } {
@@ -59,9 +62,7 @@ describe('downscaleImage', () => {
     const deps = depsFor(bitmap, compressed)
     await expect(downscaleImage(original, deps)).resolves.toBe(compressed)
     expect(deps.canvas.width).toBe(IMAGE_COMPRESS_MAX_DIMENSION)
-    expect(deps.canvas.height).toBe(
-      Math.round((3000 * IMAGE_COMPRESS_MAX_DIMENSION) / 4000),
-    )
+    expect(deps.canvas.height).toBe(Math.round((3000 * IMAGE_COMPRESS_MAX_DIMENSION) / 4000))
     expect(deps.drawImage).toHaveBeenCalledWith(
       expect.anything(),
       0,
