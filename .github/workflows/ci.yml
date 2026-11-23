@@ -409,10 +409,12 @@ jobs:
 
       - uses: pnpm/action-setup@v4.4.0
 
+      # No `cache: pnpm` on purpose: this job never installs, so the pnpm store
+      # path would not exist and setup-node's post step would fail the job with
+      # "Path Validation Error" whenever the lockfile hash rotated the cache key.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: pnpm
           package-manager-cache: false
 
       # Deliberately no `pnpm install`: turbo's `--dry=json` only reads the
