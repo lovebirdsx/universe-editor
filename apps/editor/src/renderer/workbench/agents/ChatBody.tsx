@@ -192,6 +192,8 @@ export interface WidgetHandle {
    *  override store so Alt+F / chevron / Ctrl+Alt+F fold the sticky first-user
    *  bar exactly like an in-list slot. */
   isSlotCollapsed: (key: string) => boolean
+  /** Expand a folded card for a capture and return the exact restore callback. */
+  expandSlotTemporarily: (key: string) => () => void
   onDidChangeCollapse: Event<void>
   toggleSlotCollapse: (key: string) => void
   /** Deterministic collapse write for a context-menu command naming a card (and,
@@ -262,6 +264,7 @@ function createNoopHandle(): WidgetHandle {
     getFocusedKey: () => null,
     onDidChangeFocusedKey: Event.None,
     isSlotCollapsed: () => false,
+    expandSlotTemporarily: () => noop,
     onDidChangeCollapse: Event.None,
     toggleSlotCollapse: noop,
     setSlotCollapsed: noop,
@@ -414,6 +417,7 @@ function ChatSessionBody({
       jumpToPlan: () => handleRef.current.jumpToPlan(),
       toggleCollapse: () => handleRef.current.toggleCollapse(),
       isSlotCollapsed: (key) => handleRef.current.isSlotCollapsed(key),
+      expandSlotTemporarily: (key) => handleRef.current.expandSlotTemporarily(key),
       setSlotCollapsed: (overrides) => handleRef.current.setSlotCollapsed(overrides),
       cycleCollapseMode: () => handleRef.current.cycleCollapseMode(),
       getFocusedText: () => handleRef.current.getFocusedText(),
@@ -2033,6 +2037,24 @@ function ChatScroll({
     handle.cycleCollapseMode = () => {
       session.cycleCollapseMode()
     }
+    handle.expandSlotTemporarily = (key) => {
+      const item = findByStickyKey(timelineRef.current, key)
+      if (item === undefined || !resolveCollapsed(key, item, collapseRef.current)) return noop
+      const previousOverride = collapseRef.current.overrides.get(key)
+      setOverrides((prev) => {
+        const next = new Map(prev)
+        next.set(key, false)
+        return next
+      })
+      return () => {
+        setOverrides((prev) => {
+          const next = new Map(prev)
+          if (previousOverride === undefined) next.delete(key)
+          else next.set(key, previousOverride)
+          return next
+        })
+      }
+    }
     handle.getFocusedText = () => {
       const key = focusedKeyRef.current
       if (!key) return undefined
@@ -2103,6 +2125,7 @@ function ChatScroll({
       handle.toggleCollapse = noop
       handle.toggleSlotCollapse = noop
       handle.setSlotCollapsed = noop
+      handle.expandSlotTemporarily = () => noop
       handle.cycleCollapseMode = noop
       handle.getFocusedText = () => undefined
       handle.setFocusedKey = noop

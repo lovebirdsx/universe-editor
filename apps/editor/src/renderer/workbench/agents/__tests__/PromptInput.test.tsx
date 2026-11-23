@@ -405,6 +405,7 @@ function makeHandleRef(): { current: WidgetHandle } {
       jumpToPlan: () => {},
       toggleCollapse: () => {},
       cycleCollapseMode: () => {},
+      expandSlotTemporarily: () => () => {},
       getFocusedText: () => undefined,
       setFocusedKey: () => {},
       getFocusedKey: () => null,

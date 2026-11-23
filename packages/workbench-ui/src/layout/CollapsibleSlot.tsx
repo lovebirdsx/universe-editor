@@ -146,7 +146,11 @@ export function CollapsibleSlot({
       ) : (
         header
       )}
-      {!collapsed && <div className={styles['slotBody']}>{children}</div>}
+      {!collapsed && (
+        <div className={styles['slotBody']} data-testid="acp-collapsible-body">
+          {children}
+        </div>
+      )}
       {footer}
     </Tag>
   )

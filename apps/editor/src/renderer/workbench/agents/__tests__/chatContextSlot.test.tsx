@@ -125,6 +125,7 @@ describe('describeAcpChatSlot', () => {
       slotKey: 'm:m1',
       messageId: 'msg-7',
       card: true,
+      message: true,
       collapsed: false,
       userMessage: true,
       subAgent: false,

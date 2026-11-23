@@ -3,18 +3,20 @@
  *  context text / reference) fed by the chat and prompt context menus.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
   IEditorGroupsService,
   IEditorResolverService,
   IHostService,
+  INotificationService,
   IWorkspaceService,
   InstantiationService,
   MenuId,
   MenuRegistry,
   ServiceCollection,
+  Severity,
   URI,
   observableValue,
   registerAction2,
@@ -23,6 +25,7 @@ import {
 import {
   CopyAcpContextTextAction,
   CopyAcpImageAction,
+  CopyAcpMessageAsImageAction,
   CopyAcpReferenceAction,
   CopyAcpResourcePathAction,
   CopyAcpSubAgentTranscriptAction,
@@ -36,6 +39,11 @@ import {
   type IAcpSession,
   type TimelineItem,
 } from '../../services/acp/session/acpSessionService.js'
+import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
+import { makeFakeAcpChatWidget } from '../../__tests__/_helpers/fakeAcpChatWidget.js'
+import { copyMessageAsImage } from '../../workbench/agents/messageImageCopy.js'
+
+vi.mock('../../workbench/agents/messageImageCopy.js', () => ({ copyMessageAsImage: vi.fn() }))
 
 const disposables: IDisposable[] = []
 afterEach(() => {
@@ -220,6 +228,105 @@ describe('CopyAcpReferenceAction', () => {
     })
 
     expect(writeText).toHaveBeenCalledWith('@src/a.ts')
+  })
+})
+
+describe('CopyAcpMessageAsImageAction', () => {
+  const copyMock = vi.mocked(copyMessageAsImage)
+
+  beforeEach(() => {
+    copyMock.mockReset()
+  })
+
+  function runImageCommand(
+    widget: unknown,
+    arg: unknown,
+    options: {
+      writeClipboardImage?: ReturnType<typeof vi.fn>
+      notify?: ReturnType<typeof vi.fn>
+    } = {},
+  ) {
+    const writeClipboardImage = options.writeClipboardImage ?? vi.fn().mockResolvedValue(undefined)
+    const notify = options.notify ?? vi.fn()
+    const services = new ServiceCollection()
+    services.set(IHostService, { _serviceBrand: undefined, writeClipboardImage } as never)
+    services.set(INotificationService, { _serviceBrand: undefined, notify } as never)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      widgetForSession: () => widget,
+    } as never)
+    const inst = new InstantiationService(services)
+    return {
+      writeClipboardImage,
+      notify,
+      promise: inst.invokeFunction((accessor) =>
+        Promise.resolve(
+          CommandsRegistry.getCommand(CopyAcpMessageAsImageAction.ID)!.handler(accessor, arg),
+        ),
+      ),
+    }
+  }
+
+  it('registers in the chat menu and hides on non-message or nested cards', () => {
+    disposables.push(registerAction2(CopyAcpMessageAsImageAction))
+    const cks = new ContextKeyService()
+    disposables.push(cks)
+    const message = cks.createKey<boolean>('acpChatContextMessage', false)
+    const nested = cks.createKey<boolean>('acpChatContextNestedCard', false)
+    const visible = (): boolean =>
+      MenuRegistry.getMenuItems(MenuId.AcpChatContext, cks).some(
+        (i) => 'command' in i && i.command === CopyAcpMessageAsImageAction.ID,
+      )
+
+    expect(visible()).toBe(false)
+    message.set(true)
+    expect(visible()).toBe(true)
+    nested.set(true)
+    expect(visible()).toBe(false)
+  })
+
+  it('captures a message card and writes the PNG to the host clipboard', async () => {
+    disposables.push(registerAction2(CopyAcpMessageAsImageAction))
+    copyMock.mockResolvedValue({ kind: 'ok' })
+    const container = document.createElement('div')
+    const widget = makeFakeAcpChatWidget({ sessionId: 's1', container })
+    const { writeClipboardImage, notify, promise } = runImageCommand(widget, {
+      sessionId: 's1',
+      slotKey: 'm:a',
+    })
+
+    await promise
+    expect(copyMock).toHaveBeenCalledWith(expect.objectContaining({ container, slotKey: 'm:a' }))
+    const captureOptions = copyMock.mock.calls[0]![0]!
+    await captureOptions.writeImage('QUJD')
+    expect(writeClipboardImage).toHaveBeenCalledWith('QUJD')
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('ignores tool-call and nested keys', async () => {
+    disposables.push(registerAction2(CopyAcpMessageAsImageAction))
+    const widget = makeFakeAcpChatWidget({ sessionId: 's1' })
+
+    await runImageCommand(widget, { sessionId: 's1', slotKey: 't:a' }).promise
+    await runImageCommand(widget, { sessionId: 's1', slotKey: 't:a/m:b' }).promise
+
+    expect(copyMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['too-large', Severity.Warning],
+    ['unavailable', Severity.Warning],
+    ['failed', Severity.Error],
+  ] as const)('reports %s to the user', async (kind, severity) => {
+    disposables.push(registerAction2(CopyAcpMessageAsImageAction))
+    copyMock.mockResolvedValue({ kind } as never)
+    const { notify, promise } = runImageCommand(makeFakeAcpChatWidget({ sessionId: 's1' }), {
+      sessionId: 's1',
+      slotKey: 'm:a',
+    })
+
+    await promise
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ severity }))
   })
 })
 

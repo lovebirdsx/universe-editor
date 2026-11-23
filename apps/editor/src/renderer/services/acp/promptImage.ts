@@ -169,7 +169,7 @@ export async function blobToPromptImage(
   }
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
+export function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onerror = () => reject(reader.error ?? new Error('Failed to read image'))

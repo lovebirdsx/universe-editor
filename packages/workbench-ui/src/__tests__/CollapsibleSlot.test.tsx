@@ -34,6 +34,8 @@ describe('CollapsibleSlot', () => {
   it('renders the body and title when expanded', () => {
     renderSlot(false)
     expect(screen.getByTestId('slot-body')).toBeTruthy()
+    const body = screen.getByTestId('acp-collapsible-body')
+    expect(body.contains(screen.getByTestId('slot-body'))).toBe(true)
     expect(screen.getByText('the title')).toBeTruthy()
     expect(screen.getByTestId('acp-collapsible-toggle').getAttribute('aria-expanded')).toBe('true')
   })
@@ -41,6 +43,7 @@ describe('CollapsibleSlot', () => {
   it('hides the body and shows the summary when collapsed', () => {
     renderSlot(true)
     expect(screen.queryByTestId('slot-body')).toBeNull()
+    expect(screen.queryByTestId('acp-collapsible-body')).toBeNull()
     expect(screen.getByText('a short summary')).toBeTruthy()
     expect(screen.getByTestId('acp-collapsible-toggle').getAttribute('aria-expanded')).toBe('false')
   })

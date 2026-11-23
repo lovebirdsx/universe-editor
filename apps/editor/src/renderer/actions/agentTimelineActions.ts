@@ -12,13 +12,16 @@ import {
   IEditorResolverService,
   IHostService,
   ILayoutService,
+  INotificationService,
   IViewDescriptorService,
   IViewsService,
   IWorkspaceService,
   MenuId,
   PartId,
+  Severity,
   URI,
   ViewContainerLocation,
+  localize,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -34,6 +37,7 @@ import { currentWorkbenchDocumentOrUndefined } from '../services/windows/workben
 import { ensureSideGroup } from '../services/editor/openToSide.js'
 import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
 import { toPngBase64 } from '../services/acp/promptImage.js'
+import { copyMessageAsImage } from '../workbench/agents/messageImageCopy.js'
 import { findByStickyKey } from '../workbench/agents/stickyScroll.js'
 import { subtreeCardKeys } from '../workbench/agents/timelineCollapse.js'
 import { createdFilePath } from '../workbench/agents/toolCallDisplay.js'
@@ -947,6 +951,72 @@ export class CopyAcpReferenceAction extends Action2 {
 // heavy rides in the args — a sub-agent transcript can be megabytes, and the
 // fold state must be the live one, not a snapshot from when the menu opened.
 // ---------------------------------------------------------------------------
+
+export class CopyAcpMessageAsImageAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.copyMessageAsImage'
+  constructor() {
+    super({
+      id: CopyAcpMessageAsImageAction.ID,
+      icon: 'copy',
+      title: localize2('action.agent.copyMessageAsImage', 'Copy as Image'),
+      category: CATEGORY,
+      menu: [
+        {
+          id: MenuId.AcpChatContext,
+          group: ACP_COPY_GROUP,
+          order: 6,
+          when: 'acpChatContextMessage && !acpChatContextNestedCard',
+        },
+      ],
+    })
+  }
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const { sessionId, slotKey } = readChatContextArg(arg)
+    if (sessionId === undefined || slotKey === undefined) return
+    // Message keys are `m:<id>`; a composite key would name a card nested in a
+    // sub-agent timeline, which the menu already excludes.
+    if (!slotKey.startsWith('m:') || slotKey.includes('/')) return
+    const widget = resolveSessionWidget(accessor, sessionId, arg)
+    if (widget === undefined) return
+    // Snapshot before the first await — the accessor dies past it.
+    const hostService = accessor.get(IHostService)
+    const notifications = accessor.get(INotificationService)
+    const result = await copyMessageAsImage({
+      container: widget.container,
+      slotKey,
+      expandSlotTemporarily: widget.expandSlotTemporarily,
+      writeImage: (base64) => hostService.writeClipboardImage(base64),
+    })
+    switch (result.kind) {
+      case 'ok':
+        return
+      case 'too-large':
+        notifications.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'agent.copyMessageImage.tooLarge',
+            'This message is too long to render as an image. Use Copy Message instead.',
+          ),
+        })
+        return
+      case 'unavailable':
+        notifications.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'agent.copyMessageImage.unavailable',
+            'This message is not visible. Scroll to it and try again.',
+          ),
+        })
+        return
+      case 'failed':
+        notifications.notify({
+          severity: Severity.Error,
+          message: localize('agent.copyMessageImage.failed', 'Failed to copy the message image.'),
+        })
+        return
+    }
+  }
+}
 
 export class CopyAcpSubAgentTranscriptAction extends Action2 {
   static readonly ID = 'workbench.action.agent.copySubAgentTranscript'

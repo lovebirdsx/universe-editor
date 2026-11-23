@@ -25,6 +25,7 @@ export function makeFakeAcpChatWidget(overrides: Partial<AcpChatWidget> = {}): A
     toggleCollapse: vi.fn(),
     setSlotCollapsed: vi.fn(),
     isSlotCollapsed: vi.fn(() => false),
+    expandSlotTemporarily: vi.fn(() => vi.fn()),
     cycleCollapseMode: vi.fn(),
     getFocusedText: vi.fn(),
     popoverSelectNext: vi.fn(),

@@ -105,6 +105,7 @@
     "electron-vite": "catalog:",
     "eslint": "catalog:",
     "happy-dom": "catalog:",
+    "html-to-image": "catalog:",
     "katex": "catalog:",
     "lucide-react": "catalog:",
     "material-icon-theme": "catalog:",

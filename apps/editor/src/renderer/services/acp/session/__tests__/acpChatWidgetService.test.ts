@@ -101,6 +101,36 @@ describe('AcpChatWidgetService', () => {
     expect(cks.get('acpChatFocused')).toBe(false)
   })
 
+  it('setSlotTarget gates the message-card key independently of foldability', () => {
+    svc.setSlotTarget({
+      slotKey: 'm:a',
+      messageId: undefined,
+      card: true,
+      message: true,
+      collapsed: false,
+      userMessage: false,
+      subAgent: false,
+      nested: false,
+      createdFile: undefined,
+    })
+    expect(cks.get('acpChatContextMessage')).toBe(true)
+    expect(cks.get('acpChatContextCard')).toBe(true)
+
+    svc.setSlotTarget({
+      slotKey: 't:t',
+      messageId: undefined,
+      card: true,
+      message: false,
+      collapsed: false,
+      userMessage: false,
+      subAgent: false,
+      nested: false,
+      createdFile: undefined,
+    })
+    expect(cks.get('acpChatContextMessage')).toBe(false)
+    expect(cks.get('acpChatContextCard')).toBe(true)
+  })
+
   it('focusin inside a registered container sets key=true and lastFocused', () => {
     const a = makeWidget('a')
     svc.register(a.widget)

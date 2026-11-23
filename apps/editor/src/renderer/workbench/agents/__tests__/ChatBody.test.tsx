@@ -437,6 +437,7 @@ describe('ChatBody — click to focus a timeline item', () => {
         slotKey: 'm:a',
         messageId: undefined,
         card: true,
+        message: true,
         collapsed: false,
         userMessage: false,
         subAgent: false,
@@ -1194,6 +1195,7 @@ describe('ChatBody — context menu card targets', () => {
         slotKey: 't:task/m:sm1',
         messageId: undefined,
         card: true,
+        message: true,
         collapsed: false,
         userMessage: false,
         subAgent: false,
@@ -4046,6 +4048,28 @@ describe('ChatBody — one sub-agent card open at a time', () => {
     expect(collapseToggle(stickyEl(container, 't:a/t:sub')).getAttribute('aria-expanded')).toBe(
       'false',
     )
+  })
+
+  it('expandSlotTemporarily opens a folded message and restores the fold', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-message-image-expand', [
+        { kind: 'message', id: 'a', message: makeMessage('a', 'hello') },
+      ]),
+    )
+    toggleCard(container, 'm:a')
+    expect(collapseToggle(slotEl(container, 'm:a')).getAttribute('aria-expanded')).toBe('false')
+
+    let restore: () => void = () => {}
+    act(() => {
+      restore = widgetRef.current!.expandSlotTemporarily('m:a')
+    })
+    expect(collapseToggle(slotEl(container, 'm:a')).getAttribute('aria-expanded')).toBe('true')
+    expect(
+      slotEl(container, 'm:a').querySelector('[data-testid="acp-collapsible-body"]'),
+    ).not.toBeNull()
+
+    act(() => restore())
+    expect(collapseToggle(slotEl(container, 'm:a')).getAttribute('aria-expanded')).toBe('false')
   })
 
   it('folds only itself when the open card is toggled again', () => {

@@ -113,6 +113,10 @@ export interface AcpChatWidget {
    *  {@link setSlotCollapsed} writes — so a command never acts on a snapshot
    *  taken when the menu opened. */
   isSlotCollapsed(key: string): boolean
+  /** Expand a folded card just long enough to capture it, returning a callback
+   *  that restores the exact override (an absent override deletes rather than
+   *  pinning `true`, so a mode-default fold keeps following the mode). */
+  expandSlotTemporarily(key: string): () => void
   /** Cycle the whole timeline: by-kind default → all collapsed → all expanded. */
   cycleCollapseMode(): void
   /** Plain text of the currently focused timeline message; undefined when none. */
@@ -255,6 +259,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private readonly _contextPathKey: IContextKey<boolean>
   private readonly _contextChipTextKey: IContextKey<boolean>
   private readonly _slotCardKey: IContextKey<boolean>
+  private readonly _slotMessageKey: IContextKey<boolean>
   private readonly _slotCollapsedKey: IContextKey<boolean>
   private readonly _slotUserMessageKey: IContextKey<boolean>
   private readonly _slotSubAgentKey: IContextKey<boolean>
@@ -292,6 +297,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._contextPathKey = contextKeyService.createKey<boolean>('acpChatContextPath', false)
     this._contextChipTextKey = contextKeyService.createKey<boolean>('acpChatContextChipText', false)
     this._slotCardKey = contextKeyService.createKey<boolean>('acpChatContextCard', false)
+    this._slotMessageKey = contextKeyService.createKey<boolean>('acpChatContextMessage', false)
     this._slotCollapsedKey = contextKeyService.createKey<boolean>(
       'acpChatContextCardCollapsed',
       false,
@@ -461,6 +467,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
 
   setSlotTarget(slot: AcpChatSlot | undefined): void {
     this._slotCardKey.set(slot?.card === true)
+    this._slotMessageKey.set(slot?.message === true)
     this._slotCollapsedKey.set(slot?.card === true && slot.collapsed)
     this._slotUserMessageKey.set(slot?.userMessage === true)
     this._slotSubAgentKey.set(slot?.subAgent === true)

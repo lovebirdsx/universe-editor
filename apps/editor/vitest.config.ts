@@ -72,6 +72,9 @@ const rendererDomTests = [
   'src/renderer/services/search/__tests__/openEditorSearch.test.ts',
   'src/renderer/services/usage/__tests__/SubscriptionUsageService.test.ts',
   'src/renderer/workbench/markdown/__tests__/markdownAnchors.test.ts',
+  'src/renderer/workbench/agents/__tests__/messageImage.test.ts',
+  'src/renderer/workbench/agents/__tests__/messageImageCopy.test.ts',
+  'src/renderer/workbench/agents/__tests__/slotCaptureTarget.test.ts',
 ]
 
 const rendererDomInclude = ['src/renderer/**/*.test.tsx', ...rendererDomTests]

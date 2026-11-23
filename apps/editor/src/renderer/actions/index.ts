@@ -448,6 +448,7 @@ import {
   CopyAcpResourcePathAction,
   CopyAcpContextTextAction,
   CopyAcpReferenceAction,
+  CopyAcpMessageAsImageAction,
   CopyAcpSubAgentTranscriptAction,
   SelectNextAcpPromptSuggestionAction,
   SelectPreviousAcpPromptSuggestionAction,
@@ -993,6 +994,7 @@ registerAction2(CopyAcpImageAction)
 registerAction2(CopyAcpResourcePathAction)
 registerAction2(CopyAcpContextTextAction)
 registerAction2(CopyAcpReferenceAction)
+registerAction2(CopyAcpMessageAsImageAction)
 registerAction2(CopyAcpSubAgentTranscriptAction)
 registerAction2(OpenMcpDebuggerAction)
 registerAction2(OpenAcpToolCallPreviewAction)

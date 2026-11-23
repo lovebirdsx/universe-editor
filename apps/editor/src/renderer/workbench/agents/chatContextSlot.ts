@@ -82,6 +82,7 @@ export function describeAcpChatSlot(
     slotKey,
     messageId,
     card,
+    message: item.kind === 'message',
     collapsed: card ? collapsed : false,
     userMessage: messageId !== undefined,
     subAgent: call !== undefined && (call.children?.length ?? 0) > 0,

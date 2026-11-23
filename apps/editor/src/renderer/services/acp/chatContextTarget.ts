@@ -94,6 +94,9 @@ export interface AcpChatSlot {
   readonly messageId: string | undefined
   /** Foldable card (message / tool call); status bars are not. */
   readonly card: boolean
+  /** The item is a message card (user / assistant / thought), not a tool call —
+   *  the gate for whole-message image capture. */
+  readonly message: boolean
   readonly collapsed: boolean
   readonly userMessage: boolean
   /** Tool call carrying a nested sub-agent timeline. */

@@ -432,6 +432,7 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
         slotKey: 'm:u1',
         messageId: undefined,
         card: true,
+        message: true,
         // Read from the widget's shared collapse store, not the bar's local state.
         collapsed: true,
         userMessage: false,
