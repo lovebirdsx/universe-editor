@@ -1119,6 +1119,9 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
   const onTreeFocus = useCallback(
     (source: ITreeFocusSource) => {
       rememberScmFocusRegion(repoKey, 'tree')
+      // Pointer focus is the mousedown of a row click; seeding here would set a
+      // cursor first and Ctrl-click would then toggle that seeded row instead.
+      if (source === 'pointer') return
       const visible = treeModel.getVisibleNodes()
       const focusedId = treeModel.focused
       if (focusedId !== null && visible.some((n) => n.id === focusedId)) return
