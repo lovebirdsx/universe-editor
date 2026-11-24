@@ -223,7 +223,9 @@ export class ShowScmAction extends Action2 {
     // Reveal the active file's row (if any) before focusing, so opening from an
     // editor/diff lands on its change. The diff input maps back to its real file.
     // The changes list is keyed by SCM-host path, so an off-host editor reveals
-    // nothing rather than matching a same-named row on the other host.
+    // nothing rather than matching a same-named row on the other host. With no
+    // match the view restores its remembered focus region (tree row vs commit
+    // box) instead of forcing the input.
     const active = accessor.get(IEditorGroupsService).activeGroup.activeEditor
     const workspaceService = accessor.get(IWorkspaceService)
     const fileUri =

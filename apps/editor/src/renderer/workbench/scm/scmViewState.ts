@@ -20,10 +20,13 @@ const _selectedRepo = observableValue<string | undefined>('scm.selectedRepo', un
 export const SELECTED_REPO_STORAGE_KEY = 'scm.selectedRepo'
 
 /** A request to reveal a file row in the changes list; `fsPath` null means "no
- *  matching file — just focus the view". `tick` lets the same path re-trigger. */
+ *  matching file — just focus the view". `tick` lets the same path re-trigger.
+ *  `focusInput` forces the commit box instead of the remembered focus region
+ *  (the AI bridge uses it before streaming a generated message there). */
 export interface IScmRevealRequest {
   readonly fsPath: string | null
   readonly tick: number
+  readonly focusInput?: boolean
 }
 const _reveal = observableValue<IScmRevealRequest | null>('scm.reveal', null)
 
@@ -35,6 +38,10 @@ export const scmViewState = {
   selectedRepo: _selectedRepo as IObservable<string | undefined>,
   /** Latest reveal request issued by the show-SCM command. */
   revealRequest: _reveal as IObservable<IScmRevealRequest | null>,
+  /** Synchronous read for command-style consumers (e.g. the focus getter). */
+  getRevealRequest(): IScmRevealRequest | null {
+    return _reveal.get()
+  },
   setViewMode(mode: ViewMode): void {
     _viewMode.set(mode, undefined)
   },
@@ -44,7 +51,20 @@ export const scmViewState = {
   setSelectedRepo(rootUri: string | undefined): void {
     _selectedRepo.set(rootUri, undefined)
   },
-  requestReveal(fsPath: string | null): void {
-    _reveal.set({ fsPath, tick: (_reveal.get()?.tick ?? 0) + 1 }, undefined)
+  requestReveal(fsPath: string | null, options?: { focusInput?: boolean }): void {
+    _reveal.set(
+      {
+        fsPath,
+        tick: (_reveal.get()?.tick ?? 0) + 1,
+        ...(options?.focusInput === true ? { focusInput: true } : {}),
+      },
+      undefined,
+    )
+  },
+  _resetForTests(): void {
+    _viewMode.set('list', undefined)
+    _collapseAll.set(0, undefined)
+    _selectedRepo.set(undefined, undefined)
+    _reveal.set(null, undefined)
   },
 }

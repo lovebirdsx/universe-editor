@@ -46,6 +46,7 @@ import {
   Tree,
   TreeModel,
   useOwnedTreeModel,
+  seedTreeFocusCursor,
   isKeyboardContextMenu,
   resourceDragProps,
   selectionDragUris,
@@ -53,6 +54,7 @@ import {
   dragContainsResources,
   type IScrollStatePersister,
   type ITreeDataSource,
+  type ITreeFocusSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
 import { ChevronDown, ChevronRight } from 'lucide-react'
@@ -86,6 +88,14 @@ import {
 } from './scmShared.js'
 import { ScmContextMenu, type ScmContextMenuState } from './ScmContextMenu.js'
 import { scmViewState } from './scmViewState.js'
+import {
+  getHandledScmRevealTick,
+  getScmFocusRegion,
+  getScmFocusedPath,
+  markScmRevealHandled,
+  rememberScmFocusRegion,
+  rememberScmFocusedPath,
+} from './scmFocusState.js'
 import {
   peekCollapsedIds,
   peekScrollTop,
@@ -1065,35 +1075,99 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
 
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const treeRef = useRef<HTMLDivElement>(null)
-  // Whether the last reveal request landed on a file row; decides whether
-  // focusView should focus the tree (a row is selected) or the commit box.
-  const revealHitRef = useRef(false)
+  // The focus target follows the region the user last focused in this repo. The
+  // memory is module-level so it survives a ScmProviderView unmount. A pending
+  // reveal request wins: an explicit reveal (even one issued before this
+  // instance mounted) should land on the tree, and the AI bridge's focusInput
+  // should land on the commit box before the effect consumes it.
   // Only one provider is mounted at a time, so it always owns the view's focus.
   useViewFocusable(
     'workbench.view.scm.main',
-    useCallback(() => (revealHitRef.current ? treeRef.current : inputRef.current), []),
+    useCallback(() => {
+      const request = scmViewState.getRevealRequest()
+      if (request !== null && request.tick > getHandledScmRevealTick()) {
+        if (request.focusInput === true) return inputRef.current
+        if (
+          request.fsPath !== null &&
+          findFileNode(snapshotRef.current, request.fsPath) !== undefined
+        ) {
+          return treeRef.current
+        }
+      }
+      return getScmFocusRegion(repoKey) === 'tree' ? treeRef.current : inputRef.current
+    }, [repoKey]),
+  )
+
+  // Remember the file row holding the cursor so a remount (fresh TreeModel) can
+  // restore it. Resource URI is the stable identity: the node id embeds the
+  // group and changes when staging moves a file between groups.
+  useEffect(() => {
+    const d = treeModel.onDidChangeSelection(() => {
+      const focusedId = treeModel.focused
+      if (!focusedId) return
+      const node = treeModel.getVisibleNodes().find((n) => n.id === focusedId)
+      if (node?.element.kind === 'file') {
+        rememberScmFocusedPath(repoKey, node.element.resource.resourceUri)
+      }
+    })
+    return () => d.dispose()
+  }, [treeModel, repoKey])
+
+  // Land on the remembered file (only when still visible), else the first file
+  // row, else the first visible row. Never consults the reveal request: the
+  // reveal effect owns explicit targets, so this seeding cannot override them.
+  const onTreeFocus = useCallback(
+    (source: ITreeFocusSource) => {
+      rememberScmFocusRegion(repoKey, 'tree')
+      const visible = treeModel.getVisibleNodes()
+      const focusedId = treeModel.focused
+      if (focusedId !== null && visible.some((n) => n.id === focusedId)) return
+
+      const remembered = getScmFocusedPath(repoKey)
+      const rememberedNode =
+        remembered !== undefined ? findFileNode(snapshotRef.current, remembered) : undefined
+      const rememberedId = rememberedNode?.id
+      let targetId =
+        rememberedId !== undefined && visible.some((n) => n.id === rememberedId)
+          ? rememberedId
+          : undefined
+      if (targetId === undefined) {
+        targetId = visible.find((n) => n.element.kind === 'file')?.id
+      }
+      targetId ??= visible[0]?.id
+      if (targetId !== undefined) seedTreeFocusCursor(treeModel, targetId, source)
+    },
+    [repoKey, treeModel],
   )
 
   // Reveal the file requested by the show-SCM command: select + scroll its row,
   // then pull focus to the tree. `snapshot` is a dependency so a request issued
-  // before the tree is built retries once the data lands. `handledRevealRef`
-  // starts at 0 (ticks start at 1) so a request that arrived before this
-  // provider mounted — the SCM-was-closed case — is still picked up.
+  // before the tree is built retries once the data lands. The handled tick is
+  // module-level so a remount does not replay an already-consumed request; the
+  // per-model guard still lets it replay after StrictMode rebuilt the model.
   const revealRequest = useObservable(scmViewState.revealRequest)
-  const handledRevealRef = useRef<number>(0)
+  const appliedRevealRef = useRef<{ tick: number; model: TreeModel<ScmNode> } | null>(null)
   useEffect(() => {
-    if (!revealRequest || revealRequest.tick === handledRevealRef.current) return
+    if (!revealRequest) return
+    const applied = appliedRevealRef.current
+    if (applied?.tick === revealRequest.tick && applied.model === treeModel) return
+    if (applied === null && revealRequest.tick <= getHandledScmRevealTick()) return
     if (revealRequest.fsPath === null) {
-      handledRevealRef.current = revealRequest.tick
-      revealHitRef.current = false
+      markScmRevealHandled(revealRequest.tick)
+      appliedRevealRef.current = { tick: revealRequest.tick, model: treeModel }
+      // No file to reveal: keep the remembered region. Only the AI bridge
+      // explicitly asks for the commit box.
+      if (revealRequest.focusInput === true) rememberScmFocusRegion(repoKey, 'input')
       return
     }
     const node = findFileNode(snapshotRef.current, revealRequest.fsPath)
     if (!node) return // snapshot not ready yet — retry when it next changes
-    handledRevealRef.current = revealRequest.tick
-    revealHitRef.current = true
+    markScmRevealHandled(revealRequest.tick)
+    appliedRevealRef.current = { tick: revealRequest.tick, model: treeModel }
+    rememberScmFocusRegion(repoKey, 'tree')
+    rememberScmFocusedPath(repoKey, node.resource.resourceUri)
     void treeModel.reveal(node).then(() => treeRef.current?.focus({ preventScroll: true }))
-  }, [revealRequest, snapshot, treeModel])
+  }, [revealRequest, snapshot, treeModel, repoKey])
 
   // Persist the commit message per repository so it survives a window reload.
   const inputStorageKey = `scm/input/${model.rootUri ?? model.id}`
@@ -1302,6 +1376,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
           rows={1}
           spellCheck={false}
           onChange={(e) => scm.changeInputBoxValue(model.handle, e.target.value)}
+          onFocus={() => rememberScmFocusRegion(repoKey, 'input')}
           onKeyDown={(e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && acceptCommand) {
               e.preventDefault()
@@ -1311,12 +1386,8 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
             }
             if (e.key === 'Tab' && !e.shiftKey) {
               e.preventDefault()
+              // onTreeFocus seeds the cursor (remembered file / first file row).
               treeRef.current?.focus({ preventScroll: true })
-              // Give keyboard navigation an anchor: select the first row if none focused.
-              if (!treeModel.focused) {
-                const first = treeModel.getVisibleNodes()[0]
-                if (first) treeModel.setSelection([first.id], first.id)
-              }
             }
           }}
         />
@@ -1378,6 +1449,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
         scrollStatePersister={scrollPersister}
         indentBase={0}
         modifierActivation
+        onFocus={onTreeFocus}
         renderRow={renderRow}
         renderStickyRow={(ctx) => (
           <ScmStickyRow node={ctx.node.element} indentPadding={ctx.indentPadding} />

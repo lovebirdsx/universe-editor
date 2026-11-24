@@ -12,6 +12,7 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { buildModelPickItems } from './aiModelPickItems.js'
 
 const CATEGORY = localize2('command.category.ai', 'AI')
@@ -21,7 +22,8 @@ const CATEGORY = localize2('command.category.ai', 'AI')
  * generating a commit message, so the streaming write-back into the SCM commit
  * input is visible even when the command was run from the palette (where the
  * SCM panel may not be up). Never declare this id in an extension manifest —
- * it would shadow the renderer handler. Focus lands on the commit input.
+ * it would shadow the renderer handler. Unlike a plain return to the view, this
+ * explicitly asks for the commit input instead of the remembered focus region.
  */
 export class RevealScmAction extends Action2 {
   static readonly ID = '_workbench.revealScm'
@@ -32,8 +34,10 @@ export class RevealScmAction extends Action2 {
     })
   }
   override async run(accessor: ServicesAccessor): Promise<void> {
-    // focusView opens the SCM container, expands the view and focuses the
-    // commit input (the view's registered focusable element).
+    // The generated message streams into this box; restoring the remembered
+    // tree row would hide it. Synchronous so focusView's getter sees the intent
+    // even before the reveal effect is flushed.
+    scmViewState.requestReveal(null, { focusInput: true })
     await accessor.get(ILayoutService).focusView('workbench.view.scm.main', { source: 'command' })
   }
 }
