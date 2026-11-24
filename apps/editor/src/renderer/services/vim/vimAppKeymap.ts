@@ -68,7 +68,7 @@ const EDITOR_ENTRIES = surfaceRows('editor', [
   ['editor.format', ['<leader>', 'F'], 'editor.action.formatDocument'],
   ['editor.organizeImports', ['<leader>', 'I'], 'editor.action.organizeImports'],
   ['editor.gotoLine', ['<leader>', 'G'], 'editor.action.gotoLine'],
-  ['editor.symbols', ['<leader>', 'O'], 'editor.action.quickOutline'],
+  ['editor.symbols', ['<leader>', 'O'], 'workbench.action.gotoSymbol'],
   ['editor.workspaceSymbols', ['<leader>', 'S'], 'workbench.action.showAllSymbols'],
   ['editor.goBack', ['<leader>', 'h'], 'workbench.action.goBack'],
   ['editor.goForward', ['<leader>', 'l'], 'workbench.action.goForward'],

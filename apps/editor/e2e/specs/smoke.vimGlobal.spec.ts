@@ -176,6 +176,35 @@ test.describe('@p0 vim global', () => {
       .toBe('workbench.view.explorer.tree')
   })
 
+  test('editor Normal mode <leader>O opens the workbench symbol picker', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await setVimEnabled(page, true)
+    const dir = mkTempDir('universe-editor-e2e-vim-symbols-')
+    const filePath = join(dir, 'alpha.txt')
+    writeFileSync(filePath, BODY, 'utf8')
+    await workbench.openWorkspace(dir)
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
+    await expect.poll(() => workbench.getContextKey<boolean>('editorTextFocus')).toBe(true)
+    await expect.poll(() => workbench.getContextKey<string>('vimSurface')).toBe('editor')
+    await expect.poll(() => workbench.getContextKey<string>('vimMode')).toBe('normal')
+
+    // The workbench picker opens even without a document symbol provider
+    // (Monaco's quickOutline would silently no-op on a .txt file).
+    await page.keyboard.press('Space')
+    await page.keyboard.press('O')
+    await workbench.quickInput.waitForVisible()
+    await expect(workbench.quickInput.input).toHaveValue('@')
+    await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(true)
+
+    await page.keyboard.press('Escape')
+    await workbench.quickInput.waitForHidden()
+  })
+
   test('vim.enabled=false restores plain typing', async ({ page, workbench }) => {
     test.slow()
     await workbench.waitForRestored()

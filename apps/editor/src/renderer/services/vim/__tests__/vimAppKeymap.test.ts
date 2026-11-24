@@ -88,7 +88,7 @@ describe('VIM_APP_KEYMAP', () => {
       [['<leader>', 'F'], 'editor.action.formatDocument'],
       [['<leader>', 'I'], 'editor.action.organizeImports'],
       [['<leader>', 'G'], 'editor.action.gotoLine'],
-      [['<leader>', 'O'], 'editor.action.quickOutline'],
+      [['<leader>', 'O'], 'workbench.action.gotoSymbol'],
       [['<leader>', 'S'], 'workbench.action.showAllSymbols'],
       [['<leader>', 'h'], 'workbench.action.goBack'],
       [['<leader>', 'l'], 'workbench.action.goForward'],
