@@ -8,10 +8,12 @@
  *   4. editorPartMultipleEditorGroups ContextKey tracks group count
  *   5. MoveEditorToRightGroup creates a new group when no right neighbor exists
  *   6. MoveEditorToNextGroup cycles editor between existing groups
+ *   7. Vim <leader>w H/J/K/L moves the active tab between groups
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '../fixtures/sharedApp.js'
 import type { WorkbenchPO } from '../pages/WorkbenchPO.js'
+import { setVimEnabled } from '../pages/vimHelpers.js'
 import type { Page } from '@playwright/test'
 
 // Move DOM focus out of the editor onto a real focusable element (an activity
@@ -270,5 +272,54 @@ test.describe('@p1 editor group move — MoveEditorToNextGroup', () => {
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriB)
     // Left group still exists with A; total group count remains 2.
     await expect.poll(() => workbench.getEditorGroupCount()).toBe(2)
+  })
+})
+
+test.describe('@p1 editor group move — vim <leader>w H/J/K/L', () => {
+  test('moves the active tab between groups and keeps lowercase h/l as focus', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await setVimEnabled(page, true)
+
+    // Two editors in one group; B is active.
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    const uriA = await workbench.getActiveEditorUri()
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    const uriB = await workbench.getActiveEditorUri()
+    expect(uriB).not.toBe(uriA)
+    expect(await workbench.getEditorGroupCount()).toBe(1)
+    await expect.poll(() => workbench.getContextKey<boolean>('editorTextFocus')).toBe(true)
+    await expect.poll(() => workbench.getContextKey<string>('vimMode')).toBe('normal')
+
+    // Shift+L: no right neighbor, so a new right group is created for B.
+    await page.keyboard.press('Space')
+    await page.keyboard.press('w')
+    await page.keyboard.press('Shift+L')
+    await expect.poll(() => workbench.getEditorGroupCount()).toBe(2)
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriB)
+
+    // Lowercase h/l still only move focus between the two groups.
+    await page.keyboard.press('Space')
+    await page.keyboard.press('w')
+    await page.keyboard.press('h')
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriA)
+    await expect.poll(() => workbench.getEditorGroupCount()).toBe(2)
+
+    await page.keyboard.press('Space')
+    await page.keyboard.press('w')
+    await page.keyboard.press('l')
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriB)
+
+    // Shift+H: move B into the left group; the now-empty right group is removed.
+    await page.keyboard.press('Space')
+    await page.keyboard.press('w')
+    await page.keyboard.press('Shift+H')
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriB)
+    await expect.poll(() => workbench.getEditorGroupCount()).toBe(1)
+    await expect.poll(() => workbench.getContextKey<boolean>('editorTextFocus')).toBe(true)
   })
 })

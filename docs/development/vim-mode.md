@@ -30,7 +30,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 
 | 文件 | 职责 |
 | --- | --- |
-| `services/vim/vimAppKeymap.ts` | **应用键位表**：leader 链（含 `<leader>?` 速查表、`<leader>w v/c`）、编辑器 leader 别名（`surfaces: ['editor']`）、终端 Normal、Chat 时间线（`when: acpChatFocused`）、对比编辑器 `]c`/`[c`。键位的命令 id 一律写这里或 workbench-ui 通用表 |
+| `services/vim/vimAppKeymap.ts` | **应用键位表**：leader 链（含 `<leader>?` 速查表、`<leader>w` 的 `h/j/k/l` 组聚焦、`H/J/K/L` 标签迁移、`s/v` 拆分、`c` 关闭组）、编辑器 leader 别名（`surfaces: ['editor']`）、终端 Normal、Chat 时间线（`when: acpChatFocused`）、对比编辑器 `]c`/`[c`。键位的命令 id 一律写这里或 workbench-ui 通用表 |
 | `services/vim/vimSurfaceKeymaps.ts` | 只有某个视图自己认的键（设置页 / 快捷键编辑器 / Git 与 Perforce 图谱的 `/`），配合 `useVimSurfaceKeymap`；同时是 `vim.keymap` 校验用的「已知内置 id」目录 |
 | `services/vim/vimKeymapMerge.ts` | 纯函数：`parseUserKeymap`（解析 + 校验 `vim.keymap`）、`mergeVimKeymap`（通用表 + 应用表 + surface 自带 + 用户覆盖 / 追加 / 解绑 → 某 kind 的有效键位） |
 | `services/vim/vimModeService.ts` | 配置读取、per-surface 模式记忆、编辑器 Visual 子模式、context key（`vim*`）、状态栏条目（模式文字 + pending / Unsupported 反馈）、有效 keymap 缓存、保留集、which-key 状态 |

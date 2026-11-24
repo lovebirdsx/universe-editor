@@ -127,6 +127,27 @@ describe('VIM_APP_KEYMAP', () => {
     )
   })
 
+  it('window chords move the active editor into adjacent groups', () => {
+    expect(commandFor('editor', ['<leader>', 'w', 'H'])).toBe(
+      'workbench.action.moveEditorToLeftGroup',
+    )
+    expect(commandFor('editor', ['<leader>', 'w', 'J'])).toBe(
+      'workbench.action.moveEditorToBelowGroup',
+    )
+    expect(commandFor('editor', ['<leader>', 'w', 'K'])).toBe(
+      'workbench.action.moveEditorToAboveGroup',
+    )
+    expect(commandFor('editor', ['<leader>', 'w', 'L'])).toBe(
+      'workbench.action.moveEditorToRightGroup',
+    )
+    // Case-sensitive tokens: lowercase still focuses, uppercase moves.
+    expect(commandFor('editor', ['<leader>', 'w', 'h'])).toBe('workbench.action.focusLeftGroup')
+    // Leader entries are not editor-only: a focused list moves the active tab too.
+    expect(commandFor('list', ['<leader>', 'w', 'H'])).toBe(
+      'workbench.action.moveEditorToLeftGroup',
+    )
+  })
+
   it('<leader>? opens the key cheat sheet on every surface', () => {
     expect(commandFor('list', ['<leader>', '?'])).toBe('workbench.action.vim.showKeymapCheatSheet')
     expect(commandFor('editor', ['<leader>', '?'])).toBe(
