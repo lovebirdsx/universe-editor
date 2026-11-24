@@ -73,9 +73,17 @@ test.describe('@p1 SCM focus memory', () => {
     await expect(commitInput).toBeFocused({ timeout: 10_000 })
     await expect(rowB).toHaveCount(1, { timeout: 60_000 })
 
-    // Focus a file row, then leave for an editor that is not part of SCM.
+    // A plain row click also opens the row's diff, and focus intentionally
+    // follows into the editor (see smoke.scmKeyboardContextMenu). The tree is
+    // focused only for the instant between mousedown and that async open, so
+    // wait for the navigation instead of asserting the tree kept focus.
     await rowB.click()
-    await expect(scmTree).toBeFocused()
+    await expect
+      .poll(() => workbench.getActiveEditorUri(), {
+        timeout: 10_000,
+        message: 'clicking an SCM row should open its diff',
+      })
+      .toContain('b.ts')
     await openClean()
 
     await workbench.runCommand('workbench.view.scm')
@@ -92,7 +100,9 @@ test.describe('@p1 SCM focus memory', () => {
     await expect(commitInput).toBeFocused({ timeout: 10_000 })
 
     // The AI bridge explicitly asks for the commit input even with a tree focus.
-    await rowB.click()
+    // Focus the tree directly: a plain row click would open b's diff and hand
+    // focus to the editor before the bridge runs.
+    await scmTree.focus()
     await expect(scmTree).toBeFocused()
     await workbench.runCommand('_workbench.revealScm')
     await expect(commitInput).toBeFocused({ timeout: 10_000 })
