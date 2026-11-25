@@ -85,10 +85,10 @@ export async function focusRequests(electronApp: ElectronApplication): Promise<F
 
 /**
  * Playwright enables focus emulation, so `document.hasFocus()` reports true for
- * every page it drives — including a background auxiliary window. The focus
- * service deliberately skips the native request when the target document is
- * already focused, so make the auxiliary document look unfocused like a real
- * background window before asserting that a request happens.
+ * every page it drives. The main-window focus guard still consults it, so mark
+ * the main document unfocused before asserting that a request reaches it.
+ * Auxiliary-window requests no longer need this: the focus service always sends
+ * them and the main process dedupes with `BrowserWindow.isFocused()`.
  */
 export async function markDocumentUnfocused(window: Page): Promise<void> {
   await window.evaluate(() => {

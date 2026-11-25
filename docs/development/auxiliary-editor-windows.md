@@ -200,9 +200,9 @@ main 进程有两处不能只看"当前窗口 id"：
 统一入口：
 
 - `activateGroupAndFocus(group, ctx, editor?)`（`services/editor/activateGroupAndFocus.ts`）：`activateGroup` → `setActive(editor)` → focusStack push → `IWindowFocusService.focusGroup(group)` → `preserveFocusOnActivation(false)` → `focusEditorInput(...)`。**用户显式 reveal**（历史导航、Ctrl+Tab、Ctrl+P、Git Graph、扩展 `showTextDocument` 等）统一走它；后台打开/`preserveFocus` 路径不请求窗口聚焦。`focusGroup` 会同步经窗口桥写入 `preserveFocus: true`，必须在其后同任务内清掉，否则目标若是尚未挂载的后台 tab，晚挂载的编辑器会拒绝聚焦（Ctrl+Tab 从辅助窗口切回主窗口后台 tab 后无光标）。
-- `IWindowFocusService`（`services/windows/windowFocusService.ts`）：主窗口用 `IWindowsService.getCurrentWindowId()` + `focusWindow(id)`，辅助窗口用 `IAuxiliaryWindowsService.focusWindow(token)`；`focusWindow` 同时 `setActiveWindow`，保证 overlay/dialog 归属同步。同一窗口的重复请求在一次 IPC 在途期间会被合并；IPC 失败只记 debug，不让命令失败。
+- `IWindowFocusService`（`services/windows/windowFocusService.ts`）：主窗口用 `IWindowsService.getCurrentWindowId()` + `focusWindow(id)`，辅助窗口用 `IAuxiliaryWindowsService.focusWindow(token)`；`focusWindow` 同时 `setActiveWindow`，保证 overlay/dialog 归属同步。同一窗口的重复请求在一次 IPC 在途期间会被合并；IPC 失败只记 debug，不让命令失败。辅助文档在本架构下恒报 `document.hasFocus() === true`，所以辅助窗口的请求**总是**下发，由 main 侧 `BrowserWindow.isFocused()` 去重（见下）；只有主文档的 `hasFocus()` 可用于提前跳过。
 - `LayoutService.focusView/focusPart` 只在 `source: 'command' | 'user'` 时请求窗口聚焦；`'restore'` 与未指定来源绝不抢焦点。`focusPart(PartId.EditorArea)` 按全局 `activeGroup` 解析所属窗口（编辑器组可能在辅助窗口），再走 `activateGroupAndFocus`，不硬编码主窗口。
-- `workbench.action.navigate*`（Vim `<leader>w h/j/k/l`）先走当前窗口的组间网格、再走主窗口的 parts，最后按屏幕方位找其它工作窗口（`services/focus/windowDirection.ts`）：主窗口 part 的视口 rect 先经窗口 `screenX/screenY` 换算到屏幕坐标，辅助窗口直接用原生窗口矩形；`document.visibilityState === 'hidden'`、已关闭、零尺寸窗口不作为候选（避免方向键把用户最小化的窗口弹出来）；窗口候选沿用 part 的规则（位于方向侧且垂直投影有重叠）。命中后聚焦目标窗口的 `part.activeGroup` 而不是全局 `activeGroup`（后者仍指向原窗口），空组再 `focusGroupBody` 兜底。
+- `workbench.action.navigate*`（Vim `<leader>w h/j/k/l`）先走当前窗口的组间网格、再走主窗口的 parts，最后按屏幕方位找其它工作窗口（`services/focus/windowDirection.ts`）：主窗口 part 的视口 rect 先经窗口 `screenX/screenY` 换算到屏幕坐标，辅助窗口直接用原生窗口矩形；`document.visibilityState === 'hidden'`、已关闭、零尺寸窗口不作为候选（避免方向键把用户最小化的窗口弹出来）；窗口候选沿用 part 的规则（位于方向侧且垂直投影有重叠）。命中后：若目标是辅助窗口，聚焦其 `part.activeGroup`（整窗即编辑器）；若目标是主窗口，先用同一屏幕坐标 origin 在主窗口可见 Part 间再选一次最近的 Part（例如右侧 SecondarySideBar 的 Outline 会胜过 EditorArea），命中的不是 EditorArea 时走 `layout.focusPart(part, { source: 'command' })`（它会先 `focusMainWindow` 再恢复该 Part 上次的 View），否则回退聚焦 `part.activeGroup`。两者都不用全局 `activeGroup`（后者仍指向原窗口），空组再 `focusGroupBody` 兜底。
 - `MainThreadEditor.$showTextDocument` / `WebviewService.revealHostPanel` 等扩展入口必须保留 `preserveFocus` 语义：传了 `preserveFocus: true` 就只激活组、不请求窗口聚焦。
 - 自动揭示（错误日志、扩展后台调用 `showOutputChannel`）传 `source: 'restore'`，可移动主窗口内的 DOM 焦点但绝不把窗口拉到前台。
 - **QuickInput 关闭时的焦点恢复不能抢回窗口**：`FocusScopeOverlay` 默认在卸载时把焦点还给打开前的元素，但 Ctrl+Tab 这类同步命令会在 React 卸载面板之前就完成跨窗口激活；随后这次恢复会触发主 document 的 focusin → 活动窗口被切回主窗口（落在主编辑区时活动 part 也会跟着切回）。`QuickInputPortal` 因此传 `shouldRestoreFocus`，仅在当前 active workbench document 仍是面板宿主 document 时才恢复。
@@ -212,8 +212,8 @@ main 进程有两处不能只看"当前窗口 id"：
 
 两个关键细节：
 
-- **判定"已有焦点"只读目标 `document.hasFocus()`**，不能读 `WorkbenchWindowService.activeWindow`——pointerdown/focusin 会把 activeWindow 提前写成目标窗口，但原生焦点未必已过去；读错会在 Windows 上触发 always-on-top 窗口闪烁。
-- **异步命令必须在第一个 `await` 之前取完 `IWindowFocusService` / `IContextKeyService`**：`ServicesAccessor` 在首个 await 后失效。main 侧两个 `focusWindow` 都先 `restore()` 被最小化的窗口——Windows 上对最小化窗口 `focus()` 是 no-op。
+- **原生焦点去重放在 main**：renderer 不要用 `document.hasFocus()` 判定辅助窗口是否已聚焦——同 renderer 下辅助 `about:blank` 文档恒报 true，会把"把后台辅助窗口带到前台"的请求静默吞掉；辅助请求一律下发，main 侧 `AuxiliaryWindowsMainService.focusWindow` 用 `BrowserWindow.isFocused()` 去重（已聚焦且未最小化才跳过，避免 always-on-top 窗口闪烁）。主窗口仍可用 `document.hasFocus()` 提前跳过（主文档焦点状态是准确的）。`WorkbenchWindowService.activeWindow` 不能用于原生焦点判定——pointerdown/focusin 会把它提前写成目标窗口。
+- **异步命令必须在第一个 `await` 之前取完 `IWindowFocusService` / `IContextKeyService`**：`ServicesAccessor` 在首个 await 后失效。main 侧两个 `focusWindow` 都先 `restore()` 被最小化的窗口——Windows 上对最小化窗口 `focus()` 是 no-op；辅助窗口的 `isFocused()` 去重必须排除最小化，否则会跳过 restore 永远回不到前台。
 
 ## 测试与已知限制
 

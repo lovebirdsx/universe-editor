@@ -4,9 +4,14 @@
  *  in-process state; without this a command running in the main window can
  *  reveal an editor in an auxiliary window while keyboard focus stays behind.
  *
- *  `document.hasFocus()` is the guard (not `WorkbenchWindowService.activeWindow`,
- *  which pointerdown/focusin can set before the OS grants focus): requesting OS
- *  focus for an already-focused window flashes always-on-top windows on Windows.
+ *  Electron reports `document.hasFocus() === true` for every auxiliary
+ *  `about:blank` document in this shared renderer, so the renderer cannot tell
+ *  whether an auxiliary window already has native focus. Auxiliary requests
+ *  therefore always reach the main process, which dedupes with
+ *  `BrowserWindow.isFocused()` (requesting OS focus for an already-focused
+ *  window flashes always-on-top windows on Windows). The main document's focus
+ *  state is still trustworthy; `WorkbenchWindowService.activeWindow` is never
+ *  used for this — pointerdown/focusin can set it before the OS grants focus.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -51,7 +56,9 @@ export class WindowFocusService extends Disposable implements IWindowFocusServic
     // Overlapping reveal paths (and focusPart's view recursion) can request the
     // same window several times in one turn; one in-flight request is enough
     // until it settles, when a genuinely needed retry still goes through.
-    if (this._pending.has(win) || hasDocumentFocus(win)) return
+    // Auxiliary documents always report hasFocus(); only the main document's
+    // state can skip the request up front.
+    if (this._pending.has(win) || (win.isMain && hasDocumentFocus(win))) return
 
     this._pending.add(win)
     const settle = (): void => {

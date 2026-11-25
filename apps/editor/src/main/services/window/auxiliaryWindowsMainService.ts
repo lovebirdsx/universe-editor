@@ -313,9 +313,14 @@ export class AuxiliaryWindowsMainService implements IDisposable {
   focusWindow(parentWindowId: number, token: string): void {
     const entry = this._requireEntry(parentWindowId, token)
     if (entry.win.isDestroyed()) return
+    const minimized = entry.win.isMinimized()
+    // Auxiliary documents always report hasFocus() in the shared renderer, so
+    // the renderer sends every request and dedupe happens here with the
+    // authoritative native signal. Minimized windows must always be restored.
+    if (!this._options.silentE2E && !minimized && entry.win.isFocused()) return
     // A minimized window ignores focus() on Windows; restore first so commands
     // that reveal an editor there actually bring it back.
-    if (entry.win.isMinimized()) entry.win.restore()
+    if (minimized) entry.win.restore()
     if (this._options.silentE2E) entry.win.showInactive()
     else entry.win.focus()
   }

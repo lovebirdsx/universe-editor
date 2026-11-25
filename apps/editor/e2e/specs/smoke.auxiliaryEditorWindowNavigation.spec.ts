@@ -49,6 +49,31 @@ async function placeAuxiliaryWindowOnTheRight(electronApp: ElectronApplication):
   })
 }
 
+/**
+ * Same as {@link placeAuxiliaryWindowOnTheRight}, but the main window keeps
+ * enough width for SideBar + EditorArea + SecondarySideBar. The default halves
+ * can be narrower than the workbench grid (which keeps its persisted sizes), so
+ * the right-hand part would overflow the window and lose its screen position.
+ */
+async function placeWithWideMainWindow(electronApp: ElectronApplication): Promise<void> {
+  await electronApp.evaluate(({ BrowserWindow, screen }) => {
+    const windows = BrowserWindow.getAllWindows()
+    const main = windows.find((win) => win.webContents.getURL() !== 'about:blank')
+    const aux = windows.find((win) => win.webContents.getURL() === 'about:blank')
+    if (!main || !aux) throw new Error('main or auxiliary window not found')
+    for (const win of [main, aux]) {
+      if (win.isMaximized()) win.unmaximize()
+      if (win.isFullScreen()) win.setFullScreen(false)
+    }
+    const area = screen.getPrimaryDisplay().workArea
+    const mainWidth = Math.min(760, Math.max(640, Math.floor(area.width * 0.6)))
+    const height = Math.max(480, Math.min(760, area.height - 60))
+    const auxWidth = Math.max(320, Math.min(520, area.width - mainWidth - 50))
+    main.setBounds({ x: area.x + 10, y: area.y + 10, width: mainWidth, height })
+    aux.setBounds({ x: area.x + 10 + mainWidth + 30, y: area.y + 10, width: auxWidth, height })
+  })
+}
+
 interface ScreenRect {
   readonly x: number
   readonly y: number
@@ -139,7 +164,6 @@ test.describe('@p1 auxiliary window direction navigation', () => {
     await expectSideBySide(page, child)
 
     await installFocusProbe(electronApp)
-    await markDocumentUnfocused(child)
     await clearFocusRequests(electronApp)
 
     await page.locator('[data-testid="part-editorArea"] .monaco-editor').first().click()
@@ -264,6 +288,84 @@ test.describe('@p1 auxiliary window direction navigation', () => {
       })
       .toBe(true)
     expect((await focusRequests(electronApp)).some((request) => !request.auxiliary)).toBe(false)
+
+    await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+  })
+
+  test('entering the main window from the right lands on its right-hand view', async ({
+    electronApp,
+    workbench,
+    page,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await setVimEnabled(page, true)
+
+    const auxFile = seedFile('nav-aux-outline.txt', 'aux outline target\n')
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), auxFile)
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+    const child = await waitForAuxWindow(
+      electronApp,
+      workbench,
+      'workbench.action.moveEditorToNewWindow',
+    )
+    const token = (await auxWindows(page))[0]!.token
+
+    await placeWithWideMainWindow(electronApp)
+    await expectSideBySide(page, child)
+
+    // Reveal and focus the Outline in the main window's right-hand secondary
+    // side bar. That also records the view as the part's last-focused view, so
+    // focusPart can restore it later.
+    await activateMainWindow(page)
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('outline.focus')
+    })
+    await expect
+      .poll(() => workbench.getContextKey<string>('focusedView'))
+      .toBe('workbench.view.outline.main')
+    await expect.poll(() => workbench.getContextKey<boolean>('secondarySideBarVisible')).toBe(true)
+
+    await installFocusProbe(electronApp)
+    await clearFocusRequests(electronApp)
+
+    // Hand activation to the auxiliary window without moving DOM focus, then
+    // navigate left from it. `<leader>w h` is the same action (covered from an
+    // auxiliary editor by the first spec); driving the command here keeps this
+    // spec independent from the background document's Vim surface timing.
+    await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+    // Playwright emulates focus for every driven page; the main-window guard
+    // still reads document.hasFocus().
+    await markDocumentUnfocused(page)
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.navigateLeft')
+    })
+
+    await expect
+      .poll(async () => (await focusRequests(electronApp)).some((request) => !request.auxiliary))
+      .toBe(true)
+    await expect
+      .poll(async () => {
+        const snapshot = await page.evaluate(() => window.__E2E__!.getWorkbenchWindows())
+        return snapshot.find((window) => window.isMain)?.active === true
+      })
+      .toBe(true)
+    // The auxiliary window is whole-editor; entering the main window must pick
+    // its right-hand part (Outline) instead of the editor area.
+    await expect
+      .poll(() => workbench.getContextKey<string>('focusedView'))
+      .toBe('workbench.view.outline.main')
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            document.activeElement?.closest('[data-view-id="workbench.view.outline.main"]') !==
+            null,
+        ),
+      )
+      .toBe(true)
 
     await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
     await expect.poll(async () => (await auxWindows(page)).length).toBe(0)

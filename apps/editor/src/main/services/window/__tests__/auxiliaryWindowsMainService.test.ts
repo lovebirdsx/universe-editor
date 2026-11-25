@@ -831,6 +831,48 @@ describe('AuxiliaryWindowsMainService', () => {
     expect(child.isFocused()).toBe(true)
   })
 
+  it('does not refocus an already focused auxiliary window', async () => {
+    const parent = makeParent(service)
+    const scoped = new WindowScopedAuxiliaryWindowsService(service, parent.id)
+    const { token, child } = createWindow(service, parent)
+    child.focused = true
+    const focus = vi.spyOn(child, 'focus')
+
+    await scoped.focusWindow(token)
+
+    expect(focus).not.toHaveBeenCalled()
+  })
+
+  it('still shows inactive in silent E2E so focus probes observe the request', async () => {
+    const silent = createService(true)
+    const parent = makeParent(silent)
+    const scoped = new WindowScopedAuxiliaryWindowsService(silent, parent.id)
+    const { token, child } = createWindow(silent, parent)
+    child.focused = true
+    const showInactive = vi.spyOn(child, 'showInactive')
+
+    await scoped.focusWindow(token)
+
+    expect(showInactive).toHaveBeenCalledTimes(1)
+    silent.dispose()
+  })
+
+  it('restores a minimized window even when it reports focus', async () => {
+    const parent = makeParent(service)
+    const scoped = new WindowScopedAuxiliaryWindowsService(service, parent.id)
+    const { token, child } = createWindow(service, parent)
+    child.focused = true
+    child.minimize()
+    const restore = vi.spyOn(child, 'restore')
+    const focus = vi.spyOn(child, 'focus')
+
+    await scoped.focusWindow(token)
+
+    expect(restore).toHaveBeenCalledTimes(1)
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(restore.mock.invocationCallOrder[0]).toBeLessThan(focus.mock.invocationCallOrder[0]!)
+  })
+
   it('follows a focused auxiliary window when choosing a native dialog parent', () => {
     const parent = makeParent(service)
     const otherParent = makeParent(service)

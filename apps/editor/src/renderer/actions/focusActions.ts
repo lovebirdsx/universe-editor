@@ -106,6 +106,25 @@ function focusWindowGroup(win: IWorkbenchWindow, ctx: ActivateGroupFocusContext)
 }
 
 /**
+ * Visible main-window parts in screen coordinates. The direction origin already
+ * lives in screen space, so candidates must use the TARGET window's origin — not
+ * the source auxiliary window's.
+ */
+function screenPartCandidates(
+  layout: ILayoutService,
+  win: IWorkbenchWindow,
+): { id: PartId; rect: PartRect }[] {
+  const candidates: { id: PartId; rect: PartRect }[] = []
+  for (const id of NAVIGABLE_PARTS) {
+    const rect = partRect(layout, id)
+    if (rect === undefined) continue
+    const screen = offsetRectToScreen(rect, win)
+    if (screen !== undefined) candidates.push({ id, rect: screen })
+  }
+  return candidates
+}
+
+/**
  * VSCode's `workbench.action.navigate*`: move between editor groups first, then
  * across the side bar / editor / panel / secondary side bar by their on-screen
  * position. The Vim `<leader>w h/j/k/l` chords use these.
@@ -195,6 +214,20 @@ abstract class NavigateAction extends Action2 {
     if (targetWindow === undefined) {
       console.debug(`[focus] ${this.desc.id}: no group, part or window ${direction}`)
       return
+    }
+    if (targetWindow.isMain) {
+      // The auxiliary window is whole-editor, but the main window has parts.
+      // Pick the nearest part on that side (e.g. the Outline in a right-hand
+      // SecondarySideBar) instead of always falling into the editor area.
+      const targetPart = findPartInDirection(
+        origin,
+        screenPartCandidates(layout, targetWindow),
+        direction,
+      )
+      if (targetPart !== undefined && targetPart !== PartId.EditorArea) {
+        void layout.focusPart(targetPart, { source: 'command' })
+        return
+      }
     }
     focusWindowGroup(targetWindow, focusContext)
   }

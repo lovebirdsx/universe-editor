@@ -118,6 +118,19 @@ describe('WindowFocusService', () => {
     expect(ctx.windows.activeWindow.token).toBe('token-9')
   })
 
+  it('requests auxiliary focus even when the document reports hasFocus', async () => {
+    const ctx = setup()
+    const auxPart = makePart(9)
+    // Every auxiliary document reports hasFocus() === true in the shared
+    // renderer, even while its native window sits in the background.
+    ctx.windows.registerAuxiliaryWindow(auxPart, fakeWindow(fakeDocument(true)), 'token-9')
+
+    ctx.service.focusGroup(makeGroup(auxPart))
+    await flush()
+
+    expect(ctx.aux.focusWindow).toHaveBeenCalledWith('token-9')
+  })
+
   it('swallows IPC failures and retries the id lookup on the next call', async () => {
     const ctx = setup()
     ctx.windowsService.getCurrentWindowId.mockRejectedValueOnce(new Error('ipc gone'))

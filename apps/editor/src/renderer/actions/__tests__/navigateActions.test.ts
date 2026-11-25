@@ -93,9 +93,14 @@ interface HarnessOptions {
   readonly groupInDirection?: FakeGroup | undefined
   readonly activeWindow?: IWorkbenchWindow | undefined
   readonly windows?: readonly IWorkbenchWindow[] | undefined
+  readonly secondarySideBarRect?: Rect | undefined
 }
 
 function harness(options: HarnessOptions) {
+  const rects: Partial<Record<PartId, Rect>> =
+    options.secondarySideBarRect === undefined
+      ? RECTS
+      : { ...RECTS, [PartId.SecondarySideBar]: options.secondarySideBarRect }
   const mainGroup = fakeGroup(1)
   const mainPart = fakePart(1, mainGroup)
   const mainWindow = fakeWindow({
@@ -111,7 +116,7 @@ function harness(options: HarnessOptions) {
   const windows = options.windows ?? [mainWindow]
 
   const part = (id: PartId) => {
-    const rect = RECTS[id]
+    const rect = rects[id]
     if (rect === undefined) return undefined
     return {
       isFocused: () => id === options.focused,
@@ -125,7 +130,7 @@ function harness(options: HarnessOptions) {
     }
   }
   const layout = {
-    getVisible: (id: PartId) => RECTS[id] !== undefined,
+    getVisible: (id: PartId) => rects[id] !== undefined,
     getPart: part,
     focusPart: vi.fn().mockResolvedValue(true),
   }
@@ -316,6 +321,42 @@ describe('navigate actions', () => {
     h.run(NavigateLeftAction)
     expect(h.groups.activateGroup).toHaveBeenCalledWith((main.part as FakePart).activeGroup)
     expect(h.groups.activateGroup).not.toHaveBeenCalledWith(auxGroup)
+    expect(h.layout.focusPart).not.toHaveBeenCalled()
+  })
+
+  it('moves from an auxiliary window back to the right-hand view of the main window', () => {
+    const auxGroup = fakeGroup(30)
+    const aux = fakeWindow({
+      id: 20,
+      isMain: false,
+      part: fakePart(20, auxGroup),
+      x: 0,
+      y: 0,
+      width: 500,
+      height: 800,
+    })
+    const main = fakeWindow({
+      id: 0,
+      isMain: true,
+      part: fakePart(1, fakeGroup(1)),
+      x: -1200,
+      y: 0,
+      width: 1000,
+      height: 900,
+    })
+    const h = harness({
+      focused: PartId.EditorArea,
+      activeWindow: aux,
+      windows: [main, aux],
+      secondarySideBarRect: { left: 901, top: 0, right: 1100, bottom: 800 },
+    })
+    h.run(NavigateLeftAction)
+    // Entering the main window picks its rightmost part (the Outline's
+    // SecondarySideBar), not the editor area.
+    expect(h.layout.focusPart).toHaveBeenCalledWith(PartId.SecondarySideBar, {
+      source: 'command',
+    })
+    expect(h.groups.activateGroup).not.toHaveBeenCalled()
   })
 
   it('picks the nearest window in the direction', () => {
