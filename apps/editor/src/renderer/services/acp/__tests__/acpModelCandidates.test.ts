@@ -11,6 +11,7 @@ import {
   mergeModelCandidates,
   sessionModelCandidates,
   sessionModelId,
+  userDeclaredWindows,
 } from '../acpModelCandidates.js'
 
 function provider(
@@ -238,6 +239,57 @@ describe('anthropic version-dot normalization', () => {
     expect(ids('claude-opus-4.8[1m]', provider(['claude-opus-4-8[1m]']))).toEqual([
       'claude-opus-4-8[1m]',
     ])
+  })
+})
+
+describe('userDeclaredWindows', () => {
+  it('projects only entries that declare a maxInputTokens', () => {
+    expect(
+      userDeclaredWindows({
+        a: { maxInputTokens: 922000 },
+        b: { name: 'B' },
+        c: { maxInputTokens: 1000, name: 'C' },
+      }),
+    ).toEqual({ a: 922000, c: 1000 })
+  })
+
+  it('returns an empty table for an empty layer', () => {
+    expect(userDeclaredWindows({})).toEqual({})
+  })
+})
+
+describe('contextWindowFor — user-declared windows', () => {
+  it('resolves a model absent from the candidates (subscription remembered model)', () => {
+    // The ChatGPT-login regression: no provider entry exists to carry the
+    // window, and the declaration the warning asks for was never read.
+    expect(contextWindowFor([{ id: 'pick' }], 'gpt-6.1-sol', { 'gpt-6.1-sol': 922000 })).toBe(
+      922000,
+    )
+  })
+
+  it('fills a candidate that carries no window of its own', () => {
+    expect(contextWindowFor([{ id: 'm' }], 'm', { m: 922000 })).toBe(922000)
+  })
+
+  it('keeps the candidate window over a user declaration', () => {
+    expect(contextWindowFor([{ id: 'm', contextWindow: 128000 }], 'm', { m: 922000 })).toBe(128000)
+  })
+
+  it('matches a lane-suffixed query to the bare declaration and vice versa', () => {
+    expect(contextWindowFor([], 'acme-chat-pro[1m]', { 'acme-chat-pro': 922000 })).toBe(922000)
+    expect(contextWindowFor([], 'acme-chat-pro', { 'acme-chat-pro[1m]': 922000 })).toBe(922000)
+  })
+
+  it('matches a dotted claude query to the hyphenated declaration', () => {
+    expect(contextWindowFor([], 'claude-opus-4.8', { 'claude-opus-4-8': 200000 })).toBe(200000)
+  })
+
+  it('never resolves an unnamed model from the declaration table', () => {
+    expect(contextWindowFor([], undefined, { m: 922000 })).toBeUndefined()
+  })
+
+  it('never hands a declaration of a different model to a named one', () => {
+    expect(contextWindowFor([{ id: 'a' }], 'b', { a: 922000 })).toBeUndefined()
   })
 })
 

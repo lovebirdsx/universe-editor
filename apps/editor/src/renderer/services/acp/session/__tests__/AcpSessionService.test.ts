@@ -7914,6 +7914,48 @@ describe('AcpSessionService extra model candidates injection', () => {
     }
   })
 
+  it('stamps a user-declared window onto session/new _meta when no candidate declares one', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({
+        models: EXTRA_MODELS,
+        pick: 'gw/one',
+        declaredWindows: { 'gw/one': 922000 },
+      }),
+    )
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const meta = client.connected[0]!.agent.newSessionCalls[0]!._meta
+      // The ChatGPT-login path: no provider candidate carries a window, so the
+      // user's `models` declaration is the one that must reach the fork.
+      expect(meta?.modelContextWindow).toBe(922000)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('does not warn when the user declared the codex model window', async () => {
+    const client = new FakeAcpClientService()
+    const notification = new StubNotificationService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({
+        models: EXTRA_MODELS,
+        pick: 'gw/one',
+        declaredWindows: { 'gw/one': 922000 },
+      }),
+      notification,
+    )
+    try {
+      await (await svc.createSession('codex')).whenConnected()
+      expect(notification.captured.some((n) => n.message.includes('maxInputTokens'))).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+  })
+
   it('warns once when a codex model has no known context window', async () => {
     const client = new FakeAcpClientService()
     const notification = new StubNotificationService()

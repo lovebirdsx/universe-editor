@@ -10,6 +10,11 @@
  *  agent's own file (`settings.json` / `config.toml`) so it stays selectable. See
  *  acpModelCandidates.ts for why the forks need this at all.
  *
+ *  A model's context window is completed from the user's own `models` layer
+ *  (`aiSettings.json`) when the provider declares none — the subscription path
+ *  has no provider entry at all, and its "context window unknown" warning tells
+ *  the user to declare exactly that value.
+ *
  *  Everything is read for the session's host, not the window's: a remote session
  *  runs against the remote `settings.json` / `config.toml`, and offering it the
  *  local host's models would advertise a model its process cannot reach.
@@ -35,6 +40,7 @@ import {
   CLAUDE_AGENT_PROTOCOL,
   CODEX_AGENT_PROTOCOL,
   extraModelCandidatesForAgentSettings,
+  userDeclaredWindows,
   type AcpModelCandidate,
 } from './acpModelCandidates.js'
 
@@ -52,6 +58,14 @@ export interface AcpAgentModelCandidates {
   /** Effective model id from the agent's own config file; undefined when unset. */
   readonly pick: string | undefined
   readonly candidates: readonly AcpModelCandidate[]
+  /**
+   * Context windows the user declared in `aiSettings.json` → `models`, keyed by
+   * model id (empty when none is declared). Lets a caller resolve the window of
+   * a model that is NOT among the candidates — a subscription session's model
+   * has no provider to carry one, and a remembered model may no longer be the
+   * config file's pick.
+   */
+  readonly declaredWindows?: Readonly<Record<string, number>>
 }
 
 export interface IAcpModelCandidateService {
@@ -59,10 +73,10 @@ export interface IAcpModelCandidateService {
   /**
    * Model candidates (id + known context window) to advertise for a session of
    * `agentId` running on `authority` (undefined = the local host), plus the
-   * agent's own configured pick. No candidates for agents with no editor-side
-   * credential model (user-defined agents), and none when the host runs on a
-   * subscription or an external credential (the agent's own catalogue is already
-   * correct there).
+   * agent's own configured pick and the user's declared context windows. No
+   * candidates for agents with no editor-side credential model (user-defined
+   * agents), and none when the host runs on a subscription or an external
+   * credential (the agent's own catalogue is already correct there).
    */
   extraModelsForAgent(agentId: string, authority?: string): Promise<AcpAgentModelCandidates>
 }
@@ -109,8 +123,18 @@ export class AcpModelCandidateService implements IAcpModelCandidateService {
     protocol: AiWireProtocol,
     pick: string | undefined,
   ): Promise<AcpAgentModelCandidates> {
-    const provider = await this._findProvider(activeAuth)
-    return { pick, candidates: extraModelCandidatesForAgentSettings(pick, provider, protocol) }
+    const [provider, userKnowledge] = await Promise.all([
+      this._findProvider(activeAuth),
+      this._ai.getUserModelKnowledge(),
+    ])
+    // The provider declaration is the only window source a handshake can
+    // advertise, so the user's `models` layer rides along for the caller's own
+    // resolution (the subscription path has no provider at all).
+    return {
+      pick,
+      candidates: extraModelCandidatesForAgentSettings(pick, provider, protocol),
+      declaredWindows: userDeclaredWindows(userKnowledge),
+    }
   }
 
   /** The resolved provider in effect on that host, or undefined for a

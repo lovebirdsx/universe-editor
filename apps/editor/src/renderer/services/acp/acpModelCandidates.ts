@@ -17,7 +17,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
-import type { AiResolvedProvider, AiWireProtocol } from '@universe-editor/platform'
+import type {
+  AiModelKnowledge,
+  AiResolvedProvider,
+  AiWireProtocol,
+} from '@universe-editor/platform'
 
 import {
   normalizeAnthropicVersionDots,
@@ -181,10 +185,27 @@ export function extraModelCandidatesForAgentSettings(
 }
 
 /**
+ * Project the user's own knowledge layer (`aiSettings.json` → `models`) to the
+ * model-id → `maxInputTokens` table {@link contextWindowFor} consults. Only ids
+ * that actually declare a window are carried — an entry declaring other
+ * knowledge must not read as "window known".
+ */
+export function userDeclaredWindows(
+  userKnowledge: Readonly<Record<string, AiModelKnowledge>>,
+): Readonly<Record<string, number>> {
+  const out: Record<string, number> = {}
+  for (const [id, knowledge] of Object.entries(userKnowledge)) {
+    if (knowledge.maxInputTokens !== undefined) out[id] = knowledge.maxInputTokens
+  }
+  return out
+}
+
+/**
  * The declared window of exactly the model named by `modelId`, and nothing else:
  * NEVER hand codex one model's window for another. Anything we cannot resolve
- * precisely — an unnamed model, or a name absent from the candidates — yields
- * undefined, which leaves codex on its own documented fallback.
+ * precisely — an unnamed model, or a name that neither the candidates nor the
+ * user's declarations carry — yields undefined, which leaves codex on its own
+ * documented fallback.
  *
  * Both unresolvable cases are real and would silently mismanage the context
  * (auto-compaction firing at half the true window, or prompts overflowing past
@@ -193,10 +214,18 @@ export function extraModelCandidatesForAgentSettings(
  * unnamed model means the agent's config file declares no pick, so it runs its
  * own default — `candidates[0]` is then merely the provider's first declared
  * model, related to that default by nothing at all.
+ *
+ * `declaredWindows` is the user's own `models` layer (`aiSettings.json`),
+ * consulted by the exact name asked about — including a remembered model that is
+ * not a candidate at all. A subscription session has no provider entry to carry
+ * a window, yet the "context window unknown" warning tells the user to declare
+ * `maxInputTokens`; that declaration must actually be read back. It is a name
+ * match against the user's own entry, never a guess.
  */
 export function contextWindowFor(
   candidates: readonly AcpModelCandidate[],
   modelId: string | undefined,
+  declaredWindows?: Readonly<Record<string, number>>,
 ): number | undefined {
   const trimmed = modelId?.trim()
   if (!trimmed) return undefined
@@ -204,12 +233,32 @@ export function contextWindowFor(
   // dotted (`claude-opus-4.8`) must be normalized too or the lookup misses.
   const query = normalizeAnthropicVersionDots(trimmed)
   const exact = candidates.find((c) => c.id === query)
-  if (exact) return exact.contextWindow
+  if (exact?.contextWindow !== undefined) return exact.contextWindow
   // A remembered id may carry a context-lane suffix (`acme-chat-pro[1m]`) that
   // the provider's declaration spells bare; match on the stripped name.
-  return candidates.find(
+  const byBareName = candidates.find(
     (c) => stripTrailingBracketSuffix(c.id) === stripTrailingBracketSuffix(query),
   )?.contextWindow
+  if (byBareName !== undefined) return byBareName
+  return declaredWindows === undefined ? undefined : declaredWindowFor(declaredWindows, query)
+}
+
+/**
+ * Name match against {@link userDeclaredWindows}: exact spelling first, then the
+ * lane-stripped name — the same two spellings {@link contextWindowFor} accepts
+ * from candidates.
+ */
+function declaredWindowFor(
+  declaredWindows: Readonly<Record<string, number>>,
+  query: string,
+): number | undefined {
+  const exact = declaredWindows[query]
+  if (exact !== undefined) return exact
+  const bare = stripTrailingBracketSuffix(query)
+  for (const [id, window] of Object.entries(declaredWindows)) {
+    if (stripTrailingBracketSuffix(id) === bare) return window
+  }
+  return undefined
 }
 
 function candidate(

@@ -591,10 +591,11 @@ function buildResumeMeta(
   candidates: readonly AcpModelCandidate[],
   planPolicy: PlanPermissionPolicy | undefined,
   systemPromptAppend: string | undefined,
+  declaredWindows: Readonly<Record<string, number>> | undefined,
 ): Record<string, unknown> {
   const resumeModel = entry?.configOptions?.['model']
   const extraModels = candidates.map((c) => c.id)
-  const contextWindow = contextWindowFor(candidates, resumeModel)
+  const contextWindow = contextWindowFor(candidates, resumeModel, declaredWindows)
   const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
     ...systemPromptMeta(systemPromptAppend),
@@ -625,9 +626,10 @@ function buildNewSessionMeta(
   pick: string | undefined,
   planPolicy: PlanPermissionPolicy | undefined,
   systemPromptAppend: string | undefined,
+  declaredWindows: Readonly<Record<string, number>> | undefined,
 ): Record<string, unknown> {
   const extraModels = candidates.map((c) => c.id)
-  const contextWindow = contextWindowFor(candidates, pick)
+  const contextWindow = contextWindowFor(candidates, pick, declaredWindows)
   const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
     ...systemPromptMeta(systemPromptAppend),
@@ -652,9 +654,10 @@ function buildForkMeta(
   candidates: readonly AcpModelCandidate[],
   planPolicy: PlanPermissionPolicy | undefined,
   model: string | undefined,
+  declaredWindows: Readonly<Record<string, number>> | undefined,
 ): Record<string, unknown> {
   const extraModels = candidates.map((c) => c.id)
-  const contextWindow = contextWindowFor(candidates, model)
+  const contextWindow = contextWindowFor(candidates, model, declaredWindows)
   const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
     ...(planPolicy !== undefined
@@ -1233,8 +1236,9 @@ export class AcpSessionService
    * there is nothing to name: the fork runs its own default, whose id we do not
    * know, and naming a candidate instead would blame an unrelated model.
    * Matching `contextWindowFor`, a remembered model absent from the candidates
-   * counts as unknown (we inject nothing for it), so the user hears about the
-   * very case that needs fixing.
+   * counts as unknown UNLESS the user declared its window in `models`
+   * (`aiSettings.json`) — that declaration is exactly what this warning asks for,
+   * and a subscription session has no provider entry to carry it instead.
    */
   private _maybeWarnMissingContextWindow(
     agentId: string,
@@ -1242,12 +1246,13 @@ export class AcpSessionService
     resumeModel: string | undefined,
     pick: string | undefined,
     knownInCatalog: boolean | undefined,
+    declaredWindows: Readonly<Record<string, number>> | undefined,
   ): void {
     if (agentId !== 'codex') return
     if (knownInCatalog === true) return
     const model = resumeModel ?? pick
     if (model === undefined) return
-    if (contextWindowFor(candidates, model) !== undefined) return
+    if (contextWindowFor(candidates, model, declaredWindows) !== undefined) return
     const dedupeKey = `${agentId}\0${model}`
     if (this._missingWindowWarned.has(dedupeKey)) return
     this._missingWindowWarned.add(dedupeKey)
@@ -1316,10 +1321,11 @@ export class AcpSessionService
         initResult.agentCapabilities?.mcpCapabilities,
       )
       this._warnDroppedMcpServers(agentName, dropped)
-      const { pick, candidates: extraModels } = await this._extraModelsFor(
-        resolvedAgentId,
-        authority,
-      )
+      const {
+        pick,
+        candidates: extraModels,
+        declaredWindows,
+      } = await this._extraModelsFor(resolvedAgentId, authority)
       // Snapshot the plan-permission policy at the handshake: the value is
       // pinned onto the agent session here, so this is what both sides run.
       const planPolicy = this._handshakePlanPolicy(session.id, resolvedAgentId)
@@ -1327,7 +1333,13 @@ export class AcpSessionService
         cwd: cwd ?? '',
         mcpServers: kept,
         ...(await this._additionalDirectories(authority, options?.additionalDirectories)),
-        _meta: buildNewSessionMeta(extraModels, pick, planPolicy, session.systemPromptAppend),
+        _meta: buildNewSessionMeta(
+          extraModels,
+          pick,
+          planPolicy,
+          session.systemPromptAppend,
+          declaredWindows,
+        ),
       }
       profile.step('willNewSession')
       const result = await withTimeout(
@@ -1342,6 +1354,7 @@ export class AcpSessionService
         undefined,
         pick,
         readCodexModelKnownInCatalog(result._meta),
+        declaredWindows,
       )
       // The session may have been closed by the user while connecting.
       if (session.status.get() === 'closed') {
@@ -1737,10 +1750,11 @@ export class AcpSessionService
       this._warnDroppedMcpServers(this._registry.get(entry.agentId).name, dropped)
       const mcpSeed = kept.map((s) => ({ name: s.name, transport: mcpServerTransport(s) }))
       if (mcpSeed.length > 0) session.applyInitState({ mcpServers: mcpSeed })
-      const { pick, candidates: extraModels } = await this._extraModelsFor(
-        entry.agentId,
-        effectiveAuthority,
-      )
+      const {
+        pick,
+        candidates: extraModels,
+        declaredWindows,
+      } = await this._extraModelsFor(entry.agentId, effectiveAuthority)
       // A fork seeded its own policy under this durable id before resuming, so
       // the load below re-uses it and the fork's first plan-mode request is
       // judged by the same setting the fork was created under.
@@ -1750,7 +1764,7 @@ export class AcpSessionService
         cwd: cwd ?? '',
         mcpServers: kept,
         ...(await this._builtinAgentDirs(effectiveAuthority)),
-        _meta: buildResumeMeta(entry, extraModels, planPolicy, systemPromptAppend),
+        _meta: buildResumeMeta(entry, extraModels, planPolicy, systemPromptAppend, declaredWindows),
       }
       // Replays take turns across sessions (see _replayQueue). The slot wraps
       // only the session/load RPC — the spawn/initialize handshake above and
@@ -1768,6 +1782,7 @@ export class AcpSessionService
         entry.configOptions?.['model'],
         pick,
         readCodexModelKnownInCatalog(loadResult?._meta),
+        declaredWindows,
       )
       // Replay finished: timeline is now populated, so ChatBody can render the
       // history (or the genuine empty-session hint if this session truly has none).
@@ -1935,10 +1950,11 @@ export class AcpSessionService
               initResult.agentCapabilities?.mcpCapabilities,
             )
             this._warnDroppedMcpServers(agentName, dropped)
-            const { pick, candidates: extraModels } = await this._extraModelsFor(
-              session.agentId,
-              authority,
-            )
+            const {
+              pick,
+              candidates: extraModels,
+              declaredWindows,
+            } = await this._extraModelsFor(session.agentId, authority)
             const agentDirs = await this._builtinAgentDirs(authority)
             // Reconnect keeps the session's original snapshot — the mid-session
             // setting may have changed, but this session's CLI side is
@@ -1960,6 +1976,7 @@ export class AcpSessionService
                     pick,
                     planPolicy,
                     session.systemPromptAppend,
+                    declaredWindows,
                   ),
                 }),
                 timeoutMs,
@@ -1980,6 +1997,7 @@ export class AcpSessionService
                     extraModels,
                     planPolicy,
                     session.systemPromptAppend,
+                    declaredWindows,
                   ),
                 }),
                 timeoutMs,
@@ -1994,6 +2012,7 @@ export class AcpSessionService
               rebuild ? undefined : entry?.configOptions?.['model'],
               pick,
               knownInCatalog,
+              declaredWindows,
             )
             if (session.status.get() === 'closed' || !session.isReconnecting) {
               conn.dispose()
@@ -2605,6 +2624,7 @@ export class AcpSessionService
       // caller runs next reuses the seed, so the fork request and the resumed
       // session cannot disagree.
       const planPolicy = this._forkPlanPolicy(sourceAgentSessionId, entry.agentId)
+      const forkModels = await this._extraModelsFor(entry.agentId, effectiveAuthority)
       const result = await withTimeout(
         conn.conn.unstable_forkSession({
           sessionId: sourceAgentSessionId,
@@ -2617,9 +2637,10 @@ export class AcpSessionService
             // forked thread runs its first turn on codex's 272K fallback until
             // the resume below re-injects them.
             ...buildForkMeta(
-              (await this._extraModelsFor(entry.agentId, effectiveAuthority)).candidates,
+              forkModels.candidates,
               planPolicy,
               modelOverride ?? entry.configOptions?.['model'],
+              forkModels.declaredWindows,
             ),
             // Ask the fork to truncate at this user turn (回退 point) instead of the
             // session tip. Absent id → the agent forks from the tip; an id the agent

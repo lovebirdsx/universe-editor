@@ -2478,4 +2478,28 @@ describe('AcpSessionService — extra model candidates on resume', () => {
     const agent = built.client.connected[0]!.agent
     expect(agent.loadSessionCalls[0]?._meta).not.toHaveProperty('modelContextWindow')
   })
+
+  it('stamps a user-declared window for a remembered model that is not a candidate', async () => {
+    const built = buildService(
+      { loadSessionResult: {} },
+      undefined,
+      stubAcpModelCandidateService({
+        models: ['gw/resume-a'],
+        contextWindows: { 'gw/resume-a': 128000 },
+        // A ChatGPT-login session has no provider candidates at all; the user's
+        // `models` declaration is the only window source — and the one the
+        // unknown-window warning points at.
+        declaredWindows: { 'gw/gone': 922000 },
+      }),
+    )
+    svc = built.svc
+    await built.history.initialize()
+
+    built.history.add({ agentId: 'fake', sessionIdOnAgent: 'gw-resume-6', title: 'gw' })
+    built.history.setHistoryConfigOption('gw-resume-6', 'model', 'gw/gone')
+    await svc.resumeSession('gw-resume-6')
+
+    const agent = built.client.connected[0]!.agent
+    expect(agent.loadSessionCalls[0]?._meta).toMatchObject({ modelContextWindow: 922000 })
+  })
 })

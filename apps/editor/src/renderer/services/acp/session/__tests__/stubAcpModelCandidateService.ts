@@ -16,6 +16,12 @@ export interface StubAcpModelCandidateOptions {
   readonly models?: readonly string[]
   /** Known context window per model id; models absent from it carry none. */
   readonly contextWindows?: Readonly<Record<string, number>>
+  /**
+   * The user's declared windows (`aiSettings.json` → `models`), independent of
+   * `models`/`contextWindows`: the subscription path has no provider to carry a
+   * window, so this is the only source for a model the candidates do not list.
+   */
+  readonly declaredWindows?: Readonly<Record<string, number>>
   /** Known reasoning-effort levels per model id; models absent from it carry none. */
   readonly effortLevels?: Readonly<Record<string, readonly string[]>>
   /**
@@ -45,7 +51,11 @@ export function stubAcpModelCandidateService(
           ...(effortLevels !== undefined ? { effortLevels } : {}),
         }
       })
-      return { pick: opts.pick, candidates }
+      return {
+        pick: opts.pick,
+        candidates,
+        ...(opts.declaredWindows !== undefined ? { declaredWindows: opts.declaredWindows } : {}),
+      }
     },
   }
 }
