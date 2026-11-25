@@ -1159,7 +1159,8 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
    * Ask the transport's discovery endpoint whether the daemon we cached is still
    * the one running. `error` is deliberately not treated as "replaced": ssh
    * unreachable / wsl wedged is exactly the transient case the transparent
-   * reconnect loop exists for.
+   * reconnect loop exists for. A transport timeout is classified as `error` by
+   * `classifyCheckResult`, so it lands here too instead of forcing a redeploy.
    */
   private async _probeDaemonGeneration(
     entry: ConnectionEntry,

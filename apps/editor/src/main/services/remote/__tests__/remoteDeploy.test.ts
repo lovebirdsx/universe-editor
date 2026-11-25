@@ -9,6 +9,10 @@ import type { ILogger } from '@universe-editor/platform'
 import {
   NODE_ARCHIVE_PROBE_BYTES,
   NODE_RUNTIME_VERSION,
+  REMOTE_CHECK_TIMEOUT_MS,
+  REMOTE_PROBE_TIMEOUT_MS,
+  REMOTE_START_TIMEOUT_MS,
+  REMOTE_STOP_TIMEOUT_MS,
   buildCheckCommand,
   buildDeployRemoteScript,
   buildDeployScriptBody,
@@ -25,6 +29,7 @@ import {
   buildWindowsStopCommand,
   classifyCheckResult,
   computeBundleHash,
+  defaultRemoteRunner,
   downloadNodeArchive,
   forwardArgs,
   parseAuthority,
@@ -112,6 +117,8 @@ describe('argv assembly', () => {
       'BatchMode=yes',
       '-o',
       'StrictHostKeyChecking=accept-new',
+      '-o',
+      'ConnectTimeout=10',
       'user@host',
       `${NODE_PATH_PRELUDE}command -v node >/dev/null 2>&1 || exit 40; node ~/.universe-editor-server/0.0.0/bootstrap.js check`,
     ])
@@ -123,6 +130,8 @@ describe('argv assembly', () => {
       'BatchMode=yes',
       '-o',
       'StrictHostKeyChecking=accept-new',
+      '-o',
+      'ConnectTimeout=10',
       '-p',
       '2222',
       'host',
@@ -136,6 +145,8 @@ describe('argv assembly', () => {
       'BatchMode=yes',
       '-o',
       'StrictHostKeyChecking=accept-new',
+      '-o',
+      'ConnectTimeout=10',
       '-P',
       '22',
       '/tmp/a.tgz',
@@ -156,6 +167,8 @@ describe('argv assembly', () => {
       'BatchMode=yes',
       '-o',
       'StrictHostKeyChecking=accept-new',
+      '-o',
+      'ConnectTimeout=10',
       '-o',
       'ExitOnForwardFailure=yes',
       'user@host',
@@ -192,6 +205,28 @@ describe('argv assembly', () => {
     expect(buildStopCommand('1.2.3')).toBe(
       `${NODE_PATH_PRELUDE}node ~/.universe-editor-server/1.2.3/bootstrap.js stop`,
     )
+  })
+})
+
+describe('defaultRemoteRunner timeouts', () => {
+  it('marks a timed-out process without a spawnError', async () => {
+    const result = await defaultRemoteRunner(
+      process.execPath,
+      ['-e', 'setTimeout(() => {}, 5000)'],
+      { timeoutMs: 200 },
+    )
+    expect(result.code).toBeNull()
+    expect(result.timedOut).toBe(true)
+    expect(result.timeoutMs).toBe(200)
+    expect(result.spawnError).toBeUndefined()
+  })
+
+  it('keeps spawn failures (ENOENT) out of the timedOut branch', async () => {
+    const result = await defaultRemoteRunner('definitely-not-a-command-xyz', [], {
+      timeoutMs: 200,
+    })
+    expect(result.spawnError).toBeTruthy()
+    expect(result.timedOut).toBeUndefined()
   })
 })
 
@@ -264,6 +299,41 @@ describe('parseBundleHashLine', () => {
     expect(parseBundleHashLine('UNIVERSE_REMOTE_BUNDLE_HASH=\n')).toBeUndefined()
     expect(parseBundleHashLine('UNIVERSE_REMOTE_BUNDLE_HASH=   \n')).toBeUndefined()
     expect(parseBundleHashLine('')).toBeUndefined()
+  })
+})
+
+describe('classifyCheckResult timeout', () => {
+  const infoLine =
+    'UNIVERSE_REMOTE_DAEMON_INFO={"serverVersion":"0.0.0","protocolVersion":2,"port":9,"token":"t","pid":1}\n'
+
+  it('classifies a timed-out check as error, not not-deployed', () => {
+    expect(
+      classifyCheckResult(
+        {
+          code: null,
+          stdout: '',
+          stderr: 'Cannot find package x',
+          timedOut: true,
+          timeoutMs: 30_000,
+        },
+        'ssh',
+      ),
+    ).toEqual({ state: 'error', message: 'ssh check timed out after 30000ms' })
+  })
+
+  it('ignores a half-written daemon info line once the run timed out', () => {
+    expect(
+      classifyCheckResult(
+        { code: null, stdout: infoLine, stderr: '', timedOut: true, timeoutMs: 30_000 },
+        'wsl',
+      ),
+    ).toEqual({ state: 'error', message: 'wsl check timed out after 30000ms' })
+  })
+
+  it('omits the budget when timeoutMs is unknown', () => {
+    expect(
+      classifyCheckResult({ code: null, stdout: '', stderr: '', timedOut: true }, 'ssh'),
+    ).toEqual({ state: 'error', message: 'ssh check timed out' })
   })
 })
 
@@ -698,10 +768,13 @@ describe('downloadNodeArchive', () => {
 
 describe('RemoteDeployer platform probing', () => {
   it('treats a Linux uname as posix and skips the windows probe', async () => {
-    const commands: string[] = []
-    const runner: RemoteRunner = (_command, args) => {
+    const calls: { remote: string; timeoutMs?: number }[] = []
+    const runner: RemoteRunner = (_command, args, options) => {
       const remote = args[args.length - 1]!
-      commands.push(remote)
+      calls.push({
+        remote,
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      })
       if (remote === buildUnameCommand()) {
         return Promise.resolve({ code: 0, stdout: 'Linux x86_64\n', stderr: '' })
       }
@@ -711,14 +784,20 @@ describe('RemoteDeployer platform probing', () => {
     await expect(deployer.checkRemoteServer('user@host')).resolves.toEqual({
       state: 'not-running',
     })
-    expect(commands).toEqual([buildUnameCommand(), buildCheckCommand('0.0.0')])
+    expect(calls).toEqual([
+      { remote: buildUnameCommand(), timeoutMs: REMOTE_PROBE_TIMEOUT_MS },
+      { remote: buildCheckCommand('0.0.0'), timeoutMs: REMOTE_CHECK_TIMEOUT_MS },
+    ])
   })
 
   it('detects a cmd.exe Windows remote via the probe and uses the windows check command', async () => {
-    const commands: string[] = []
-    const runner: RemoteRunner = (_command, args) => {
+    const calls: { remote: string; timeoutMs?: number }[] = []
+    const runner: RemoteRunner = (_command, args, options) => {
       const remote = args[args.length - 1]!
-      commands.push(remote)
+      calls.push({
+        remote,
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      })
       if (remote === buildUnameCommand()) {
         return Promise.resolve({ code: 1, stdout: '', stderr: 'not recognized' })
       }
@@ -735,10 +814,10 @@ describe('RemoteDeployer platform probing', () => {
     await expect(deployer.checkRemoteServer('user@host')).resolves.toEqual({
       state: 'not-running',
     })
-    expect(commands).toEqual([
-      buildUnameCommand(),
-      buildWindowsProbeCommand(),
-      buildWindowsCheckCommand('0.0.0'),
+    expect(calls).toEqual([
+      { remote: buildUnameCommand(), timeoutMs: REMOTE_PROBE_TIMEOUT_MS },
+      { remote: buildWindowsProbeCommand(), timeoutMs: REMOTE_PROBE_TIMEOUT_MS },
+      { remote: buildWindowsCheckCommand('0.0.0'), timeoutMs: REMOTE_CHECK_TIMEOUT_MS },
     ])
   })
 
@@ -756,6 +835,45 @@ describe('RemoteDeployer platform probing', () => {
     )
   })
 
+  it('fails fast when the uname probe times out instead of trying the windows probe', async () => {
+    const commands: string[] = []
+    const runner: RemoteRunner = (_command, args) => {
+      commands.push(args[args.length - 1]!)
+      return Promise.resolve({
+        code: null,
+        stdout: '',
+        stderr: '',
+        timedOut: true,
+        timeoutMs: REMOTE_PROBE_TIMEOUT_MS,
+      })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.checkRemoteServer('user@host')).rejects.toThrow(
+      `failed to probe remote platform: uname probe timed out after ${REMOTE_PROBE_TIMEOUT_MS}ms`,
+    )
+    expect(commands).toEqual([buildUnameCommand()])
+  })
+
+  it('reports the windows probe timeout as the failure reason', async () => {
+    const runner: RemoteRunner = (_command, args) => {
+      const remote = args[args.length - 1]!
+      if (remote === buildUnameCommand()) {
+        return Promise.resolve({ code: 1, stdout: '', stderr: 'uname: not found' })
+      }
+      return Promise.resolve({
+        code: null,
+        stdout: '',
+        stderr: '',
+        timedOut: true,
+        timeoutMs: REMOTE_PROBE_TIMEOUT_MS,
+      })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.checkRemoteServer('user@host')).rejects.toThrow(
+      `failed to probe remote platform: uname did not identify the OS (uname: not found); windows probe timed out after ${REMOTE_PROBE_TIMEOUT_MS}ms`,
+    )
+  })
+
   it('throws failed-to-probe when neither uname nor the windows probe identify the host', async () => {
     const runner: RemoteRunner = (_command, args) => {
       const remote = args[args.length - 1]!
@@ -767,7 +885,7 @@ describe('RemoteDeployer platform probing', () => {
     }
     const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
     await expect(deployer.checkRemoteServer('user@host')).rejects.toThrow(
-      'failed to probe remote platform: uname: not found',
+      'failed to probe remote platform: uname did not identify the OS (uname: not found); windows probe did not report UNIVERSE_REMOTE_OS (exit 0)',
     )
   })
 
@@ -789,6 +907,60 @@ describe('RemoteDeployer platform probing', () => {
       buildCheckCommand('0.0.0'),
       buildCheckCommand('0.0.0'),
     ])
+  })
+})
+
+describe('RemoteDeployer control-plane timeouts', () => {
+  it('starts the daemon with the start budget and reports a timeout', async () => {
+    const budgets: number[] = []
+    const runner: RemoteRunner = (_command, args, options) => {
+      budgets.push(options?.timeoutMs ?? -1)
+      const remote = args[args.length - 1]!
+      if (remote === buildUnameCommand()) {
+        return Promise.resolve({ code: 0, stdout: 'Linux x86_64\n', stderr: '' })
+      }
+      return Promise.resolve({
+        code: null,
+        stdout: '',
+        stderr: '',
+        timedOut: true,
+        timeoutMs: REMOTE_START_TIMEOUT_MS,
+      })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.startRemoteDaemon('user@host')).rejects.toThrow(
+      `failed to start remote daemon for 'user@host': ssh start timed out after ${REMOTE_START_TIMEOUT_MS}ms`,
+    )
+    expect(budgets).toEqual([REMOTE_PROBE_TIMEOUT_MS, REMOTE_START_TIMEOUT_MS])
+  })
+
+  it('warns without throwing when stop times out', async () => {
+    const budgets: number[] = []
+    const warnings: string[] = []
+    const logger = {
+      info: () => {},
+      warn: (message: string) => warnings.push(message),
+    } as unknown as ILogger
+    const runner: RemoteRunner = (_command, args, options) => {
+      budgets.push(options?.timeoutMs ?? -1)
+      const remote = args[args.length - 1]!
+      if (remote === buildUnameCommand()) {
+        return Promise.resolve({ code: 0, stdout: 'Linux x86_64\n', stderr: '' })
+      }
+      return Promise.resolve({
+        code: null,
+        stdout: '',
+        stderr: '',
+        timedOut: true,
+        timeoutMs: REMOTE_STOP_TIMEOUT_MS,
+      })
+    }
+    const deployer = new RemoteDeployer({ runner, logger, serverVersion: '0.0.0' })
+    await expect(deployer.stopRemoteDaemon('user@host')).resolves.toBeUndefined()
+    expect(budgets).toEqual([REMOTE_PROBE_TIMEOUT_MS, REMOTE_STOP_TIMEOUT_MS])
+    expect(warnings.at(-1)).toBe(
+      `[remote:user@host] stop daemon timed out after ${REMOTE_STOP_TIMEOUT_MS}ms`,
+    )
   })
 })
 
@@ -831,6 +1003,7 @@ describe('RemoteDeployer.provisionNodeRuntime', () => {
     expect(calls.map((c) => c.command)).toEqual(['ssh', 'scp', 'ssh'])
     const [uname, scp, install] = calls
     expect(uname!.args).toEqual(sshCommandArgs('user@host', buildUnameCommand()))
+    expect(uname!.timeoutMs).toBe(REMOTE_PROBE_TIMEOUT_MS)
     const tgzName = scp!.args.find((a) => a.includes('node-runtime-'))!
     expect(tgzName).toMatch(/^node-runtime-[0-9a-f]+\.tar\.gz$/)
     expect(scp!.args).toContain(`user@host:/tmp/${tgzName}`)
@@ -899,6 +1072,7 @@ describe('RemoteDeployer.provisionNodeRuntime', () => {
     expect(calls.map((c) => c.command)).toEqual(['ssh', 'ssh', 'scp', 'ssh'])
     const [, probe, scp, install] = calls
     expect(probe!.args).toEqual(sshCommandArgs('user@host', buildWindowsProbeCommand()))
+    expect(probe!.timeoutMs).toBe(REMOTE_PROBE_TIMEOUT_MS)
     const zipName = scp!.args.find((a) => a.includes('node-runtime-'))!
     expect(zipName).toMatch(/^node-runtime-[0-9a-f]+\.zip$/)
     expect(scp!.args).toContain(`user@host:${zipName}`)

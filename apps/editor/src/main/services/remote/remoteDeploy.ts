@@ -19,6 +19,12 @@
  *  which cmd/powershell leave literal; never absolute, which would need quotes
  *  when the profile path has spaces). scp targets use bare filenames:
  *  sftp-server starts in the profile dir independent of the shell rule above.
+ *
+ *  Control-plane ssh calls (probe/check/start/stop) always carry an explicit
+ *  timeoutMs: a hung ssh to an unresponsive tunnel backend must surface as a
+ *  failure, never as an indefinitely spinning "connecting…" window. A timeout is
+ *  NOT the same as "not deployed" — it is reported as `error` so the reconnect
+ *  logic keeps the transparent path instead of redeploying.
  *--------------------------------------------------------------------------------------------*/
 
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -54,6 +60,16 @@ const WINDOWS_DATA_DIR = '.universe-editor-server'
 const WINDOWS_NODE_DIR = `${WINDOWS_DATA_DIR}\\node\\v${NODE_RUNTIME_VERSION}`
 const SSH_BATCH_MODE = 'BatchMode=yes'
 const SSH_STRICT_HOST_KEY = 'StrictHostKeyChecking=accept-new'
+// Covers DNS + TCP + key exchange only; an established-but-silent tunnel is
+// bounded by the REMOTE_*_TIMEOUT_MS budgets below instead.
+export const SSH_CONNECT_TIMEOUT_OPTION = 'ConnectTimeout=10'
+export const REMOTE_PROBE_TIMEOUT_MS = 30_000
+export const REMOTE_CHECK_TIMEOUT_MS = 30_000
+export const REMOTE_START_TIMEOUT_MS = 60_000
+export const REMOTE_STOP_TIMEOUT_MS = 30_000
+// Data-plane fallback (tar/scp and scripted installs); control-plane calls must
+// pass their own bounded timeoutMs.
+const LONG_COMMAND_TIMEOUT_MS = 600_000
 
 // ------------------------- authority parsing -------------------------
 
@@ -107,6 +123,8 @@ export function sshBaseArgs(authority: string): string[] {
     SSH_BATCH_MODE,
     '-o',
     SSH_STRICT_HOST_KEY,
+    '-o',
+    SSH_CONNECT_TIMEOUT_OPTION,
     ...(port !== undefined ? ['-p', String(port)] : []),
     destination(authority),
   ]
@@ -123,6 +141,8 @@ export function scpArgs(authority: string, source: string, remoteTarget: string)
     SSH_BATCH_MODE,
     '-o',
     SSH_STRICT_HOST_KEY,
+    '-o',
+    SSH_CONNECT_TIMEOUT_OPTION,
     ...(port !== undefined ? ['-P', String(port)] : []),
     source,
     remoteTarget,
@@ -143,6 +163,8 @@ export function forwardArgs(authority: string, localPort: number, remotePort: nu
     SSH_BATCH_MODE,
     '-o',
     SSH_STRICT_HOST_KEY,
+    '-o',
+    SSH_CONNECT_TIMEOUT_OPTION,
     '-o',
     'ExitOnForwardFailure=yes',
     ...(port !== undefined ? ['-p', String(port)] : []),
@@ -597,6 +619,10 @@ export interface RemoteRunResult {
   readonly stderr: string
   /** Set when the process could not be spawned (e.g. ssh not on PATH). */
   readonly spawnError?: string
+  /** Set only when the runner killed the process because `timeoutMs` elapsed. */
+  readonly timedOut?: boolean
+  /** The budget that expired; present iff `timedOut` is true. */
+  readonly timeoutMs?: number
 }
 
 export type RemoteRunner = (
@@ -617,7 +643,7 @@ export const defaultRemoteRunner: RemoteRunner = (command, args, options) =>
         windowsHide: true,
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024,
-        timeout: options?.timeoutMs ?? 600_000,
+        timeout: options?.timeoutMs ?? LONG_COMMAND_TIMEOUT_MS,
         ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
       },
       (error, stdout, stderr) => {
@@ -625,7 +651,26 @@ export const defaultRemoteRunner: RemoteRunner = (command, args, options) =>
           resolve({ code: 0, stdout, stderr })
           return
         }
-        const e = error as { code?: string | number; signal?: string | null; message: string }
+        const e = error as {
+          code?: string | number | null
+          signal?: string | null
+          killed?: boolean
+          message: string
+        }
+        const timeoutMs = options?.timeoutMs
+        if (timeoutMs !== undefined && e.killed === true && e.code === null) {
+          // execFile's timeout kill: code is null, killed is true, signal is
+          // SIGTERM. maxBuffer kills carry a string code, ENOENT never kills.
+          resolve({
+            code: null,
+            signal: e.signal ?? null,
+            stdout,
+            stderr,
+            timedOut: true,
+            timeoutMs,
+          })
+          return
+        }
         if (typeof e.code === 'number') {
           resolve({ code: e.code, signal: e.signal ?? null, stdout, stderr })
         } else {
@@ -697,11 +742,30 @@ export type RemoteCheckResult =
   | { readonly state: 'error'; readonly message: string }
 
 /**
+ * Human-readable reason for a failed run. Callers must handle `timedOut`
+ * themselves first: a killed process usually has no stderr.
+ */
+function describeRunFailure(result: RemoteRunResult): string {
+  return (
+    result.stderr.trim() || result.spawnError || `exit ${result.code ?? result.signal ?? 'unknown'}`
+  )
+}
+
+/**
  * Shared classification of a `bootstrap.js check` run — the ssh and wsl
  * orchestrators only differ in how the command is transported. `transport`
  * labels the fallback error message ('ssh' / 'wsl').
  */
 export function classifyCheckResult(result: RemoteRunResult, transport: string): RemoteCheckResult {
+  // A timeout means the check never completed: half a stdout line cannot be
+  // trusted, and treating it as `not-deployed` would trigger a pointless
+  // redeploy. `error` keeps the transport in the transparent reconnect path.
+  if (result.timedOut) {
+    return {
+      state: 'error',
+      message: `${transport} check timed out${result.timeoutMs !== undefined ? ` after ${result.timeoutMs}ms` : ''}`,
+    }
+  }
   const deployedBundleHash = parseBundleHashLine(result.stdout)
   const info = parseDaemonInfoLine(result.stdout)
   if (info)
@@ -798,7 +862,16 @@ export class RemoteDeployer {
   private async _ensurePlatform(authority: string): Promise<ResolvedRemotePlatform> {
     const cached = this._platformCache.get(authority)
     if (cached) return cached
-    const unameResult = await this._runner('ssh', sshCommandArgs(authority, buildUnameCommand()))
+    const unameResult = await this._runner('ssh', sshCommandArgs(authority, buildUnameCommand()), {
+      timeoutMs: REMOTE_PROBE_TIMEOUT_MS,
+    })
+    // A timed-out uname means the transport itself is silent: probing again over
+    // the same transport would just burn another full budget.
+    if (unameResult.timedOut) {
+      throw new Error(
+        `failed to probe remote platform: uname probe timed out after ${unameResult.timeoutMs}ms`,
+      )
+    }
     let resolved: ResolvedRemotePlatform
     if (unameResult.code === 0) {
       const uname = unameResult.stdout.split('\n')[0]?.trim() ?? ''
@@ -817,7 +890,11 @@ export class RemoteDeployer {
       resolved = { platform: 'posix', uname: unameResult.stdout }
       this._logger.info(`[remote:${authority}] remote platform 'posix' (probe: uname '${uname}')`)
     } else {
-      const probe = await this._runner('ssh', sshCommandArgs(authority, buildWindowsProbeCommand()))
+      const probe = await this._runner(
+        'ssh',
+        sshCommandArgs(authority, buildWindowsProbeCommand()),
+        { timeoutMs: REMOTE_PROBE_TIMEOUT_MS },
+      )
       const match = /UNIVERSE_REMOTE_OS=Windows_NT\.(\S+)/.exec(probe.stdout)
       if (match?.[1]) {
         const arch = windowsArchFromProbe(match[1])
@@ -826,8 +903,13 @@ export class RemoteDeployer {
           `[remote:${authority}] remote platform 'windows-${arch}' (probe: ${match[1]})`,
         )
       } else {
+        // The probe result owns the failure reason; uname only supplies context.
+        const unameReason = describeRunFailure(unameResult)
+        const probeReason = probe.timedOut
+          ? `windows probe timed out after ${probe.timeoutMs}ms`
+          : `windows probe did not report UNIVERSE_REMOTE_OS (${describeRunFailure(probe)})`
         throw new Error(
-          `failed to probe remote platform: ${unameResult.stderr.trim() || unameResult.spawnError || `exit ${unameResult.code}`}`,
+          `failed to probe remote platform: uname did not identify the OS (${unameReason}); ${probeReason}`,
         )
       }
     }
@@ -841,7 +923,9 @@ export class RemoteDeployer {
       platform.platform === 'windows'
         ? buildWindowsCheckCommand(this._serverVersion)
         : buildCheckCommand(this._serverVersion)
-    const result = await this._runner('ssh', sshCommandArgs(authority, command))
+    const result = await this._runner('ssh', sshCommandArgs(authority, command), {
+      timeoutMs: REMOTE_CHECK_TIMEOUT_MS,
+    })
     return classifyCheckResult(result, 'ssh')
   }
 
@@ -853,12 +937,15 @@ export class RemoteDeployer {
       platform.platform === 'windows'
         ? buildWindowsStartCommand(this._serverVersion)
         : buildStartCommand(this._serverVersion)
-    const result = await this._runner('ssh', sshCommandArgs(authority, command))
+    const result = await this._runner('ssh', sshCommandArgs(authority, command), {
+      timeoutMs: REMOTE_START_TIMEOUT_MS,
+    })
     const info = parseDaemonInfoLine(result.stdout)
     if (!info) {
-      throw new Error(
-        `failed to start remote daemon for '${authority}': ${result.stderr.trim() || result.spawnError || `exit ${result.code}`}`,
-      )
+      const reason = result.timedOut
+        ? `ssh start timed out after ${result.timeoutMs}ms`
+        : describeRunFailure(result)
+      throw new Error(`failed to start remote daemon for '${authority}': ${reason}`)
     }
     this._logger.info(
       `[remote:${authority}] daemon running port=${info.port} version=${info.serverVersion}`,
@@ -874,11 +961,14 @@ export class RemoteDeployer {
       platform.platform === 'windows'
         ? buildWindowsStopCommand(this._serverVersion)
         : buildStopCommand(this._serverVersion)
-    const result = await this._runner('ssh', sshCommandArgs(authority, command))
+    const result = await this._runner('ssh', sshCommandArgs(authority, command), {
+      timeoutMs: REMOTE_STOP_TIMEOUT_MS,
+    })
     if (result.code !== 0) {
-      this._logger.warn(
-        `[remote:${authority}] stop daemon returned exit ${result.code ?? result.signal}: ${result.stderr.trim()}`,
-      )
+      const reason = result.timedOut
+        ? `stop daemon timed out after ${result.timeoutMs}ms`
+        : `stop daemon returned exit ${result.code ?? result.signal}: ${result.stderr.trim()}`
+      this._logger.warn(`[remote:${authority}] ${reason}`)
     } else {
       this._logger.info(`[remote:${authority}] daemon stopped`)
     }

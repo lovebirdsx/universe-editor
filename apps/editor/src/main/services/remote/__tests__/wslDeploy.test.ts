@@ -10,8 +10,13 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { ILogger } from '@universe-editor/platform'
 import {
   NODE_RUNTIME_VERSION,
+  REMOTE_CHECK_TIMEOUT_MS,
+  REMOTE_PROBE_TIMEOUT_MS,
+  REMOTE_START_TIMEOUT_MS,
+  REMOTE_STOP_TIMEOUT_MS,
   buildCheckCommand,
   buildDeployRemoteScript,
   buildDeployScriptBody,
@@ -108,6 +113,29 @@ describe('classifyCheckResult', () => {
       message: 'wsl check failed (exit 1)',
     })
   })
+
+  it('classifies timeouts as error regardless of half-written output or stderr', () => {
+    const infoLine =
+      'UNIVERSE_REMOTE_DAEMON_INFO={"serverVersion":"0.0.0","protocolVersion":2,"port":9,"token":"t","pid":1}\n'
+    expect(
+      classifyCheckResult(
+        { code: null, stdout: infoLine, stderr: '', timedOut: true, timeoutMs: 30_000 },
+        'ssh',
+      ),
+    ).toEqual({ state: 'error', message: 'ssh check timed out after 30000ms' })
+    expect(
+      classifyCheckResult(
+        {
+          code: null,
+          stdout: '',
+          stderr: 'bash: node: command not found',
+          timedOut: true,
+          timeoutMs: 30_000,
+        },
+        'wsl',
+      ),
+    ).toEqual({ state: 'error', message: 'wsl check timed out after 30000ms' })
+  })
 })
 
 describe('stripWslNuls', () => {
@@ -192,9 +220,13 @@ function makeDeployHarness(uploadExitCode = 0, installStderr = ''): DeployHarnes
 
 describe('WslDeployer', () => {
   it('check/start/stop run through wsl.exe with the shared bootstrap commands', async () => {
-    const calls: { command: string; args: readonly string[] }[] = []
-    const runner: RemoteRunner = (command, args) => {
-      calls.push({ command, args })
+    const calls: { command: string; args: readonly string[]; timeoutMs?: number }[] = []
+    const runner: RemoteRunner = (command, args, options) => {
+      calls.push({
+        command,
+        args,
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      })
       return Promise.resolve({ code: 3, stdout: '', stderr: '' })
     }
     const deployer = new WslDeployer({ runner, serverVersion: '0.0.0', wslExePath: WSL_EXE })
@@ -206,6 +238,52 @@ describe('WslDeployer', () => {
     expect(calls.map((c) => c.command)).toEqual([WSL_EXE, WSL_EXE])
     expect(calls[0]!.args).toEqual(wslCommandArgs('Ubuntu', buildCheckCommand('0.0.0')))
     expect(calls[1]!.args).toEqual(wslCommandArgs('Ubuntu', buildStopCommand('0.0.0')))
+    expect(calls.map((c) => c.timeoutMs)).toEqual([REMOTE_CHECK_TIMEOUT_MS, REMOTE_STOP_TIMEOUT_MS])
+  })
+
+  it('reports a start timeout instead of an exit-signal string', async () => {
+    const budgets: number[] = []
+    const runner: RemoteRunner = (_command, _args, options) => {
+      budgets.push(options?.timeoutMs ?? -1)
+      return Promise.resolve({
+        code: null,
+        stdout: '',
+        stderr: '',
+        timedOut: true,
+        timeoutMs: REMOTE_START_TIMEOUT_MS,
+      })
+    }
+    const deployer = new WslDeployer({ runner, serverVersion: '0.0.0', wslExePath: WSL_EXE })
+    await expect(deployer.startRemoteDaemon('Ubuntu')).rejects.toThrow(
+      `failed to start WSL daemon in 'Ubuntu': wsl start timed out after ${REMOTE_START_TIMEOUT_MS}ms`,
+    )
+    expect(budgets).toEqual([REMOTE_START_TIMEOUT_MS])
+  })
+
+  it('warns without throwing when stop times out', async () => {
+    const warnings: string[] = []
+    const logger = {
+      info: () => {},
+      warn: (message: string) => warnings.push(message),
+    } as unknown as ILogger
+    const runner: RemoteRunner = () =>
+      Promise.resolve({
+        code: null,
+        stdout: '',
+        stderr: '',
+        timedOut: true,
+        timeoutMs: REMOTE_STOP_TIMEOUT_MS,
+      })
+    const deployer = new WslDeployer({
+      runner,
+      logger,
+      serverVersion: '0.0.0',
+      wslExePath: WSL_EXE,
+    })
+    await expect(deployer.stopRemoteDaemon('Ubuntu')).resolves.toBeUndefined()
+    expect(warnings.at(-1)).toBe(
+      `[wsl:Ubuntu] stop daemon timed out after ${REMOTE_STOP_TIMEOUT_MS}ms`,
+    )
   })
 
   it('startRemoteDaemon parses the info line and strips wsl.exe NULs from failures', async () => {
@@ -325,6 +403,7 @@ describe('WslDeployer.provisionNodeRuntime', () => {
 
     expect(runnerCalls.map((c) => c.command)).toEqual([WSL_EXE, WSL_EXE])
     expect(runnerCalls[0]!.args).toEqual(wslCommandArgs('Ubuntu', buildUnameCommand()))
+    expect(runnerCalls[0]!.timeoutMs).toBe(REMOTE_PROBE_TIMEOUT_MS)
 
     expect(spawns).toHaveLength(1)
     const upload = spawns[0]!

@@ -20,6 +20,10 @@ import { NullLogger, type ILogger, type IRemoteDaemonInfo } from '@universe-edit
 import { buildChildEnv } from '../process/env.js'
 import {
   NODE_RUNTIME_VERSION,
+  REMOTE_CHECK_TIMEOUT_MS,
+  REMOTE_PROBE_TIMEOUT_MS,
+  REMOTE_START_TIMEOUT_MS,
+  REMOTE_STOP_TIMEOUT_MS,
   buildCheckCommand,
   buildDeployScriptBody,
   buildNodeInstallScriptBody,
@@ -112,6 +116,7 @@ export class WslDeployer {
     const result = await this._runner(
       this._wslExe(),
       wslCommandArgs(distro, buildCheckCommand(this._serverVersion)),
+      { timeoutMs: REMOTE_CHECK_TIMEOUT_MS },
     )
     return classifyCheckResult({ ...result, stderr: stripWslNuls(result.stderr) }, 'wsl')
   }
@@ -122,12 +127,14 @@ export class WslDeployer {
     const result = await this._runner(
       this._wslExe(),
       wslCommandArgs(distro, buildStartCommand(this._serverVersion)),
+      { timeoutMs: REMOTE_START_TIMEOUT_MS },
     )
     const info = parseDaemonInfoLine(result.stdout)
     if (!info) {
-      throw new Error(
-        `failed to start WSL daemon in '${distro}': ${stripWslNuls(result.stderr).trim() || result.spawnError || `exit ${result.code}`}`,
-      )
+      const reason = result.timedOut
+        ? `wsl start timed out after ${result.timeoutMs}ms`
+        : stripWslNuls(result.stderr).trim() || result.spawnError || `exit ${result.code}`
+      throw new Error(`failed to start WSL daemon in '${distro}': ${reason}`)
     }
     this._logger.info(
       `[wsl:${distro}] daemon running port=${info.port} version=${info.serverVersion}`,
@@ -141,11 +148,13 @@ export class WslDeployer {
     const result = await this._runner(
       this._wslExe(),
       wslCommandArgs(distro, buildStopCommand(this._serverVersion)),
+      { timeoutMs: REMOTE_STOP_TIMEOUT_MS },
     )
     if (result.code !== 0) {
-      this._logger.warn(
-        `[wsl:${distro}] stop daemon returned exit ${result.code ?? result.signal}: ${stripWslNuls(result.stderr).trim()}`,
-      )
+      const reason = result.timedOut
+        ? `stop daemon timed out after ${result.timeoutMs}ms`
+        : `stop daemon returned exit ${result.code ?? result.signal}: ${stripWslNuls(result.stderr).trim()}`
+      this._logger.warn(`[wsl:${distro}] ${reason}`)
     } else {
       this._logger.info(`[wsl:${distro}] daemon stopped`)
     }
@@ -210,11 +219,15 @@ export class WslDeployer {
     const probeResult = await this._runner(
       this._wslExe(),
       wslCommandArgs(distro, buildUnameCommand()),
+      { timeoutMs: REMOTE_PROBE_TIMEOUT_MS },
     )
     if (probeResult.code !== 0) {
-      throw new Error(
-        `failed to probe WSL platform: ${stripWslNuls(probeResult.stderr).trim() || probeResult.spawnError || `exit ${probeResult.code}`}`,
-      )
+      const reason = probeResult.timedOut
+        ? `wsl probe timed out after ${probeResult.timeoutMs}ms`
+        : stripWslNuls(probeResult.stderr).trim() ||
+          probeResult.spawnError ||
+          `exit ${probeResult.code}`
+      throw new Error(`failed to probe WSL platform: ${reason}`)
     }
     const resolution = resolveNodeArtifact(stripWslNuls(probeResult.stdout))
     if ('error' in resolution) throw new Error(resolution.error)
