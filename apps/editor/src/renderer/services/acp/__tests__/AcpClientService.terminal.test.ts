@@ -46,6 +46,7 @@ import type {
 } from '../../../../shared/ipc/codexBinaryService.js'
 import type { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
 import type { IRemoteStatusService } from '../../../../shared/ipc/remoteStatusService.js'
+import type { IUserSettingsSyncService } from '../../configuration/UserSettingsSync.js'
 import type {
   AcpExitEvent,
   AcpLaunchSpec,
@@ -322,6 +323,8 @@ function makeService(
     startupTimeoutMs?: number
     claudeSettingsEnv?: Record<string, string>
     config?: Record<string, unknown>
+    /** Overrides the `whenInitialized` gate; defaults to already hydrated. */
+    settingsReady?: Promise<void>
     /** Replaces the null logger when a test asserts on what the service logged. */
     loggerService?: ILoggerService
   } = {},
@@ -384,6 +387,10 @@ function makeService(
     new UriIdentityService('linux'),
     { getEnvironment: () => Promise.resolve(null) } as unknown as IRemoteStatusService,
     new LifecycleService(),
+    {
+      whenInitialized: opts.settingsReady ?? Promise.resolve(),
+      initialize: async () => undefined,
+    } as unknown as IUserSettingsSyncService,
   )
   svc.setNotificationSink(sink)
   // Connect now awaits initializeResult — auto-respond to the SDK's
@@ -453,6 +460,40 @@ function makeService(
 
 const SESSION_ID = 'sess-1'
 const CWD = '/work/proj'
+
+describe('AcpClientService — binary resolve waits for settings hydration', () => {
+  let h: Harness
+  afterEach(() => {
+    h.transport.dispose()
+  })
+
+  it('defers the spawn until settings are hydrated so the policy is the user value', async () => {
+    let release!: () => void
+    const ready = new Promise<void>((resolve) => (release = resolve))
+    const config: Record<string, unknown> = {}
+    h = makeService({ settingsReady: ready, config })
+
+    const connecting = h.svc.connect('claude-code', { cwd: CWD, leaseFor: SESSION_ID })
+    await new Promise((r) => setTimeout(r, 10))
+    // Reading the policy before the user layer lands yields the built-in
+    // 'pinned', which both runs the wrong binary and reconciles `.active` back
+    // to the pin — silently undoing a version the user picked by hand.
+    expect(h.claudeResolve).not.toHaveBeenCalled()
+
+    config['acp.allowManualBinaryVersion'] = true
+    release()
+    const conn = await connecting
+    try {
+      expect(h.claudeResolve).toHaveBeenCalledTimes(1)
+      expect(h.claudeResolve.mock.calls[0]![0]).toMatchObject({
+        source: 'download',
+        policy: 'manual',
+      })
+    } finally {
+      conn.dispose()
+    }
+  })
+})
 
 describe('AcpClientService — terminal/create routing', () => {
   let h: Harness

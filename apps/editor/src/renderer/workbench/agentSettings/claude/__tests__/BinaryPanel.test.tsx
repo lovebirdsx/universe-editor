@@ -25,6 +25,7 @@ import {
   type IClaudeBinaryVersionInfo,
 } from '../../../../../shared/ipc/claudeBinaryService.js'
 import { ServicesContext } from '../../../useService.js'
+import { IUserSettingsSyncService } from '../../../../services/configuration/UserSettingsSync.js'
 import { BinaryPanel } from '../BinaryPanel.js'
 import type { UseClaudeConfig } from '../useClaudeConfig.js'
 
@@ -75,6 +76,10 @@ function makeHarness(initial: IClaudeBinaryVersionInfo, manual = true) {
   services.set(INotificationService, { notify: vi.fn() } as unknown as INotificationService)
   services.set(IHostService, { platform: 'linux' } as unknown as IHostService)
   services.set(IDialogService, { confirm } as unknown as IDialogService)
+  services.set(IUserSettingsSyncService, {
+    whenInitialized: Promise.resolve(),
+    initialize: async () => undefined,
+  } as unknown as IUserSettingsSyncService)
   const inst = new InstantiationService(services)
 
   return {
@@ -166,6 +171,9 @@ describe('BinaryPanel download state', () => {
     expect(screen.getByText(/25%/)).toBeTruthy()
 
     act(() => h.emitter.fire({ downloads: [] }))
+    // The refresh now runs behind the settings-hydration gate, so flush the
+    // microtask chain before asserting.
+    await flushEffects()
     expect(h.getVersionInfo.mock.calls.length).toBe(before + 1)
     // An empty queue means "no download running", not "keep the last frame".
     expect(screen.queryByText(/25%/)).toBeNull()

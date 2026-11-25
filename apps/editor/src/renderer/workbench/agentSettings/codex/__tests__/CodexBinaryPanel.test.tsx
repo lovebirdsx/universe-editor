@@ -24,6 +24,7 @@ import {
   type ICodexBinaryVersionInfo,
 } from '../../../../../shared/ipc/codexBinaryService.js'
 import { ServicesContext } from '../../../useService.js'
+import { IUserSettingsSyncService } from '../../../../services/configuration/UserSettingsSync.js'
 import { CodexBinaryPanel } from '../CodexBinaryPanel.js'
 import type { UseCodexConfig } from '../useCodexConfig.js'
 
@@ -73,6 +74,10 @@ function makeHarness(initial: ICodexBinaryVersionInfo, manual = true) {
   services.set(INotificationService, { notify: vi.fn() } as unknown as INotificationService)
   services.set(IHostService, { platform: 'linux' } as unknown as IHostService)
   services.set(IDialogService, { confirm } as unknown as IDialogService)
+  services.set(IUserSettingsSyncService, {
+    whenInitialized: Promise.resolve(),
+    initialize: async () => undefined,
+  } as unknown as IUserSettingsSyncService)
   const inst = new InstantiationService(services)
 
   return {

@@ -31,6 +31,7 @@ import { computeBinaryVersionActions, deriveBinaryActionState } from '../binaryV
 import { BinaryVersionToggle } from '../BinaryVersionToggle.js'
 import { useManualBinaryVersion } from '../useManualBinaryVersion.js'
 import { binaryVersionPolicy } from '../../../services/acp/binaryVersionPolicy.js'
+import { IUserSettingsSyncService } from '../../../services/configuration/UserSettingsSync.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
 
@@ -41,6 +42,7 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
   const host = useService(IHostService)
   const authority = useRemoteAuthority()
   const manual = useManualBinaryVersion()
+  const userSettings = useService(IUserSettingsSyncService)
 
   const [source, setSourceState] = useState<ClaudeBinarySource>(
     () => (config.get<string>('acp.claude.source') ?? 'download') as ClaudeBinarySource,
@@ -60,8 +62,13 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
   const loadVersionInfo = useCallback(() => {
     setLoadingVersion(true)
     setLoadError(null)
-    void claudeBinary
-      .getVersionInfo(binaryVersionPolicy(config), authority)
+    // The policy is read from the user settings layer. Before that layer lands
+    // the built-in default would read as 'pinned', and pinned `getVersionInfo`
+    // reconciles `.active` back to the pin as a side effect — undoing a version
+    // the user picked. A settings editor restored at startup can mount this
+    // panel that early, so wait for hydration first.
+    void userSettings.whenInitialized
+      .then(() => claudeBinary.getVersionInfo(binaryVersionPolicy(config), authority))
       .then((info) => {
         setVersionInfo(info)
         if (!sawEventRef.current) {
@@ -71,7 +78,7 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
       })
       .catch((err: unknown) => setLoadError(String(err)))
       .finally(() => setLoadingVersion(false))
-  }, [claudeBinary, config, authority])
+  }, [claudeBinary, config, authority, userSettings])
 
   useEffect(() => {
     // A different host has a different download set entirely, so drop what we

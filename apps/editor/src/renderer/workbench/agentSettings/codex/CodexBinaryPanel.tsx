@@ -32,6 +32,7 @@ import { computeBinaryVersionActions, deriveBinaryActionState } from '../binaryV
 import { BinaryVersionToggle } from '../BinaryVersionToggle.js'
 import { useManualBinaryVersion } from '../useManualBinaryVersion.js'
 import { binaryVersionPolicy } from '../../../services/acp/binaryVersionPolicy.js'
+import { IUserSettingsSyncService } from '../../../services/configuration/UserSettingsSync.js'
 import type { UseCodexConfig } from './useCodexConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
 
@@ -42,6 +43,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
   const host = useService(IHostService)
   const authority = useRemoteAuthority()
   const manual = useManualBinaryVersion()
+  const userSettings = useService(IUserSettingsSyncService)
 
   const [source, setSourceState] = useState<CodexBinarySource>(
     () => (config.get<string>('acp.codex.source') ?? 'download') as CodexBinarySource,
@@ -61,8 +63,11 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
   const loadVersionInfo = useCallback(() => {
     setLoadingVersion(true)
     setLoadError(null)
-    void codexBinary
-      .getVersionInfo(binaryVersionPolicy(config), authority)
+    // See claude/BinaryPanel: wait for the settings hydration before reading the
+    // policy — the pre-hydration default reads as 'pinned', whose
+    // `getVersionInfo` reconciles `.active` back to the pin as a side effect.
+    void userSettings.whenInitialized
+      .then(() => codexBinary.getVersionInfo(binaryVersionPolicy(config), authority))
       .then((info) => {
         setVersionInfo(info)
         if (!sawEventRef.current) {
@@ -72,7 +77,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
       })
       .catch((err: unknown) => setLoadError(String(err)))
       .finally(() => setLoadingVersion(false))
-  }, [codexBinary, config, authority])
+  }, [codexBinary, config, authority, userSettings])
 
   useEffect(() => {
     // A different host has a different download set entirely, so drop what we

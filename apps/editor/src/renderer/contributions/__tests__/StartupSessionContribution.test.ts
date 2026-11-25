@@ -2,7 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tests for StartupSessionContribution — the window consumes the session work it
  *  was opened/focused for, at cold launch (argv) and after startup (IPC push):
- *    - `open-session` resumes the existing session immediately.
+ *    - `open-session` resumes the existing session once user settings have
+ *      hydrated (connecting reads the binary source/version policy from them).
  *    - `new-agent-session` creates a session once user settings have hydrated,
  *      carrying the remote authority when the cwd lives on another host.
  *    - Both IPC subscriptions are released with the contribution.
@@ -85,8 +86,13 @@ async function flush(): Promise<void> {
 }
 
 describe('StartupSessionContribution', () => {
-  it('resumes the session named by the cold-launch argv', () => {
-    const { resumeSession } = setup(makeIpc({ openSessionId: 'sess-argv' }))
+  it('resumes the session named by the cold-launch argv once settings have hydrated', async () => {
+    const { resumeSession, hydration } = setup(makeIpc({ openSessionId: 'sess-argv' }))
+    expect(resumeSession).not.toHaveBeenCalled()
+
+    hydration.resolve()
+    await flush()
+
     expect(resumeSession).toHaveBeenCalledWith('sess-argv')
   })
 
@@ -132,15 +138,19 @@ describe('StartupSessionContribution', () => {
     expect(createSession).toHaveBeenCalledWith('codex', { cwd: '/other' })
   })
 
-  it('resumes a session pushed over IPC after startup', () => {
+  it('resumes a session pushed over IPC after startup once settings have hydrated', async () => {
     const ipc = makeIpc()
-    const { resumeSession } = setup(ipc)
+    const { resumeSession, hydration } = setup(ipc)
     const onOpenSession = ipc.onOpenSession.mock.calls[0]?.[0] as
       | ((sessionId: string) => void)
       | undefined
     expect(onOpenSession).toBeDefined()
 
     onOpenSession!('sess-pushed')
+    expect(resumeSession).not.toHaveBeenCalled()
+
+    hydration.resolve()
+    await flush()
 
     expect(resumeSession).toHaveBeenCalledWith('sess-pushed')
   })

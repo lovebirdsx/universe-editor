@@ -62,6 +62,7 @@ import {
 } from '../../shared/ipc/remoteStatusService.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { binaryVersionPolicy } from '../services/acp/binaryVersionPolicy.js'
+import { IUserSettingsSyncService } from '../services/configuration/UserSettingsSync.js'
 
 /** The single call the alignment phase needs; both agent services satisfy it. */
 interface IBundleSyncService {
@@ -88,6 +89,7 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IRemoteStatusService private readonly _remoteStatus: IRemoteStatusService,
     @INotificationService private readonly _notifications: INotificationService,
+    @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -180,11 +182,20 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
 
   private async _maintainLocal(): Promise<void> {
     await this._localSweep
+    // Settings hydration decides the version policy and whether each agent's
+    // source is a managed download. Running alignment/prefetch before the user
+    // layer lands reads the built-in defaults — `'pinned'` — and prefetch then
+    // reconciles `.active` back to the pin, silently undoing a version the user
+    // picked by hand. `_maintain` dedupes, so the wait never reruns a phase.
+    await this._userSettings.whenInitialized
     await this._alignLocal()
     await this._prefetchLocal()
   }
 
   private async _maintainRemote(authority: string): Promise<void> {
+    // Remote maintenance reads the same policy (and the prefetch toggle) from
+    // settings; see _maintainLocal for why it must wait for hydration.
+    await this._userSettings.whenInitialized
     try {
       await this._claude.cleanupStaleVersions(authority)
     } catch (err) {

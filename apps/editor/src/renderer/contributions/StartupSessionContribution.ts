@@ -40,11 +40,19 @@ export class StartupSessionContribution extends Disposable implements IWorkbench
     this._register({ dispose: ipc.onNewAgentSession((request) => this._create(request)) })
   }
 
+  /**
+   * Resume waits for the settings hydration too: connecting spawns the agent,
+   * and the binary version policy read before the user layer lands is the built-in
+   * default (`'pinned'`), which both runs the wrong version and reconciles the
+   * `.active` pointer back to the pin — undoing a version picked by hand.
+   */
   private _resume(sessionId: string): void {
     console.log(`[StartupSessionContribution] resuming session: ${sessionId}`)
-    this._sessions.resumeSession(sessionId).catch((err: unknown) => {
-      console.warn(`[StartupSessionContribution] resume failed: ${(err as Error).message}`)
-    })
+    void this._userSettings.whenInitialized
+      .then(() => this._sessions.resumeSession(sessionId))
+      .catch((err: unknown) => {
+        console.warn(`[StartupSessionContribution] resume failed: ${(err as Error).message}`)
+      })
   }
 
   /**

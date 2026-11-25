@@ -92,6 +92,7 @@ import { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { binaryVersionPolicy } from './binaryVersionPolicy.js'
 import { IAcpPathPolicy, type AcpPathPolicyEnv } from './acpPathPolicy.js'
+import { IUserSettingsSyncService } from '../configuration/UserSettingsSync.js'
 import { SUBAGENT_TRANSCRIPT_CAPABILITY } from './session/acpExtMethods.js'
 import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
 import { AcpProtocolTracer } from './acpProtocolTracer.js'
@@ -303,6 +304,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IRemoteStatusService private readonly _remoteStatus: IRemoteStatusService,
     @ILifecycleService lifecycleService: ILifecycleService,
+    @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpClient', name: 'ACP Client' })
@@ -526,6 +528,13 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     // (and its CLAUDE_CODE_EXECUTABLE) into it would break that launch.
     if (agentId !== 'claude-code' || spec.runAsNode !== true) return spec
 
+    // Source/policy come from the user settings layer. Reading them before the
+    // initial file → layer hydration lands yields the built-in defaults
+    // (`acp.claude.source: 'download'`, policy `'pinned'`), so a spawn that races
+    // startup would run the pinned binary and — under `'pinned'` — reconcile the
+    // `.active` pointer back to the pin, discarding the version the user picked.
+    await this._userSettings.whenInitialized
+
     // Local binary paths and local credentials never cross the tunnel: a remote
     // spawn resolves its own binary via a managed download on the remote host.
     // The local acp.claude.source / executablePath config is local-host
@@ -591,6 +600,10 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     // the id but launches its own command — forcing the managed binary (and its
     // CODEX_PATH) into it would break that launch.
     if (agentId !== 'codex' || spec.runAsNode !== true) return spec
+
+    // See _ensureClaudeBinary: the source/policy settings layer hydrates
+    // asynchronously, and the defaults would spawn the pinned binary.
+    await this._userSettings.whenInitialized
 
     // Remote spawns resolve the binary on the remote host; never leak the local
     // apiKey config across the tunnel (the remote side uses its own auth). The

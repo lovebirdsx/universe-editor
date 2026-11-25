@@ -39,6 +39,7 @@ import {
   IRemoteStatusService,
   type RemoteConnectionStatusDto,
 } from '../../../shared/ipc/remoteStatusService.js'
+import { IUserSettingsSyncService } from '../../services/configuration/UserSettingsSync.js'
 import { AgentBinaryPrefetchContribution } from '../AgentBinaryPrefetchContribution.js'
 
 const AUTHORITY = 'myhost'
@@ -106,6 +107,14 @@ function makeRemoteStatus() {
   }
 }
 
+function makeUserSettings(ready: Promise<void>) {
+  return {
+    _serviceBrand: undefined,
+    whenInitialized: ready,
+    initialize: vi.fn(async () => undefined),
+  }
+}
+
 interface Harness {
   claude: ReturnType<typeof makeBinaryService>
   codex: ReturnType<typeof makeBinaryService>
@@ -120,11 +129,13 @@ function setup(opts?: {
   config?: Record<string, unknown>
   getConnections?: () => Promise<readonly RemoteConnectionStatusDto[]>
   order?: string[]
+  settingsReady?: Promise<void>
 }): Harness {
   const claude = makeBinaryService('claude', opts?.order)
   const codex = makeBinaryService('codex', opts?.order)
   const notifications = makeNotifications()
   const config = makeConfig(opts?.config)
+  const userSettings = makeUserSettings(opts?.settingsReady ?? Promise.resolve())
   const folder = opts?.remote
     ? URI.from({ scheme: REMOTE_SCHEME, authority: opts.remote, path: '/' })
     : URI.file('C:/local-project')
@@ -139,6 +150,7 @@ function setup(opts?: {
   services.set(IWorkspaceService, workspace as never)
   services.set(IRemoteStatusService, remoteStatus as never)
   services.set(INotificationService, notifications as never)
+  services.set(IUserSettingsSyncService, userSettings as never)
   services.set(ILoggerService, { createLogger: () => new NullLogger() } as never)
   const inst = new InstantiationService(services)
   const contribution = inst.createInstance(AgentBinaryPrefetchContribution)
@@ -151,7 +163,7 @@ function fireConnected(remoteStatus: ReturnType<typeof makeRemoteStatus>): void 
 
 /** Flush the fire-and-forget async maintenance chains (each method awaits twice). */
 async function settle(): Promise<void> {
-  for (let i = 0; i < 8; i++) await Promise.resolve()
+  for (let i = 0; i < 30; i++) await Promise.resolve()
 }
 
 describe('AgentBinaryPrefetchContribution', () => {
@@ -183,6 +195,39 @@ describe('AgentBinaryPrefetchContribution', () => {
     expect(codex.prefetch).toHaveBeenCalledTimes(1)
     // Local prefetch carries the version policy but no authority argument.
     expect(claude.prefetch).toHaveBeenCalledWith('pinned')
+
+    contribution.dispose()
+  })
+
+  it('waits for settings hydration before choosing a version policy', async () => {
+    let release!: () => void
+    const ready = new Promise<void>((resolve) => (release = resolve))
+    const { claude, codex, workspace, contribution } = setup({
+      settingsReady: ready,
+      config: {
+        'acp.allowManualBinaryVersion': true,
+        'acp.prefetchBinaries': true,
+        'acp.claude.source': 'download',
+        'acp.codex.source': 'download',
+      },
+    })
+
+    workspace.setCurrent(workspace.current)
+    await settle()
+
+    // The sweep does not read settings, but alignment/prefetch must not run on
+    // the built-in defaults (`'pinned'`): a pinned prefetch reconciles `.active`
+    // back to the pin, silently undoing a version the user picked by hand.
+    expect(claude.cleanupStaleVersions).toHaveBeenCalledTimes(1)
+    expect(claude.syncBundled).not.toHaveBeenCalled()
+    expect(claude.prefetch).not.toHaveBeenCalled()
+
+    release()
+    await settle()
+
+    expect(claude.syncBundled).toHaveBeenCalledTimes(1)
+    expect(claude.prefetch).toHaveBeenCalledWith('manual')
+    expect(codex.prefetch).toHaveBeenCalledWith('manual')
 
     contribution.dispose()
   })
