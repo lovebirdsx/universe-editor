@@ -14,6 +14,10 @@
  *       popped as the "current" entry rather than lost entirely.
  *    4. Two ContextKeys (canGoBack / canGoForward) driven by onDidChange so
  *       GoBackAction / GoForwardAction precondition expressions resolve.
+ *    5. Vim mode only: focus moving into a view (Explorer, Search, a panel
+ *       view, ...) records a view entry, so Ctrl+O from a view returns to
+ *       where the editor lost focus and Ctrl+I goes back to the view. Turning
+ *       Vim off drops every view entry.
  *
  *  Cursor listeners attach once per Monaco editor instance via
  *  FileEditorRegistry.onDidChange and detach via the editor's own
@@ -24,10 +28,13 @@ import {
   Disposable,
   EditorInput,
   ICommandService,
+  IConfigurationService,
   IContextKeyService,
   IEditorGroupsService,
   IEditorService,
+  IFocusTrackerService,
   IHistoryService,
+  ILayoutService,
   IStorageService,
   IUriIdentityService,
   IWorkbenchContribution,
@@ -42,6 +49,11 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { installPerWorkbenchDocument } from '../services/windows/workbenchDocumentEvents.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { findExistingFileEditor } from '../services/editor/revealEditorPosition.js'
+import {
+  resolveHistoryLocation,
+  type HistoryLocation,
+} from '../services/history/historyLocation.js'
+import { currentWorkbenchDocumentOrUndefined } from '../services/windows/workbenchDocuments.js'
 import {
   MonacoLoader,
   type ICodeEditorOpenInput,
@@ -69,6 +81,11 @@ interface AttachedListener {
 
 export class HistoryContribution extends Disposable implements IWorkbenchContribution {
   private readonly _listeners = new Map<MonacoLikeEditor, AttachedListener>()
+  // View entries are a Vim jump-list feature; off, history stays editor-only.
+  private _viewTracking = false
+  // Last focus that resolved to the editor area or a view. Transit points
+  // (activity bar, title bar, Quick Input, menus) resolve to nothing and keep it.
+  private _lastLocation: HistoryLocation | undefined
 
   constructor(
     @IHistoryService private readonly _historyService: IHistoryService,
@@ -78,6 +95,9 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IStorageService storageService: IStorageService,
     @ICommandService commandService: ICommandService,
+    @IFocusTrackerService private readonly _focusTracker: IFocusTrackerService,
+    @IConfigurationService private readonly _configurationService: IConfigurationService,
+    @ILayoutService private readonly _layoutService: ILayoutService,
   ) {
     super()
 
@@ -153,15 +173,20 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
       storageService.onDidChangeWorkspaceScope(() => {
         lastRecordedResource = undefined
         lastActiveInput = undefined
+        this._lastLocation = undefined
         this._historyService.clear()
       }),
     )
 
-    // A goBack/goForward pops the stack before the reveal: flush the active
-    // editor's pending debounced move first, or a significant move made
-    // moments ago would be popped off as the stale "current" entry and the
-    // real current position would exist in neither stack.
-    this._register(this._historyService.onWillNavigate(() => this._flushActiveEditor()))
+    this._register(this._historyService.onWillNavigate(() => this._onWillNavigate()))
+
+    this._register(this._focusTracker.onDidFocusChange((e) => this._onFocusChange(e.current)))
+    this._register(
+      this._configurationService.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('vim.enabled')) this._updateViewTracking()
+      }),
+    )
+    this._updateViewTracking()
 
     this._register(
       FileEditorRegistry.onDidChange((input) => {
@@ -212,6 +237,96 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
         })
       }),
     )
+  }
+
+  private _updateViewTracking(): void {
+    const enabled = this._configurationService.get<boolean>('vim.enabled') === true
+    if (enabled === this._viewTracking) return
+    this._viewTracking = enabled
+    this._lastLocation = undefined
+    if (enabled) {
+      // Keep the invariant "focus in a view ⇒ that view is the current entry"
+      // from the moment Vim turns on, not from the next focus move.
+      this._onFocusChange(this._focusTracker.current)
+    } else {
+      this._historyService.removeViewEntries()
+    }
+  }
+
+  private _resolveLocation(element: unknown): HistoryLocation | undefined {
+    return resolveHistoryLocation(element, (partId) => this._layoutService.getVisible(partId))
+  }
+
+  private _onFocusChange(current: unknown): void {
+    if (!this._viewTracking) return
+    const next = this._resolveLocation(current)
+    if (!next) return
+    const previous = this._lastLocation
+    this._lastLocation = next
+    if (next.kind === 'view') {
+      // Land the caret the editor is losing focus with — and cancel its pending
+      // debounce, which would otherwise record it above the view.
+      if (previous?.kind !== 'view') this._flushActiveEditor()
+      this._historyService.recordView(next.viewId)
+      return
+    }
+    if (previous?.kind === 'view') this._recordActiveEditorAtTop()
+  }
+
+  private _onWillNavigate(): void {
+    // A goBack/goForward pops the stack before the reveal: flush the active
+    // editor's pending debounced move first, or a significant move made
+    // moments ago would be popped off as the stale "current" entry and the
+    // real current position would exist in neither stack.
+    this._flushActiveEditor()
+    if (!this._viewTracking) return
+    // The focus tracker reports a move one task late; settle it now so Esc
+    // followed at once by Ctrl+O behaves as if the move had been reported.
+    // A title-bar button holding DOM focus resolves to nothing and keeps the
+    // last location.
+    this._onFocusChange(currentWorkbenchDocumentOrUndefined()?.activeElement ?? null)
+    // Navigating from a view: that view must be the current entry. A preview
+    // opened from it (focus stays in the view) recorded the editor above it,
+    // and popping that editor would just land on the view the user is in.
+    const location = this._lastLocation
+    if (location?.kind === 'view') this._historyService.recordView(location.viewId)
+  }
+
+  /**
+   * Focus came back to the editor from a view: record the editor's position on
+   * top of the view entry so Ctrl+O returns to the view. Inside a Go Back /
+   * Go Forward landing the record is swallowed by the target's suppression
+   * window, keeping the forward stack.
+   */
+  private _recordActiveEditorAtTop(): void {
+    const active = this._editorService.activeEditor.get()
+    if (!(active instanceof EditorInput)) return
+    const resource = active.resource
+    if (!resource) return
+    let selection: IHistorySelection | null = null
+    if (active instanceof FileEditorInput) {
+      const group = this._groupsService.activeGroup
+      const editor = FileEditorRegistry.get(active, group.id) ?? FileEditorRegistry.get(active)
+      if (editor) {
+        const state = this._listeners.get(editor)
+        if (state?.timer) {
+          clearTimeout(state.timer)
+          state.timer = undefined
+        }
+        selection = this._readSelection(editor)
+        const pos = editor.getPosition()
+        if (state && pos) {
+          state.lastResource = state.resource.toString()
+          state.lastLine = pos.lineNumber
+        }
+      }
+    }
+    this._historyService.record({
+      resource,
+      ...(selection && { selection }),
+      typeId: active.typeId,
+      serialized: active.serialize?.(),
+    })
   }
 
   private _captureLeaving(input: EditorInput | undefined): void {

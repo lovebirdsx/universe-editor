@@ -8,6 +8,8 @@ import {
   IFileService,
   IHistoryService,
   IInstantiationService,
+  ILayoutService,
+  IViewDescriptorService,
   InstantiationService,
   ServiceCollection,
   URI,
@@ -71,7 +73,7 @@ function setup(historyOverride?: IHistoryService) {
   services.set(IWindowFocusService, new FakeWindowFocusService())
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
-  return { groups, history, inst }
+  return { groups, history, inst, services }
 }
 
 async function runCommand(
@@ -289,5 +291,68 @@ describe('History navigation actions', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(settleNavigation).toHaveBeenCalledTimes(1)
     expect(settleNavigation).toHaveBeenCalledWith(uriA)
+  })
+
+  describe('view entries', () => {
+    const EXPLORER = 'workbench.view.explorer.tree'
+    const SEARCH = 'workbench.view.search.results'
+
+    function setupWithViews(available: readonly string[]) {
+      const ctx = setup()
+      const focusView = vi.fn(async () => true)
+      ctx.services.set(ILayoutService, { focusView } as unknown as ILayoutService)
+      ctx.services.set(IViewDescriptorService, {
+        getViewContainerByViewId: (id: string) =>
+          available.includes(id) ? { id: `container:${id}` } : null,
+        getViewsByContainer: (containerId: string) =>
+          available.filter((id) => `container:${id}` === containerId).map((id) => ({ id })),
+      } as unknown as IViewDescriptorService)
+      return { ...ctx, focusView }
+    }
+
+    function openRecorded(ctx: ReturnType<typeof setup>, name: string): FileEditorInput {
+      const uri = URI.file(`/repo/${name}.ts`)
+      const input = ctx.inst.createInstance(FileEditorInput, uri)
+      ctx.groups.activeGroup.openEditor(input, { pinned: true, activate: true })
+      ctx.history.record({
+        resource: uri,
+        selection: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 },
+      })
+      return input
+    }
+
+    it('GoForward onto a view entry focuses the view', async () => {
+      const ctx = setupWithViews([EXPLORER])
+      openRecorded(ctx, 'a')
+      ctx.history.recordView(EXPLORER)
+      await runCommand(ctx.inst, GoBackAction, disposables)
+      expect(ctx.focusView).not.toHaveBeenCalled()
+
+      await runCommand(ctx.inst, GoForwardAction, disposables)
+      expect(ctx.focusView).toHaveBeenCalledWith(EXPLORER, { source: 'command' })
+    })
+
+    it('GoBack skips a view that can no longer be focused and lands on the editor below', async () => {
+      const ctx = setupWithViews([EXPLORER])
+      const a = openRecorded(ctx, 'a')
+      ctx.history.recordView(SEARCH)
+      openRecorded(ctx, 'b')
+
+      await runCommand(ctx.inst, GoBackAction, disposables)
+      expect(ctx.focusView).not.toHaveBeenCalled()
+      expect(ctx.groups.activeGroup.activeEditor).toBe(a)
+      expect(ctx.history.getForwardStack().map((e) => e.kind ?? 'editor')).toEqual(['editor'])
+    })
+
+    it('a count steps across a view entry', async () => {
+      const ctx = setupWithViews([EXPLORER])
+      const a = openRecorded(ctx, 'a')
+      ctx.history.recordView(EXPLORER)
+      openRecorded(ctx, 'b')
+
+      await runCommand(ctx.inst, GoBackAction, disposables, { count: 2 })
+      expect(ctx.focusView).not.toHaveBeenCalled()
+      expect(ctx.groups.activeGroup.activeEditor).toBe(a)
+    })
   })
 })

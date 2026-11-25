@@ -176,7 +176,7 @@ test.describe('@p0 vim global', () => {
       .toBe('workbench.view.explorer.tree')
   })
 
-  test('Esc, <leader>w l and Ctrl+O / Ctrl+I lead from the Explorer back to the editor', async ({
+  test('Esc, <leader>w l and Ctrl+O / Ctrl+I share one jump list with the Explorer', async ({
     page,
     workbench,
   }) => {
@@ -186,6 +186,11 @@ test.describe('@p0 vim global', () => {
     await setVimEnabled(page, true)
     const dir = mkTempDir('universe-editor-e2e-vim-way-back-')
     seedTreeFiles(dir)
+    writeFileSync(
+      join(dir, 'beta.txt'),
+      Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join('\n'),
+      'utf8',
+    )
     // A folder row: clicking a file would open it and rewrite the history under test.
     mkdirSync(join(dir, 'folder'))
     await workbench.openWorkspace(dir)
@@ -196,8 +201,12 @@ test.describe('@p0 vim global', () => {
         .toContain(name)
     }
     await expect.poll(() => workbench.getContextKey<boolean>('canGoBack')).toBe(true)
+    await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(20, 1))
     const activeUri = () => page.evaluate(() => window.__E2E__!.getActiveEditorUri())
+    const cursorLine = () =>
+      page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber)
     const editorFocused = () => workbench.getContextKey<boolean>('editorTextFocus')
+    const focusedView = () => workbench.getContextKey<string>('focusedView')
 
     await test.step('idle Esc in the Explorer returns to the editor', async () => {
       await focusExplorerTree(page, 'folder')
@@ -214,17 +223,27 @@ test.describe('@p0 vim global', () => {
       await expect.poll(editorFocused).toBe(true)
     })
 
-    await test.step('Ctrl+O jumps back from the Explorer instead of opening a file', async () => {
+    await test.step('Ctrl+O from the Explorer lands where the editor lost focus', async () => {
       await focusExplorerTree(page, 'folder')
       await page.keyboard.press('Control+o')
-      await expect.poll(activeUri).toContain('alpha.txt')
+      await expect.poll(activeUri).toContain('beta.txt')
+      await expect.poll(cursorLine).toBe(20)
       await expect.poll(editorFocused).toBe(true)
       await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
     })
 
-    await test.step('Ctrl+I in the editor jumps forward again', async () => {
+    await test.step('Ctrl+I in the editor returns to the Explorer', async () => {
       await page.keyboard.press('Control+i')
+      await expect.poll(focusedView).toBe('workbench.view.explorer.tree')
+    })
+
+    await test.step('Ctrl+O walks back past the editor to the older file', async () => {
+      await page.keyboard.press('Control+o')
       await expect.poll(activeUri).toContain('beta.txt')
+      await expect.poll(cursorLine).toBe(20)
+      await expect.poll(editorFocused).toBe(true)
+      await page.keyboard.press('Control+o')
+      await expect.poll(activeUri).toContain('alpha.txt')
     })
   })
 

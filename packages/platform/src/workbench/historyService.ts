@@ -2,9 +2,14 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  IHistoryService — bounded back/forward navigation history across editor inputs.
  *
- *  Each entry captures a (resource, selection) tuple; goBack/goForward emit the
- *  desired target without mutating editor state directly. Renderer wires the
- *  emissions to openEditor + restoreViewState. In-memory only; mirrors vscode.
+ *  Each editor entry captures a (resource, selection) tuple; goBack/goForward
+ *  emit the desired target without mutating editor state directly. Renderer
+ *  wires the emissions to openEditor + restoreViewState. In-memory only;
+ *  mirrors vscode.
+ *
+ *  With Vim mode on, the renderer also records *view* entries (the Explorer,
+ *  Search, a panel view, ...) so Ctrl+O / Ctrl+I walk editor positions and
+ *  view focus as one jump list.
  *--------------------------------------------------------------------------------------------*/
 
 import type { Event } from '../base/event.js'
@@ -18,7 +23,9 @@ export interface IHistorySelection {
   readonly endColumn: number
 }
 
+/** An editor position. `kind` is optional so recorders can omit it. */
 export interface IHistoryEntry {
+  readonly kind?: 'editor'
   readonly resource: URI
   readonly selection?: IHistorySelection | undefined
   /**
@@ -31,6 +38,26 @@ export interface IHistoryEntry {
   /** Serialized payload from `EditorInput.serialize?.()` — paired with `typeId`. */
   readonly serialized?: unknown
   readonly timestamp: number
+}
+
+/** A focused view (Vim mode only): navigating to it focuses the view. */
+export interface IHistoryViewEntry {
+  readonly kind: 'view'
+  readonly viewId: string
+  readonly timestamp: number
+}
+
+export type IHistoryStackEntry = IHistoryEntry | IHistoryViewEntry
+
+export interface IHistoryNavigateOptions {
+  /** Vim's `3<C-o>`: land `count` entries away (stops at the oldest / newest). */
+  readonly count?: number | undefined
+  /**
+   * Entries that can no longer be navigated to (a view that was removed or is
+   * hidden by its `when`). They are dropped from both stacks while stepping
+   * and do not consume `count`.
+   */
+  readonly isStale?: ((entry: IHistoryStackEntry) => boolean) | undefined
 }
 
 export interface IHistoryService {
@@ -60,11 +87,26 @@ export interface IHistoryService {
    */
   updateCurrent(resource: URI, selection: IHistorySelection): void
 
-  /** Step one position back. Returns the entry to navigate to, or undefined. */
-  goBack(): IHistoryEntry | undefined
+  /**
+   * Record that `viewId` now holds focus. A no-op when it already is the top
+   * entry (so landing on it via goForward keeps the forward stack); otherwise
+   * an older entry for the same view is removed first (one entry per view, like
+   * Vim's jumplist) and the forward stack is dropped.
+   */
+  recordView(viewId: string): void
 
-  /** Step one position forward. Returns the entry to navigate to, or undefined. */
-  goForward(): IHistoryEntry | undefined
+  /** Drop every view entry from both stacks (Vim mode turned off). */
+  removeViewEntries(): void
+
+  /**
+   * Step back (`count` entries, default 1). Fires onWillNavigate once. Returns
+   * the entry to navigate to, or undefined — in which case neither stack
+   * changed.
+   */
+  goBack(options?: IHistoryNavigateOptions): IHistoryStackEntry | undefined
+
+  /** Step forward; same contract as goBack. */
+  goForward(options?: IHistoryNavigateOptions): IHistoryStackEntry | undefined
 
   /**
    * Called by the navigation action once its reveal of `resource` completes.
@@ -85,9 +127,9 @@ export interface IHistoryService {
   canGoForward(): boolean
 
   /** Snapshot of the back stack, oldest first. */
-  getBackStack(): readonly IHistoryEntry[]
+  getBackStack(): readonly IHistoryStackEntry[]
   /** Snapshot of the forward stack, oldest first. */
-  getForwardStack(): readonly IHistoryEntry[]
+  getForwardStack(): readonly IHistoryStackEntry[]
 
   /** Reset both stacks (test helper). */
   clear(): void

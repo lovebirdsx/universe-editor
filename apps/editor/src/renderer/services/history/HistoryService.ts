@@ -3,7 +3,9 @@
  *  HistoryService — back/forward navigation history. Pure renderer state; no
  *  persistence (matches vscode). Records are inserted via `record()` from the
  *  active-editor autorun, the FileEditor Monaco cursor listener, and the
- *  code-editor open handler (jump origins/targets).
+ *  code-editor open handler (jump origins/targets). With Vim mode on, the
+ *  contribution also inserts *view* entries via `recordView()`, so Ctrl+O /
+ *  Ctrl+I walk editor positions and view focus as one jump list.
  *  `goBack`/`goForward` fire `onWillNavigate` before touching the stack, then
  *  return the entry and open a short *suppression window* keyed to the target
  *  resource: a single navigation fires several records for that resource (the
@@ -26,7 +28,10 @@ import {
   InstantiationType,
   registerSingleton,
   type IHistoryEntry,
+  type IHistoryNavigateOptions,
   type IHistorySelection,
+  type IHistoryStackEntry,
+  type IHistoryViewEntry,
   URI,
 } from '@universe-editor/platform'
 
@@ -43,15 +48,44 @@ const SUPPRESS_WINDOW_MS = 1000
 // triggers still lands inside the window.
 const SUPPRESS_SETTLE_MS = 350
 
+type EditorEntryInput = Omit<IHistoryEntry, 'timestamp'>
+
+function isViewEntry(entry: IHistoryStackEntry): entry is IHistoryViewEntry {
+  return entry.kind === 'view'
+}
+
+function normalizeCount(count: number | undefined): number {
+  return typeof count === 'number' && Number.isFinite(count) && count > 1 ? Math.floor(count) : 1
+}
+
 function sameFile(
   uriIdentity: IUriIdentityService,
   a: IHistoryEntry,
-  b: Omit<IHistoryEntry, 'timestamp'>,
+  b: EditorEntryInput,
 ): boolean {
   return uriIdentity.isEqual(a.resource, b.resource)
 }
 
-function sameLine(a: IHistoryEntry, b: Omit<IHistoryEntry, 'timestamp'>): boolean {
+/**
+ * Collapse `newer` onto `older` (same file + line) — merge per field: a record
+ * lacking a field must not wipe what the older entry carries. A placeholder
+ * record (no selection) would otherwise drop the position a jump record just
+ * wrote, and a cursor record (no typeId) would drop the typeId/serialized the
+ * placeholder needs to rebuild the input.
+ */
+function mergeEditorPair(older: IHistoryEntry, newer: EditorEntryInput): IHistoryEntry {
+  return {
+    ...newer,
+    ...(newer.selection === undefined &&
+      older.selection !== undefined && { selection: older.selection }),
+    ...(newer.typeId === undefined && older.typeId !== undefined && { typeId: older.typeId }),
+    ...(newer.serialized === undefined &&
+      older.serialized !== undefined && { serialized: older.serialized }),
+    timestamp: Date.now(),
+  }
+}
+
+function sameLine(a: IHistoryEntry, b: EditorEntryInput): boolean {
   const as = a.selection
   const bs = b.selection
   if (as === bs) return true
@@ -64,8 +98,8 @@ function sameLine(a: IHistoryEntry, b: Omit<IHistoryEntry, 'timestamp'>): boolea
 export class HistoryService extends Disposable implements IHistoryService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _back: IHistoryEntry[] = []
-  private readonly _forward: IHistoryEntry[] = []
+  private readonly _back: IHistoryStackEntry[] = []
+  private readonly _forward: IHistoryStackEntry[] = []
   // Resources we are currently navigating to (via goBack/goForward), each with
   // the wall-clock deadline until which records for it are swallowed. A single
   // navigation produces multiple records for its target; all are ignored until
@@ -85,7 +119,7 @@ export class HistoryService extends Disposable implements IHistoryService {
     super()
   }
 
-  record(entry: Omit<IHistoryEntry, 'timestamp'>): void {
+  record(entry: EditorEntryInput): void {
     const reviveResource =
       entry.resource instanceof URI ? entry.resource : (URI.revive(entry.resource) as URI)
     if (!reviveResource) return
@@ -104,29 +138,17 @@ export class HistoryService extends Disposable implements IHistoryService {
       // user navigation: stop suppressing everything.
       this._suppressed.clear()
     }
-    const next: Omit<IHistoryEntry, 'timestamp'> = {
+    const next: EditorEntryInput = {
       resource: reviveResource,
       selection: entry.selection,
       ...(entry.typeId !== undefined && { typeId: entry.typeId }),
       ...(entry.serialized !== undefined && { serialized: entry.serialized }),
     }
     const top = this._back[this._back.length - 1]
-    if (top && sameFile(this._uriIdentity, top, next) && sameLine(top, next)) {
+    if (top && !isViewEntry(top) && sameFile(this._uriIdentity, top, next) && sameLine(top, next)) {
       // Replace top in-place so the latest column / selection wins without
-      // creating a duplicate stack entry — but merge per field: a record
-      // lacking a field must not wipe what the top already carries. A
-      // placeholder record (no selection) would otherwise drop the position a
-      // jump record just wrote, and a cursor record (no typeId) would drop the
-      // typeId/serialized the placeholder needs to rebuild the input.
-      this._back[this._back.length - 1] = {
-        ...next,
-        ...(next.selection === undefined &&
-          top.selection !== undefined && { selection: top.selection }),
-        ...(next.typeId === undefined && top.typeId !== undefined && { typeId: top.typeId }),
-        ...(next.serialized === undefined &&
-          top.serialized !== undefined && { serialized: top.serialized }),
-        timestamp: Date.now(),
-      }
+      // creating a duplicate stack entry.
+      this._back[this._back.length - 1] = mergeEditorPair(top, next)
       if (this._forward.length > 0) this._forward.length = 0
       this._onDidChange.fire()
       return
@@ -141,7 +163,7 @@ export class HistoryService extends Disposable implements IHistoryService {
   updateCurrent(resource: URI, selection: IHistorySelection): void {
     for (let i = this._back.length - 1; i >= 0; i--) {
       const e = this._back[i]
-      if (e && this._uriIdentity.isEqual(e.resource, resource)) {
+      if (e && !isViewEntry(e) && this._uriIdentity.isEqual(e.resource, resource)) {
         this._back[i] = { ...e, selection, timestamp: Date.now() }
         this._onDidChange.fire()
         return
@@ -149,31 +171,128 @@ export class HistoryService extends Disposable implements IHistoryService {
     }
   }
 
-  goBack(): IHistoryEntry | undefined {
+  recordView(viewId: string): void {
+    const top = this._back[this._back.length - 1]
+    // Landing on the view goForward just restored re-records it; clearing the
+    // forward stack there would break the next Ctrl+I.
+    if (top && isViewEntry(top) && top.viewId === viewId) return
+    // One entry per view: drop the older occurrence so bouncing between the
+    // editor and a view does not grow the stack. Suppression windows stay —
+    // a navigation target's late cursor flush must still be swallowed.
+    const back = this._compact(this._back, (e) => isViewEntry(e) && e.viewId === viewId)
+    back.push({ kind: 'view', viewId, timestamp: Date.now() })
+    if (back.length > MAX_DEPTH) back.splice(0, back.length - MAX_DEPTH)
+    this._back.splice(0, this._back.length, ...back)
+    if (this._forward.length > 0) this._forward.length = 0
+    this._onDidChange.fire()
+  }
+
+  removeViewEntries(): void {
+    const back = this._compact(this._back, isViewEntry)
+    const forward = this._forward.filter((e) => !isViewEntry(e))
+    if (back.length === this._back.length && forward.length === this._forward.length) return
+    this._back.splice(0, this._back.length, ...back)
+    this._forward.splice(0, this._forward.length, ...forward)
+    this._onDidChange.fire()
+  }
+
+  goBack(options?: IHistoryNavigateOptions): IHistoryStackEntry | undefined {
     // Fire before the depth check: listeners flush a pending debounced cursor
     // record here, so a significant move made moments ago becomes the "current"
     // entry and this pop returns to the real origin instead of losing it.
     this._onWillNavigate.fire()
-    if (this._back.length < 2) return undefined
-    const current = this._back.pop()
-    if (!current) return undefined
-    this._forward.push(current)
-    if (this._forward.length > MAX_DEPTH) this._forward.shift()
-    const target = this._back[this._back.length - 1]
-    if (target) this._suppress(target.resource)
+    const isStale = options?.isStale
+    const targetIndex = this._findLanding(
+      this._back,
+      this._back.length - 2,
+      normalizeCount(options?.count),
+      isStale,
+    )
+    if (targetIndex === undefined) return undefined
+    for (let i = this._back.length - 1; i > targetIndex; i--) {
+      const e = this._back[i]
+      if (e && !isStale?.(e)) this._forward.push(e)
+    }
+    this._back.length = targetIndex + 1
+    if (this._forward.length > MAX_DEPTH) {
+      this._forward.splice(0, this._forward.length - MAX_DEPTH)
+    }
+    return this._land(this._back[targetIndex])
+  }
+
+  goForward(options?: IHistoryNavigateOptions): IHistoryStackEntry | undefined {
+    this._onWillNavigate.fire()
+    const isStale = options?.isStale
+    const targetIndex = this._findLanding(
+      this._forward,
+      this._forward.length - 1,
+      normalizeCount(options?.count),
+      isStale,
+    )
+    if (targetIndex === undefined) return undefined
+    for (let i = this._forward.length - 1; i >= targetIndex; i--) {
+      const e = this._forward[i]
+      if (e && !isStale?.(e)) this._back.push(e)
+    }
+    this._forward.length = targetIndex
+    if (this._back.length > MAX_DEPTH) this._back.splice(0, this._back.length - MAX_DEPTH)
+    return this._land(this._back[this._back.length - 1])
+  }
+
+  /**
+   * Index of the `count`-th live entry walking down from `from`, or of the
+   * furthest one when fewer exist. Stale entries do not consume the count;
+   * undefined means there is nowhere to go and nothing may be mutated.
+   */
+  private _findLanding(
+    stack: readonly IHistoryStackEntry[],
+    from: number,
+    count: number,
+    isStale: IHistoryNavigateOptions['isStale'],
+  ): number | undefined {
+    let found: number | undefined
+    let remaining = count
+    for (let i = from; i >= 0 && remaining > 0; i--) {
+      const e = stack[i]
+      if (!e || isStale?.(e)) continue
+      found = i
+      remaining--
+    }
+    return found
+  }
+
+  private _land(target: IHistoryStackEntry | undefined): IHistoryStackEntry | undefined {
+    if (target && !isViewEntry(target)) this._suppress(target.resource)
     this._onDidChange.fire()
     return target
   }
 
-  goForward(): IHistoryEntry | undefined {
-    this._onWillNavigate.fire()
-    const target = this._forward.pop()
-    if (!target) return undefined
-    this._back.push(target)
-    if (this._back.length > MAX_DEPTH) this._back.shift()
-    this._suppress(target.resource)
-    this._onDidChange.fire()
-    return target
+  /**
+   * Drop the matching entries and fold editor entries that become adjacent on
+   * the same file + line, as `record()` would have done had they arrived in a
+   * row.
+   */
+  private _compact(
+    list: readonly IHistoryStackEntry[],
+    drop: (entry: IHistoryStackEntry) => boolean,
+  ): IHistoryStackEntry[] {
+    const out: IHistoryStackEntry[] = []
+    for (const entry of list) {
+      if (drop(entry)) continue
+      const last = out[out.length - 1]
+      if (
+        last &&
+        !isViewEntry(last) &&
+        !isViewEntry(entry) &&
+        sameFile(this._uriIdentity, last, entry) &&
+        sameLine(last, entry)
+      ) {
+        out[out.length - 1] = mergeEditorPair(last, entry)
+        continue
+      }
+      out.push(entry)
+    }
+    return out
   }
 
   private _suppress(resource: URI): void {
@@ -195,11 +314,11 @@ export class HistoryService extends Disposable implements IHistoryService {
     return this._forward.length > 0
   }
 
-  getBackStack(): readonly IHistoryEntry[] {
+  getBackStack(): readonly IHistoryStackEntry[] {
     return this._back
   }
 
-  getForwardStack(): readonly IHistoryEntry[] {
+  getForwardStack(): readonly IHistoryStackEntry[] {
     return this._forward
   }
 

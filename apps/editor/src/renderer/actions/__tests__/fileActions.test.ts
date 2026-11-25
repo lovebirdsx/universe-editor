@@ -928,6 +928,14 @@ describe('fileActions', () => {
       expect(h.fileDialog.openCalls[0]?.defaultUri?.toString()).toBe(URI.file('/ws/src').toString())
     })
 
+    it('skips Vim view entries in the history', async () => {
+      const h = makeHarness()
+      h.history.record({ resource: URI.file('/ws/src/notes.md') })
+      h.history.recordView('workbench.view.explorer.tree')
+      await run(h, OpenFileAction.ID)
+      expect(h.fileDialog.openCalls[0]?.defaultUri?.toString()).toBe(URI.file('/ws/src').toString())
+    })
+
     it('uses the active editor directory when history is empty', async () => {
       const active = new FileEditorInput(URI.file('/ws/childdir/note.txt'), {} as never)
       const h = makeHarness({ activeEditor: active })

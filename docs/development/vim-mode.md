@@ -30,7 +30,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 
 | 文件 | 职责 |
 | --- | --- |
-| `services/vim/vimAppKeymap.ts` | **应用键位表**：全局导航（`Ctrl+O/I` → `goBack/goForward`，`surfaces` 含 `editor` 在内的全部 Normal surface，菜单 / 浮层除外）、leader 链（含 `<leader>?` 速查表、`<leader>w` 的 `h/j/k/l` 走 `workbench.action.navigate*`：先组间、到边缘再跨 part、再按屏幕方位进入该方向的辅助窗口（回主窗口时按 Part 方位落到最近的侧栏/视图）、`H/J/K/L` 标签迁移、`s/v` 拆分、`c` 关闭组）、编辑器 leader 别名（`surfaces: ['editor']`）、终端 Normal、Chat 时间线（`when: acpChatFocused`）、对比编辑器 `]c`/`[c`。键位的命令 id 一律写这里或 workbench-ui 通用表 |
+| `services/vim/vimAppKeymap.ts` | **应用键位表**：全局导航（`Ctrl+O/I` → `goBack/goForward`，`surfaces` 含 `editor` 在内的全部 Normal surface，菜单 / 浮层除外；编辑器位置与 view 焦点共享一条跳转栈，见[焦点位置与导航历史](#焦点位置与导航历史)）、leader 链（含 `<leader>?` 速查表、`<leader>w` 的 `h/j/k/l` 走 `workbench.action.navigate*`：先组间、到边缘再跨 part、再按屏幕方位进入该方向的辅助窗口（回主窗口时按 Part 方位落到最近的侧栏/视图）、`H/J/K/L` 标签迁移、`s/v` 拆分、`c` 关闭组）、编辑器 leader 别名（`surfaces: ['editor']`）、终端 Normal、Chat 时间线（`when: acpChatFocused`）、对比编辑器 `]c`/`[c`。键位的命令 id 一律写这里或 workbench-ui 通用表 |
 | `services/vim/vimSurfaceKeymaps.ts` | 只有某个视图自己认的键（设置页 / 快捷键编辑器 / Git 与 Perforce 图谱的 `/`），配合 `useVimSurfaceKeymap`；同时是 `vim.keymap` 校验用的「已知内置 id」目录 |
 | `services/vim/vimKeymapMerge.ts` | 纯函数：`parseUserKeymap`（解析 + 校验 `vim.keymap`）、`mergeVimKeymap`（通用表 + 应用表 + surface 自带 + 用户覆盖 / 追加 / 解绑 → 某 kind 的有效键位） |
 | `services/vim/vimModeService.ts` | 配置读取、per-surface 模式记忆、编辑器 Visual 子模式、context key（`vim*`）、状态栏条目（模式文字 + pending / Unsupported 反馈）、有效 keymap 缓存、保留集、which-key 状态 |
@@ -384,6 +384,18 @@ releaseInputMethod(owner, service)          // 仅当 owner 正持有英文时�
 
 协调器看到编辑器 / 终端 surface 一律 `leave`（不插手），避免与它们各自的 controller 抢。
 
+## 焦点位置与导航历史
+
+`Ctrl+O` / `Ctrl+I` 在所有 surface 上都是 `goBack` / `goForward`，所以 view 焦点也进同一个 `IHistoryService` 栈，作为 `IHistoryViewEntry`（`kind: 'view'`，只有 `viewId`）与编辑器条目混排。
+
+- **只在 `vim.enabled` 开启时记录**：`HistoryContribution` 订阅 `IFocusTrackerService.onDidFocusChange` 与精确 key `'vim.enabled'`；关闭时 `removeViewEntries()` 清掉两个栈里的 view 条目，非 Vim 行为与 VSCode 一致。开启期间 Alt+←/→、标题栏按钮、鼠标侧键走同一个栈。
+- **哪些焦点算 view**：`services/history/historyLocation.ts` 的 `resolveHistoryLocation`。EditorArea（含辅助窗口）算编辑器；SideBar / Panel / SecondarySideBar 里带 `data-view-id` 且所在 Part 可见的算 view（过滤掉隐藏 Panel 里终端的瞬态焦点）；活动栏、状态栏、标题栏、quick input、菜单返回 undefined，保留上一次位置。
+- **editor → view**：先 `_flushActiveEditor()` 落下失焦时的光标（同时取消待发的 debounce，否则它会压到 view 之上），再 `recordView`。**view → editor**：把编辑器当前位置 record 在 view 之上；Go Back / Go Forward 落地时这次 record 被目标的抑制窗口吞掉，forward 不受影响。
+- **`recordView` 去重**：栈顶已是同一 view 时什么都不做（Ctrl+I 落地不清 forward）；否则删掉栈里旧的同 id 条目、合并因此相邻的同文件同行编辑器条目，再压栈并清 forward。所以在 view 和编辑器之间来回切换不会让栈增长。
+- **提升**：在 view 里空格预览文件时焦点留在 view，预览的 record 压在 view 之上。`onWillNavigate` 先按 `document.activeElement` 现读位置（focus tracker 晚一个 task），若在 view 里就 `recordView` 把它提升到栈顶，否则 Ctrl+O 只会弹掉预览、落回当前 view。
+- **count 在服务内部步进**：`goBack({ count, isStale })` 只 fire 一次 `onWillNavigate`，避免循环调用时每步都重新提升。`isStale`（`historyActions` 里用 `isViewAvailable` 判断 view 是否已注销或被 `when` 隐藏）为真的条目不消耗 count、直接丢弃；没有可落点时两个栈都不改。view 目标不设抑制窗口。
+- **已知限制**：`LayoutService.focusView` 用静态默认容器，被拖到别的容器的 view 可能聚焦失败；失败时不回滚栈；view 条目不记录选中行。
+
 ## Webview
 
 不做承诺：焦点在 iframe 内时，surface 仲裁不会命中工作台 surface；dispatcher 还会在 `isWebviewFocus` 为真时直接放行。`WebviewElement` / `HtmlPreviewEditor` 已加标记。不要再为 iframe 注入按键桥。
@@ -423,7 +435,7 @@ e2e 通过 `window.__E2E__.runCommand('_workbench.updateConfiguration', 'vim.ena
 - **模式是内存态**：重启不保留；不要把它当用户设置持久化。
 - **编辑器内核命令分两路**：Monaco action（`editor.action.*`）用 `editor.trigger`；workbench 命令（`workbench.action.*`，如 `]c` / `[c`、`Ctrl+O`）必须走注入的 `executeCommand` 回调。把 workbench 命令塞给 `editor.trigger` 会静默 no-op。
 - **内核键位说明是派生的**：别在速查表里手抄键位；加 motion / operator / 文本对象 / 前缀项 / Visual 键时说明自动生成，漏的是 `vim.keyHelp.*` 翻译（测试会提示）。
-- **Normal 抢了 Ctrl 组合**：编辑器 Normal 下 `Ctrl+V`（块选择，不再粘贴）、`Ctrl+R`（重做）、`Ctrl+E/Y/D/U/F/B` 都归内核，`vim.keymap` 无法覆盖，只能 `vim.surfaces.editor=false` 或回 Insert；但用户可以写 `surfaces: ['editor']` 的同键修饰键条目，它会先于内核被引擎截走。`Ctrl+O` / `Ctrl+I` 在键位表里（`nav.back` / `nav.forward`），所有 Normal surface 同义、可改绑；它们会遮住列表上的全局 `Ctrl+O`（打开文件），editable 控件里不受影响。
+- **Normal 抢了 Ctrl 组合**：编辑器 Normal 下 `Ctrl+V`（块选择，不再粘贴）、`Ctrl+R`（重做）、`Ctrl+E/Y/D/U/F/B` 都归内核，`vim.keymap` 无法覆盖，只能 `vim.surfaces.editor=false` 或回 Insert；但用户可以写 `surfaces: ['editor']` 的同键修饰键条目，它会先于内核被引擎截走。`Ctrl+O` / `Ctrl+I` 在键位表里（`nav.back` / `nav.forward`），所有 Normal surface 同义、可改绑；它们会遮住列表上的全局 `Ctrl+O`（打开文件），editable 控件里不受影响。从 view 按 `Ctrl+O` 回到的是进入 view 前的编辑器位置，不是上一个编辑器条目（见[焦点位置与导航历史](#焦点位置与导航历史)）。
 - **新增「到处都该生效」的键写进键位表**，不要再写进编辑器内核：内核私有键在其它 surface 落空后会掉到全局默认键（`Ctrl+O` 曾在 Explorer 里弹出打开文件对话框）。
 - **多窗口**：provider 按 Document 隔离，`Workbench.tsx` 与 `AuxiliaryWindowHost.tsx` 各装一份 `useVimDispatcher`；新增窗口宿主也要装。
 

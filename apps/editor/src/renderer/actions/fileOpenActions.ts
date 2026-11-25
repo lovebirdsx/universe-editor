@@ -118,7 +118,8 @@ export function resolveOpenFileDefaultUri(
   // getBackStack() is oldest-first; the current editor is at the end.
   const back = history.getBackStack()
   for (let i = back.length - 1; i >= 0; i--) {
-    const resource = back[i]?.resource
+    const entry = back[i]
+    const resource = entry?.kind === 'view' ? undefined : entry?.resource
     if (resource && matches(resource)) {
       const parent = parentDirectoryOf(resource)
       if (parent) return parent

@@ -5,6 +5,7 @@
  *  GoBack / GoForward consult IHistoryService for the previous / next entry,
  *  open the editor for that resource (reusing an existing tab if possible),
  *  and restore the cursor position via the shared revealSelectionInInput helper.
+ *  A view entry (Vim mode) focuses that view instead.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -13,11 +14,14 @@ import {
   EditorRegistry,
   IContextKeyService,
   IEditorGroupsService,
-  IHistoryEntry,
   IHistoryService,
   IInstantiationService,
+  ILayoutService,
+  IViewDescriptorService,
   localize2,
   type IEditorGroup,
+  type IHistoryNavigateOptions,
+  type IHistoryStackEntry,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { activateGroupAndFocus } from '../services/editor/activateGroupAndFocus.js'
@@ -28,9 +32,14 @@ import { openDocInGroup } from '../services/editor/openDoc.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { openPreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 import { revealSelectionInInput } from '../services/editor/revealEditorPosition.js'
+import { isViewAvailable } from '../services/history/historyLocation.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 
-async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Promise<void> {
+async function navigateTo(accessor: ServicesAccessor, entry: IHistoryStackEntry): Promise<void> {
+  if (entry.kind === 'view') {
+    await accessor.get(ILayoutService).focusView(entry.viewId, { source: 'command' })
+    return
+  }
   const groups = accessor.get(IEditorGroupsService)
   const inst = accessor.get(IInstantiationService)
   const history = accessor.get(IHistoryService)
@@ -107,20 +116,23 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
   }).then(() => history.settleNavigation(entry.resource))
 }
 
-/** Vim's `3<C-o>`: step `count` entries, then open only where the walk ended. */
-function stepHistory(
-  step: () => IHistoryEntry | undefined,
-  args: unknown,
-): IHistoryEntry | undefined {
+/**
+ * Vim's `3<C-o>` count, plus skipping views that can no longer be focused.
+ * `isStale` runs synchronously inside goBack/goForward, before the first await,
+ * and resolves the view registry only once a view entry shows up.
+ */
+function navigateOptions(accessor: ServicesAccessor, args: unknown): IHistoryNavigateOptions {
   const raw = (args as { count?: unknown } | undefined)?.count
   const count = typeof raw === 'number' && raw > 1 ? Math.floor(raw) : 1
-  let entry: IHistoryEntry | undefined
-  for (let index = 0; index < count; index++) {
-    const next = step()
-    if (next === undefined) break
-    entry = next
+  let views: IViewDescriptorService | undefined
+  return {
+    count,
+    isStale: (entry) => {
+      if (entry.kind !== 'view') return false
+      views ??= accessor.get(IViewDescriptorService)
+      return !isViewAvailable(views, entry.viewId)
+    },
   }
-  return entry
 }
 
 export class GoBackAction extends Action2 {
@@ -137,7 +149,7 @@ export class GoBackAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor, args?: unknown): Promise<void> {
     const history = accessor.get(IHistoryService)
-    const entry = stepHistory(() => history.goBack(), args)
+    const entry = history.goBack(navigateOptions(accessor, args))
     if (!entry) return
     await navigateTo(accessor, entry)
   }
@@ -157,7 +169,7 @@ export class GoForwardAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor, args?: unknown): Promise<void> {
     const history = accessor.get(IHistoryService)
-    const entry = stepHistory(() => history.goForward(), args)
+    const entry = history.goForward(navigateOptions(accessor, args))
     if (!entry) return
     await navigateTo(accessor, entry)
   }
