@@ -44,7 +44,7 @@ export function attachVim(options: AttachVimOptions): VimAttachment {
     getElement: () => options.editor.getContainerDomNode(),
     focus: 'within',
     getSurfaceKey: options.surfaceKey,
-    defaultMode: 'normal',
+    defaultMode: options.defaultMode ?? 'normal',
     actions: {
       handleStroke: (event) => controller.handleKeyDown(event),
       isAwaitingCharArg: () => controller.isAwaitingCharArg(),

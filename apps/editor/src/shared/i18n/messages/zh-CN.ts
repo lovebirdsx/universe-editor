@@ -1568,7 +1568,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.vim.surfaces.activityBar.description': '在活动栏与视图容器标题上启用 Vim 按键。',
   'settings.vim.surfaces.terminalNormalMode.description': '启用终端 Normal 模式 surface。',
   'settings.vim.surfaces.editor.description':
-    '在文本编辑器（含输出面板）中启用 Vim 按键。关闭后即使 vim.enabled 为 true，编辑器也保持普通 Monaco 行为，leader 序列在编辑器中同样不生效。',
+    '在文本编辑器、Chat 输入框与输出面板中启用 Vim 按键。关闭后即使 vim.enabled 为 true，编辑器也保持普通 Monaco 行为，leader 序列在编辑器中同样不生效。',
   'settings.files.nativeDialog.enable.description':
     '打开文件/文件夹及保存时使用操作系统文件对话框，而不是内置对话框。',
   'settings.issueReporter': '问题报告器',

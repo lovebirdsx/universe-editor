@@ -9,3 +9,8 @@
 export function editorVimSurfaceKey(groupId: number | undefined, inputId: string): string {
   return `editor:${groupId ?? 0}:${inputId}`
 }
+
+/** The agent prompt input is its own editor surface, keyed by the session it belongs to. */
+export function promptVimSurfaceKey(sessionId: string): string {
+  return `prompt:${sessionId}`
+}

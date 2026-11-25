@@ -20,9 +20,12 @@ import type { IConfigurationService, IContextKeyService } from '@universe-editor
 import type { monaco } from '../editor/monaco/MonacoLoader.js'
 import { MonacoLoader } from '../editor/monaco/MonacoLoader.js'
 import { createWorkbenchEditor } from '../editor/monaco/workbenchEditorFactory.js'
+import { attachVim, type VimAttachment } from '../editor/vim/attachVim.js'
 import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { PromptRefTracker } from '../../services/acp/promptRefTracker.js'
 import type { PlacedRef, PromptRef } from '../../services/acp/promptRef.js'
+import type { IVimModeService } from '../../services/vim/vimModeService.js'
+import type { IVimInputMethodService } from '../../../shared/ipc/vimInputMethodService.js'
 import styles from './agents.module.css'
 
 /** Global CSS class Monaco paints on the inline reference-pill decoration. */
@@ -72,6 +75,18 @@ function isInlineSuggestionVisible(ed: monaco.editor.IStandaloneCodeEditor): boo
   )
   const ghost = controller?.model.get()?.inlineCompletionState.get()?.primaryGhostText
   return !!ghost && !ghost.isEmpty()
+}
+
+/**
+ * Everything the prompt needs to become a Vim surface. Passed in by PromptInput
+ * (rather than read via `useService`) so tests that render this component
+ * without a workbench keep working as a plain editor.
+ */
+export interface PromptVimOptions {
+  readonly surfaceKey: string
+  readonly vimModeService: IVimModeService
+  readonly inputMethodService: IVimInputMethodService
+  readonly executeCommand: (id: string, args?: unknown) => unknown
 }
 
 /** Imperative surface <PromptInput> uses in place of a textarea DOM node. */
@@ -186,6 +201,8 @@ export interface PromptMonacoEditorProps {
   /** IME composition start/end; the host defers remote draft applies while composing. */
   readonly onCompositionChange?: (composing: boolean) => void
   readonly onEditorReady?: (editor: monaco.editor.IStandaloneCodeEditor, ns: typeof monaco) => void
+  /** Present when the workbench has Vim services; absent leaves the input a plain editor. */
+  readonly vim?: PromptVimOptions | undefined
 }
 
 export function PromptMonacoEditor({
@@ -202,6 +219,7 @@ export function PromptMonacoEditor({
   onDidResetHistory,
   onCompositionChange,
   onEditorReady,
+  vim,
 }: PromptMonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
@@ -223,6 +241,8 @@ export function PromptMonacoEditor({
   onCompositionChangeRef.current = onCompositionChange
   const onEditorReadyRef = useRef(onEditorReady)
   onEditorReadyRef.current = onEditorReady
+  const vimRef = useRef(vim)
+  vimRef.current = vim
 
   const caretOffset = (): number => {
     const ed = editorRef.current
@@ -406,6 +426,8 @@ export function PromptMonacoEditor({
 
   useEffect(() => {
     let disposed = false
+    let vimAttachment: VimAttachment | undefined
+    let attachedVim: PromptVimOptions | undefined
     const disposables: monaco.IDisposable[] = []
     const mount = (m: typeof monaco): void => {
       if (disposed || !containerRef.current) return
@@ -465,6 +487,28 @@ export function PromptMonacoEditor({
       )
       editorRef.current = ed
       disposables.push(MonacoLoader.trackEditorDispose(ed))
+      const vimOptions = vimRef.current
+      if (vimOptions !== undefined) {
+        // Attach before the autoFocus below so the first focus already reports
+        // the Insert mode and the context keys settle synchronously.
+        attachedVim = vimOptions
+        vimAttachment = attachVim({
+          editor: ed,
+          surfaceKey: () => vimOptions.surfaceKey,
+          configService,
+          contextKeyService,
+          vimModeService: vimOptions.vimModeService,
+          inputMethodService: vimOptions.inputMethodService,
+          executeCommand: vimOptions.executeCommand,
+          // The prompt is a prose input: it opens ready to type. Normal mode is
+          // one Escape away, like the file editor's Insert.
+          defaultMode: 'insert',
+          // Idle Normal Escape leaves the input for the timeline, where j/k
+          // continue browsing; `i` on the timeline comes back here.
+          idleEscapeCommand: 'workbench.action.agent.focusTimeline',
+          getLineHeight: () => ed.getOption(m.editor.EditorOption.lineHeight),
+        })
+      }
       const tracker = new PromptRefTracker(model, m, PILL_CLASS_NAME)
       trackerRef.current = tracker
 
@@ -601,6 +645,12 @@ export function PromptMonacoEditor({
 
     return () => {
       disposed = true
+      // The surface must stop routing strokes before its editor disappears;
+      // then drop the mode memory so a fresh session input starts in Insert.
+      vimAttachment?.dispose()
+      if (attachedVim !== undefined) {
+        attachedVim.vimModeService.forgetSurface(attachedVim.surfaceKey)
+      }
       for (const d of disposables) d.dispose()
       trackerRef.current?.dispose()
       editorRef.current?.dispose()

@@ -147,6 +147,17 @@ export interface IVimEditorControllerOptions {
   readonly onSubModeChange?: (mode: VimMode) => void
   /** The buffer cannot be edited right now: write commands are refused and Insert is left. */
   readonly isReadOnly?: () => boolean
+  /**
+   * Mode a surface with no stored memory starts in. File editors start in
+   * Normal; the agent prompt input starts in Insert so it is typeable on focus.
+   */
+  readonly defaultMode?: 'normal' | 'insert'
+  /**
+   * Workbench command an idle Normal Escape runs when there is nothing to
+   * cancel. Defaults to the editor tab strip; the agent prompt hands focus
+   * back to the chat timeline instead.
+   */
+  readonly idleEscapeCommand?: string
 }
 
 interface CommandContext {
@@ -226,6 +237,8 @@ export function createVimEditorController(
     onUnsupportedKey,
     onSubModeChange,
     isReadOnly,
+    defaultMode = 'normal',
+    idleEscapeCommand = FOCUS_EDITOR_TABS_COMMAND,
   } = options
   const resolveSurfaceKey = typeof surfaceKey === 'function' ? surfaceKey : () => surfaceKey
   // The key follows the model: until Monaco swaps models the controller is still
@@ -266,7 +279,7 @@ export function createVimEditorController(
   const imeOwner = {}
 
   function readStoredMode(): VimMode {
-    return vimModeService.getMode(currentSurfaceKey, 'normal') === 'insert' ? 'insert' : 'normal'
+    return vimModeService.getMode(currentSurfaceKey, defaultMode) === 'insert' ? 'insert' : 'normal'
   }
 
   /** Vim is on for this editor: globally enabled and the editor surface not switched off. */
@@ -733,8 +746,8 @@ export function createVimEditorController(
     'search-word': (command) => search.searchWord(command.direction, command.count),
     'search-highlight-clear'() {
       if (search.clearHighlights()) return
-      console.debug('[vim] Escape with nothing to clear; focusing the editor tab strip')
-      void runPlatformCommand?.(FOCUS_EDITOR_TABS_COMMAND)
+      console.debug(`[vim] Escape with nothing to clear; running ${idleEscapeCommand}`)
+      void runPlatformCommand?.(idleEscapeCommand)
     },
     'editor-command': (command) => editor.trigger('vim', command.commandId, null),
     'platform-command'(command) {
@@ -999,10 +1012,10 @@ export function createVimEditorController(
     return count
   }
 
-  /** Back to a pristine Normal state: nothing in flight, no selection, no search UI. */
+  /** Back to a pristine state in the surface's default mode: nothing in flight, no selection, no search UI. */
   function deactivate(): void {
     if (state.mode === 'insert') editor.trigger('vim', 'hideSuggestWidget', null)
-    state = INITIAL_VIM_STATE
+    state = { ...INITIAL_VIM_STATE, mode: defaultMode }
     if (visual !== null) {
       const at = visual.cursor
       visual = null

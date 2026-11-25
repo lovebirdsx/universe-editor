@@ -479,7 +479,10 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
         contextKeyService.get('acpPromptInputFocused') === true
       const inVimNormalSurface =
         (contextKeyService.get('vimNormalMode') === true &&
-          contextKeyService.get('editorTextFocus') === true) ||
+          (contextKeyService.get('editorTextFocus') === true ||
+            // The ACP prompt is a Monaco editor surface too, but it deliberately
+            // does not bridge `editorTextFocus`; its focus key is this one.
+            contextKeyService.get('acpPromptInputFocused') === true)) ||
         contextKeyService.get('vimTerminalNormalMode') === true
       const userBindingOwnsKey = result.kind === 'execute' && result.weight >= KeybindingWeight.User
       const k = e.key.toLowerCase()

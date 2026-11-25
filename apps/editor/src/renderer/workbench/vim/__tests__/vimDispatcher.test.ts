@@ -880,6 +880,55 @@ describe('VimDispatcher editor strokes', () => {
     expect(handleStroke).not.toHaveBeenCalled()
   })
 
+  it('yields every stroke to an open ACP prompt popover', () => {
+    const handleStroke = vi.fn(() => true)
+    editorSurface({ handleStroke })
+    const context = createContext()
+    const popup = context.createKey<boolean>('acpPromptPopupVisible', true)
+    const { dispatcher, commands } = createDispatcher({ context })
+
+    // Normal mode is the strictest case: without the yield these would all be
+    // consumed by the editor core / leader engine instead of the popover.
+    for (const key of ['Escape', 'ArrowUp', 'ArrowDown', 'Tab', 'Enter', 'x']) {
+      expect(dispatcher.handleKeyDown(doc, press(key))).toBe(false)
+    }
+    expect(handleStroke).not.toHaveBeenCalled()
+    expect(commands).not.toHaveBeenCalled()
+
+    popup.set(false)
+    expect(dispatcher.handleKeyDown(doc, press('x'))).toBe(true)
+    expect(handleStroke).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a menu above the prompt popover', () => {
+    const container = element()
+    container.focus()
+    const handleStroke = vi.fn(() => true)
+    registerVimSurface(surface('editor', container, { actions: { handleStroke } }), doc)
+    registerVimSurface(
+      surface('menu', element(), {
+        id: 'menu-1',
+        getSurfaceKey: () => 'menu:1',
+        actions: { escape: () => true },
+      }),
+      doc,
+    )
+    const context = createContext()
+    context.createKey<boolean>('acpPromptPopupVisible', true).set(true)
+    const vim = createVim({
+      getEffectiveKeymap: () => [
+        { id: 'surface.escape', keys: ['escape'], command: 'surface.escape' },
+      ],
+    })
+    const { dispatcher, commands } = createDispatcher({ context, vim })
+
+    // The yield is scoped to editor surfaces: a menu always-active layer still
+    // owns Escape, so the prompt popover cannot swallow menu keys.
+    expect(dispatcher.handleKeyDown(doc, press('Escape'))).toBe(true)
+    expect(commands).toHaveBeenCalledWith('surface.escape', { count: 1 })
+    expect(handleStroke).not.toHaveBeenCalled()
+  })
+
   describe('r / f / t waiting for a character', () => {
     const leaderKeymap: readonly IVimKeymapEntry[] = [
       { id: 'leader.explorer', keys: ['space', 'e'], command: 'workbench.view.explorer' },

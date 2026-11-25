@@ -500,7 +500,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: true,
             description: localize(
               'settings.vim.surfaces.editor.description',
-              'Enable Vim keys in text editors (including the Output panel). When off, editors behave as plain Monaco even while vim.enabled is on; the leader chords stay inactive there too.',
+              'Enable Vim keys in text editors, the agent chat prompt, and the Output panel. When off, editors behave as plain Monaco even while vim.enabled is on; the leader chords stay inactive there too.',
             ),
           },
         },

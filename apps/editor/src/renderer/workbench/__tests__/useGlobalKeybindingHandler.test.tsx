@@ -241,6 +241,48 @@ describe('useGlobalKeybindingHandler', () => {
     expect(preventDefault).toHaveBeenCalledTimes(1)
   })
 
+  // The ACP prompt is an editor surface too, but bridges `acpPromptInputFocused`
+  // instead of `editorTextFocus`. A yielded User binding must run there as well.
+  it('executes a User binding for a printable key in the prompt Vim Normal mode', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'i',
+        command: 'test.userInsert',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('test.userInsert', () => {}))
+    const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    ck.createKey('vimNormalMode', true)
+    ck.createKey('acpPromptInputFocused', true)
+    mountHost(instantiation)
+
+    const { preventDefault } = dispatch({ key: 'i' })
+    expect(executeCommand).toHaveBeenCalledWith('test.userInsert')
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps typing untouched when the prompt Vim surface is in Insert mode', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'i',
+        command: 'test.userInsert',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('test.userInsert', () => {}))
+    const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    ck.createKey('vimNormalMode', false)
+    ck.createKey('acpPromptInputFocused', true)
+    mountHost(instantiation)
+
+    const { preventDefault } = dispatch({ key: 'i' })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(preventDefault).not.toHaveBeenCalled()
+  })
+
   it('blocks global Ctrl+e / Ctrl+y while Vim Normal mode holds text focus', () => {
     const { executeCommand, instantiation } = createHarness()
     bind('ctrl+e', 'test.globalE')

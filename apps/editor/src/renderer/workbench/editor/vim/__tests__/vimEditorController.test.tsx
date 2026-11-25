@@ -2018,6 +2018,53 @@ describe('createVimEditorController', () => {
       controller.dispose()
     })
 
+    it('runs the configured idle Escape command instead of the editor tab strip', () => {
+      const executeCommand = vi.fn()
+      const { controller } = createNormalHarness(['abc'], {
+        idleEscapeCommand: 'workbench.action.agent.focusTimeline',
+        executeCommand,
+      })
+      controller.handleKeyDown(key('Escape'))
+      expect(executeCommand).toHaveBeenCalledTimes(1)
+      expect(executeCommand).toHaveBeenCalledWith('workbench.action.agent.focusTimeline')
+      controller.dispose()
+    })
+
+    it('starts in Insert when the surface default is Insert', () => {
+      const { vim, controller } = createNormalHarness(['abc'], { defaultMode: 'insert' })
+      expect(vim.modes.get('editor:test')).toBe('insert')
+      // Printable keys belong to Monaco in Insert mode...
+      expect(controller.handleKeyDown(key('x'))).toBe(false)
+      // ...and Escape is the one key that leaves it.
+      expect(controller.handleKeyDown(key('Escape'))).toBe(true)
+      expect(vim.modes.get('editor:test')).toBe('normal')
+      controller.dispose()
+    })
+
+    it('returns to the default Insert mode after Vim is re-enabled', () => {
+      const fake = createFakeEditor(['abc'])
+      const vim = createVimModeService()
+      const config = createFakeConfig({ 'vim.enabled': true })
+      const controller = createVimEditorController({
+        editor: fake.editor,
+        surfaceKey: 'editor:test',
+        configService: config as never,
+        contextKeyService: createContext() as never,
+        vimModeService: vim as never,
+        inputMethodService: createInputMethodService() as never,
+        defaultMode: 'insert',
+      })
+      fake.focus()
+      expect(vim.modes.get('editor:test')).toBe('insert')
+
+      config.set('vim.enabled', false)
+      config.fire('vim.enabled')
+      config.set('vim.enabled', true)
+      config.fire('vim.enabled')
+      expect(vim.modes.get('editor:test')).toBe('insert')
+      controller.dispose()
+    })
+
     it('does not leave the editor when Escape cancels a pending prefix', () => {
       const executeCommand = vi.fn()
       const { controller } = createNormalHarness(['abc'], { executeCommand })

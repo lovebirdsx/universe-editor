@@ -134,6 +134,9 @@ import {
   type PromptChangeSource,
   type PromptChangeKind,
 } from './PromptMonacoEditor.js'
+import { promptVimSurfaceKey } from '../editor/vim/vimSurfaceKeys.js'
+import { IVimModeService } from '../../services/vim/vimModeService.js'
+import { IVimInputMethodService } from '../../../shared/ipc/vimInputMethodService.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import {
   buildLocalSlashCommands,
@@ -373,6 +376,19 @@ export function PromptInput({
   const uriIdentity = useService(IUriIdentityService)
   const editorGroups = useOptionalService(IEditorGroupsService)
   const auxiliaryWindows = useOptionalService(IAuxiliaryEditorWindowService)
+  const vimModeService = useOptionalService(IVimModeService)
+  const vimInputMethodService = useOptionalService(IVimInputMethodService)
+  // Optional services: unit tests render PromptInput without a workbench, and
+  // then the prompt simply stays a plain editor.
+  const promptVim =
+    vimModeService !== undefined && vimInputMethodService !== undefined
+      ? {
+          surfaceKey: promptVimSurfaceKey(session.id),
+          vimModeService,
+          inputMethodService: vimInputMethodService,
+          executeCommand: (id: string, args?: unknown) => commandService.executeCommand(id, args),
+        }
+      : undefined
   const workspaceRoot = workspace.current?.folder
   // A session rooted at a subdirectory suggests only that directory's files and
   // context entries, starts the `@@`/`@#` pickers there, and labels every
@@ -2045,6 +2061,7 @@ export function PromptInput({
             }}
             onCompositionChange={onCompositionChange}
             onEditorReady={onEditorReady}
+            vim={promptVim}
           />
         </div>
       </div>

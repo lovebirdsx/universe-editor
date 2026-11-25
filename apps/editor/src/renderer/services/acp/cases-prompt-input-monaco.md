@@ -43,6 +43,16 @@
 - 守护 e2e `apps/editor/e2e/specs/smoke.agentsPromptEnterLeak.spec.ts`（@p1/@regression）：开 .ts 按 Enter → 开 session editor → 切回 .ts 断言 Enter 仍插换行；已验证旧代码下该 spec 正确失败。
 - 与全局分发器的配合：本输入框的「可编辑目标保留」（裸字符 / Delete / Backspace）靠专用 key `acpPromptInputFocused`（**不是** `editorTextFocus`），seed 与焦点桥接见 [docs/development/monaco-embedding.md](../../../../../../docs/development/monaco-embedding.md)「嵌入实例的焦点桥接」。
 
+## Vim 模式
+
+- 输入框是内嵌 Monaco，直接复用编辑器 Vim 内核：`PromptMonacoEditor` 在编辑器创建后、autoFocus 前调 `attachVim`（surfaceKey `prompt:<sessionId>`、`defaultMode: 'insert'`、`idleEscapeCommand: 'workbench.action.agent.focusTimeline'`）。服务经 `PromptInput` 的 `useOptionalService` 以可选 prop 传入；服务缺失（单测 stub / 非 workbench 场景）时完全不 attach，输入框退化为普通 Monaco。
+- 默认 Insert：聚焦即可打字。Esc 进 Normal；Normal 的 Enter 是 Vim motion，**不发送消息**（发送只在 Insert 的 Enter，见上文 `addCommand` 红线）。空闲 Normal Esc 回时间线，时间线 surface 已有 `i` 回输入框的键位。
+- **浮层优先级**：`acpPromptPopupVisible` 为真时 `VimDispatcher` 对 editor kind 整体放行，`Up` / `Down` / `Tab` / `Enter` / `Esc` 归全局 suggestion 命令——Esc 先关 popover、模式保持 Insert，再按一次才退出 Insert。限定 editor kind，避免误放行菜单 / 设置对话框。
+- **User 键位**：`useGlobalKeybindingHandler` 的 `inVimNormalSurface` 把 `acpPromptInputFocused` 纳入（与 `editorTextFocus` 并列）。否则 Normal 下 User 绑定让行后会被文本输入守卫吞掉；`vimNormalMode` 为假时行为不变。
+- 焦点键仍是 `acpPromptInputFocused`，**不桥接** `editorTextFocus`（原因见 monaco-embedding.md 的焦点桥接）。dispatcher 的 editable guard 只拒绝非 editor / terminal surface，prompt 以 editor kind 正常进入内核。
+- 卸载顺序：`vimAttachment.dispose()` → `vimModeService.forgetSurface(surfaceKey)` → 既有 disposables / tracker / editor / model。forget 意味着会话切走再回来从 Insert 开始；同一 session 的分屏共享模式记忆。
+- 开关复用 `vim.surfaces.editor`（不新增配置键）；`vim.enabled` 关闭时 controller 不活跃，输入框行为与加入 Vim 前一致。
+
 ## e2e 探针
 
 - Monaco 没有 `<input>`：`locator.inputValue()` 失效。读文本改用 `window.__E2E__.getAcpPromptText()`（读 `AcpPromptDraftCache`）。

@@ -313,6 +313,19 @@ export class VimDispatcher {
     const kind = surface.kind
     if (!vim.isSurfaceEnabled(kind)) return false
 
+    // An open prompt popover (slash / mention / context / history) owns
+    // Up/Down/Tab/Enter/Escape through the globally registered suggestion
+    // commands. Yielding here — before Insert and before the editor core —
+    // keeps those commands reachable while the prompt input is a Vim surface;
+    // otherwise Normal mode would swallow them. Scoped to editors because the
+    // popover only ever belongs to the prompt input.
+    if (
+      kind === 'editor' &&
+      this._options.contextKeyService.get('acpPromptPopupVisible') === true
+    ) {
+      return false
+    }
+
     const mode = vim.getMode(surfaceKey, surface.defaultMode)
     this.reportActiveSurface(active, kind, surfaceKey)
     const trace = { surface: kind, surfaceId: surface.id, mode }

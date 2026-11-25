@@ -73,7 +73,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | `vimKeyHelp.ts` | 速查表里的编辑器键位说明——**从上面的注册表派生**（motion / operator / 文本对象 / 前缀表 / 简单命令 / Visual 键），加键位自动出现在速查表；`EXTRA_ROWS` 只放 reducer 内联处理的键（`.` `v` `"x` `r`…）。描述用英文，`vim.keyHelp.<slug>` 本地化；`describeVimKeyHelp()` 同时供 which-key 使用 |
 | `vimPendingHints.ts` | 纯函数 `computeVimPendingHint(state)`：从同一批注册表派生编辑器内核前缀的 which-key 候选（`g` / `z` / `[` / `]`、操作符等待、`i`/`a` 文本对象、Visual `g`），静态表按类别 memo；等待字符参数（`f` / `r` / `"`）与纯计数返回 undefined |
 | `vimEditorController.ts` | 把 reducer 的输出绑到 Monaco：`COMMAND_HANDLERS`（`Record` 覆盖每个 `VimCommand['type']`，缺一个编译器就报）、Visual 状态（anchor + cursor）、`.` 重放、Insert 会话记录（`3ifoo<Esc>`）、块状光标、`"+`/`"*`/`vim.useSystemClipboard` |
-| `attachVim.ts` | 一次调用接好 controller + surface 注册；`FileEditor` / `DiffEditor` 共用，两处不再各写一遍 |
+| `attachVim.ts` | 一次调用接好 controller + surface 注册；`FileEditor` / `DiffEditor` / session 输入框共用。可选 `defaultMode`（默认 `normal`）与 `idleEscapeCommand`（默认聚焦编辑器标签栏）：session 输入框传 `insert` 与 `workbench.action.agent.focusTimeline` |
 | `vimSurfaceKeys.ts` | `editorVimSurfaceKey(groupId, inputId)` |
 | `workbench/panel/output/outputVimKeymap.ts` | Output 只读编辑器：**复用 `reduceVimKey`** 再 `project()` 成可执行子集（`j/k`、`gj/gk`、`Ctrl+E/Y/D/U/F/B`、`gg/G`），其余吞掉；要多支持一个 motion 就在 `project` 加 `case`，不要另写键表 |
 | `workbench/panel/output/outputVimController.ts` | 把投影后的命令绑到 Output 的 Monaco 实例；只跟踪 text focus 与 blur 重置 |
@@ -94,16 +94,17 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 4. `quickInputVisible` 为真 → 放行。
 5. 单独的修饰键（`Shift/Control/Alt/Meta`）→ 放行，且**不打断**待定序列。
 6. `getActiveVimSurface(doc)` 解析当前 surface；无 surface 或 `isSurfaceEnabled(kind)` 为假 → 放行。
-7. 读取该 surface 的模式并上报 `IVimModeService.activateSurface`（写 context key、状态栏）。
-8. 终端且模式不是 `terminal-normal` → 放行（终端默认 Insert，按键属于 shell；**必须在 editable guard 之前**，xterm 的 textarea 是 editable）。
-9. Insert：只认 `Esc` 与 `Ctrl+[`（编辑器上也一样，内核离开 Insert，不会落到 Monaco 的「减少缩进」）。`[data-renderer-dialog]` 存在时放行（设置对话框的 `Esc` 归对话框）；编辑器交给内核 `handleStroke`，其它 surface 写回 `normal` 并消费。其余键放行。
-10. 非 editor / terminal 的 surface：焦点在可编辑元素上 → 放行（搜索框、行内输入框保留按键）。
-11. `[data-renderer-dialog]` 存在 → 放行（这个查询每个 Normal 击键都跑，所以放在已确认要出手之后）。
-12. **User 让行**：非保留键、且**没有待定序列**时，`KeybindingsRegistry.hasBindingAtOrAbove(key, KeybindingWeight.User, ctx)` 为真 → 放行，并写 trace。待定序列中的第二击不让行，否则引擎会一直 pending。
-13. 编辑器：`token === leader`、该 surface 已有待定序列、或 token 是编辑器可见的**修饰键条目**首键（`Ctrl+O`）→ 共享序列引擎（`dispatchEditorSequence`，引擎对未匹配的 token 返回 false 交回内核）；其余 Normal 键交给 `handleStroke`。修饰键条目先经 `actions.takeCount()` 取走内核已敲的计数（`3<C-o>`，喂成引擎计数）；返回 undefined（Visual / Insert / 无文本焦点）则仍交内核。`isAwaitingCharArg` 为真时三者都不截。
-14. 其它 surface：`setEntries(getEffectiveKeymap(kind, active.keymap))` 后喂 token → `cancel` / `pending` / `execute` / `none`。`pending` 时更新状态栏 pending 文字、安排 which-key；`execute` 时 `runMatches`，若 `replay` 则同一 token 再喂一次；`none` 时按 `vim.passThroughUnmappedKeys` 与 surface kind 决定吞键（并 `reportUnsupportedKey`）或放行。
+7. 编辑器 surface 且 `acpPromptPopupVisible` 为真 → 放行（session 输入框的 slash / mention / context / history 浮层由全局 suggestion 命令接管 `Up` / `Down` / `Tab` / `Enter` / `Esc`；放在 Insert 与内核之前，Normal 也不会吞掉这些键）。限定 editor kind——浮层只属于 prompt 输入框。
+8. 读取该 surface 的模式并上报 `IVimModeService.activateSurface`（写 context key、状态栏）。
+9. 终端且模式不是 `terminal-normal` → 放行（终端默认 Insert，按键属于 shell；**必须在 editable guard 之前**，xterm 的 textarea 是 editable）。
+10. Insert：只认 `Esc` 与 `Ctrl+[`（编辑器上也一样，内核离开 Insert，不会落到 Monaco 的「减少缩进」）。`[data-renderer-dialog]` 存在时放行（设置对话框的 `Esc` 归对话框）；编辑器交给内核 `handleStroke`，其它 surface 写回 `normal` 并消费。其余键放行。
+11. 非 editor / terminal 的 surface：焦点在可编辑元素上 → 放行（搜索框、行内输入框保留按键）。
+12. `[data-renderer-dialog]` 存在 → 放行（这个查询每个 Normal 击键都跑，所以放在已确认要出手之后）。
+13. **User 让行**：非保留键、且**没有待定序列**时，`KeybindingsRegistry.hasBindingAtOrAbove(key, KeybindingWeight.User, ctx)` 为真 → 放行，并写 trace。待定序列中的第二击不让行，否则引擎会一直 pending。
+14. 编辑器：`token === leader`、该 surface 已有待定序列、或 token 是编辑器可见的**修饰键条目**首键（`Ctrl+O`）→ 共享序列引擎（`dispatchEditorSequence`，引擎对未匹配的 token 返回 false 交回内核）；其余 Normal 键交给 `handleStroke`。修饰键条目先经 `actions.takeCount()` 取走内核已敲的计数（`3<C-o>`，喂成引擎计数）；返回 undefined（Visual / Insert / 无文本焦点）则仍交内核。`isAwaitingCharArg` 为真时三者都不截。
+15. 其它 surface：`setEntries(getEffectiveKeymap(kind, active.keymap))` 后喂 token → `cancel` / `pending` / `execute` / `none`。`pending` 时更新状态栏 pending 文字、安排 which-key；`execute` 时 `runMatches`，若 `replay` 则同一 token 再喂一次；`none` 时按 `vim.passThroughUnmappedKeys` 与 surface kind 决定吞键（并 `reportUnsupportedKey`）或放行。
 
-步骤 13 / 14 喂给序列引擎的条目先经 `entriesWithActiveWhen` 过滤掉 `when` 不成立的：它们既不会执行，也不会成为 pending 前缀（例如非对比编辑器里的 `]c` 不会让 `]` 进入 pending，`]` 直接交回编辑器内核）。
+步骤 14 / 15 喂给序列引擎的条目先经 `entriesWithActiveWhen` 过滤掉 `when` 不成立的：它们既不会执行，也不会成为 pending 前缀（例如非对比编辑器里的 `]c` 不会让 `]` 进入 pending，`]` 直接交回编辑器内核）。
 
 `runMatches` 的候选排序：surface 自己声明的（`scope: 'surface'`）> 带 `when` > 通用默认；取第一条 `when` 成立的。全部不成立时消费并提示 `Unsupported`，不执行。
 
@@ -185,7 +186,7 @@ useVimSurface({
 - 序列引擎接受 `1`–`9` 起头的计数、`0` 续接计数；`Esc` 取消待定状态。`z` 等「既完整又是更长前缀」的键延迟到下一击或 `vim.sequenceTimeoutMs` 超时再执行。
 - **三段及以上的歧义序列**：`a` / `ab` / `abc` 同时存在时，引擎只保留**最近一层**的完整匹配作为超时回退。依次按 `a`、`b` 后停在 `ab`：此时超时（或下一个不延续前缀的键）执行 **`ab` 的命令**；若继续按 `c` 则执行 `abc`。更早的 `a` 不会在超时后补发——待定分支始终是当前最长前缀，回退目标是这条分支上最后一个既完整又是前缀的条目。
 - `runMatches` 先试 surface 自带条目，再试带 `when` 的，最后默认条目，取第一条 `when` 成立的；因此同一键的「视图专用含义」不会被注册顺序遮蔽。所有候选都不匹配时**消费但不执行**，并提示 `Unsupported`。
-- 编辑器内核的裸键（`g` / `[` / `]` / `z` 前缀、`d y c > <` 与 `g~ gu gU` operator、文本对象、`f/t/r/"`、`.`、`v V Ctrl+V`、`K` `%` `*` `#` `H/M/L` 等）由 `vimKeymap.ts` 的 reducer 直接产出，不进 keymap 表；因此 `vim.keymap` 对编辑器只能覆盖 / 追加 leader 序列。Monaco 动作走 `editor.trigger`，workbench 命令（`]c` / `[c` / 空闲 `Esc`）走 `createVimEditorController` 的 `executeCommand` 回调（`FileEditor` / `DiffEditor` 注入 `ICommandService`）。
+- 编辑器内核的裸键（`g` / `[` / `]` / `z` 前缀、`d y c > <` 与 `g~ gu gU` operator、文本对象、`f/t/r/"`、`.`、`v V Ctrl+V`、`K` `%` `*` `#` `H/M/L` 等）由 `vimKeymap.ts` 的 reducer 直接产出，不进 keymap 表；因此 `vim.keymap` 对编辑器只能覆盖 / 追加 leader 序列。Monaco 动作走 `editor.trigger`，workbench 命令（`]c` / `[c` / 空闲 `Esc`）走 `createVimEditorController` 的 `executeCommand` 回调（`FileEditor` / `DiffEditor` / session 输入框注入 `ICommandService`）。
 - **`]c` / `[c` 在列表 surface 上也生效**：焦点在 Explorer / Commit Changes 等列表中、且活动编辑器是对比编辑器时，`vimAppKeymap.ts` 的 `list.nextChange` / `list.previousChange` 把序列路由到 `workbench.action.compareEditor.*Change`（`when: textCompareEditorVisible`）。命令只移动 diff 光标与视口、不抢焦点，所以可以从列表里连续预览上下一个改动。
 
 ## 编辑器 Vim 内核
@@ -274,6 +275,15 @@ reducer 是纯函数：`VimState = { mode, count, operatorCount, pendingOperator
 - 控制器只跟踪 `onDidFocusEditorText/onDidBlurEditorText` 与 IME 守卫，blur 时重置计数；不写 `editorTextFocus`，避免 dirty-diff / inline completion 等命令误判。
 - `Ctrl+E/Y` 与文件编辑器一样通过 window capture 的 Vim 分发消费，早于 `useGlobalKeybindingHandler` 的 document capture 安全网；后者只在 `vimNormalMode && editorTextFocus` 时兜底，Output 不满足该条件也无需满足。
 
+### Session 输入框（prompt）
+
+AI session 的输入框（`PromptMonacoEditor`）是内嵌 Monaco，直接接入编辑器内核：`attachVim` 传 `defaultMode: 'insert'`、`idleEscapeCommand: 'workbench.action.agent.focusTimeline'`，surfaceKey 为 `prompt:<sessionId>`。普通输入框仍走 dispatcher 的 editable guard 透传，prompt 是唯一例外（`vim.surfaces.editor` 同时控制两者）。
+
+- 默认 Insert：聚焦即可打字；Insert 下 `Enter` 提交、`Tab` / `ArrowUp` 开候选或历史，都是输入框已有的本地行为，Vim 不截。Normal 的 `Enter` 是 Vim 的 `enter` motion，不发送消息。
+- 浮层打开期间 dispatcher 对 editor kind 放行（分发顺序第 7 步）：方向键 / `Tab` / `Enter` 归 suggestion 命令，`Esc` 先关浮层且模式保持 Insert，再按一次才退出 Insert。
+- 空闲 Normal `Esc` 执行 `workbench.action.agent.focusTimeline`，从时间线按 `i` 可回到输入框（`vimAppKeymap` 已有）。
+- 焦点键仍是 `acpPromptInputFocused`，不桥接 `editorTextFocus`（见 `docs/development/monaco-embedding.md`）；因此 `useGlobalKeybindingHandler` 的 `inVimNormalSurface` 显式把 prompt 的 Normal 算进去，否则 User 键位让行后会被文本输入守卫吞掉。
+
 ## User 让行与保留集
 
 `VimDispatcher` 用 `buildKeyString(event)` 得到 keybindings.json 形态的键串，然后调用：
@@ -330,6 +340,7 @@ KeybindingsRegistry.hasBindingAtOrAbove(
 | surface | surfaceKey |
 | --- | --- |
 | 编辑器 | `editor:${groupId ?? 0}:${inputId}`（`editorVimSurfaceKey`）；同一文件两个分屏互不影响，关闭输入时 forget |
+| Agent 输入框（prompt） | `prompt:${sessionId}`（`promptVimSurfaceKey`）；`kind: 'editor'`、默认 `insert`，卸载时 forget（重新打开从 Insert 开始）；同 session 的两个分屏共享模式记忆 |
 | 终端 | `terminal:${terminalId}`；默认 `insert`，终端在 panel / editor 间移动不重建键 |
 | 列表 / 树 / 图谱 | `list:${viewId}`；无 id 时 `list:auto:<n>` |
 | Markdown 预览 / 文档中心 | `reader:auto:<n>` |
@@ -391,7 +402,7 @@ releaseInputMethod(owner, service)          // 仅当 owner 正持有英文时�
 | Output | `workbench/panel/output/__tests__/outputVimKeymap.test.ts` / `outputVimController.test.ts` / `LogOutputView.test.tsx` |
 | 视口滚动 | `packages/workbench-ui/src/__tests__/scrollViewport.test.ts`、`vimSurfaceAdapters.test.tsx`（Tree/FlatList/Overlay）、`gitGraph/__tests__/useGraphKeyboardNav.vim.test.tsx`、`agents/__tests__/ChatBody.test.tsx` |
 | DI 脚手架 | `renderer/__tests__/_helpers/vimTestHarness.ts`（真 ContextKeyService + ViewDescriptorService，ActivityBar / 容器标题测试共用；新写 surface 测试先看它） |
-| e2e | `smoke.vimGlobal.spec.ts` / `smoke.vimPriority.spec.ts`（@p0）、`smoke.vimMode` / `smoke.vimKeymapNavigation` / `smoke.vimTabs` / `smoke.vimTerminalNormal` / `smoke.vimSettings` / `smoke.vimWebview` / `smoke.vimChat` / `smoke.vimInteraction`（@p1；状态栏 VISUAL / V-LINE、文本对象与 `.`、leader 与内核前缀的 which-key、补全优先、速查表、空闲 `Esc`、`Unsupported:` 反馈）；公共驱动在 `e2e/pages/vimHelpers.ts`（`setVimEnabled` / `statusIcon` / `statusText` / `feedbackText` / `openTextEditor` / `setText` / `focusExplorerTree` / 光标与文本读取 / `expectStableFor`——断言「一段时间内保持不变」，用于验证按键没有副作用） |
+| e2e | `smoke.vimGlobal.spec.ts` / `smoke.vimPriority.spec.ts`（@p0）、`smoke.vimMode` / `smoke.vimKeymapNavigation` / `smoke.vimTabs` / `smoke.vimTerminalNormal` / `smoke.vimSettings` / `smoke.vimWebview` / `smoke.vimChat` / `smoke.vimPromptInput` / `smoke.vimInteraction`（@p1；状态栏 VISUAL / V-LINE、文本对象与 `.`、leader 与内核前缀的 which-key、补全优先、速查表、空闲 `Esc`、`Unsupported:` 反馈、prompt 输入框的 Insert/Normal 与浮层让行）；公共驱动在 `e2e/pages/vimHelpers.ts`（`setVimEnabled` / `statusIcon` / `statusText` / `feedbackText` / `openTextEditor` / `setText` / `focusExplorerTree` / 光标与文本读取 / `expectStableFor`——断言「一段时间内保持不变」，用于验证按键没有副作用） |
 
 e2e 通过 `window.__E2E__.runCommand('_workbench.updateConfiguration', 'vim.enabled', value)` 开关（先 `whenUserSettingsInitialized`，冷启动早写会丢），并用 `getContextKey` / `getStatusBarEntries` / `getActiveEditorUri` 断言，不戳 Monaco 内部 DOM。
 
