@@ -55,6 +55,17 @@ React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keyb
 - QuickInput 不走注册表：锁定 / readOnly / 松开修饰键即接受的语义只有面板自己知道，J/K 别名（Ctrl/Alt/裸键三种形态）在 `QuickInputPanel` 内处理，`isQuickInputOwnedKey` 负责让 dispatcher 放行。`Ctrl+P/N` 不再放行：dispatcher 的 `quickInputVisible` 分支会解析到全局命令后 `preventDefault + stopPropagation`，但只执行 Escape，因此既不移动面板，也不会打开 Quick Open / New File。
 - **Esc 逃生口**：`FocusActiveEditorGroupAction` 不要加 `hasActiveEditor` precondition。焦点在侧栏 / 面板的列表或树时，用户仍要靠 `Esc` 把焦点移回编辑区；空编辑区且焦点在视图里（`focusedView` 非空）时也必须能匹配（标题栏菜单 / 下拉保留自己的 Esc）。无编辑器时直接聚焦始终渲染的 `editor-group-body`——`editor-area` Part 根没有 tabIndex，`focusPart` / `Part.focus()` 只记账、不搬 DOM 焦点。
 
+## 终端聚焦时 Ctrl+字母归 shell
+
+全局 dispatcher（`useGlobalKeybindingHandler.ts`）在 Quick Input 分支之后、chord pending 分支之前有一层终端旁路：
+
+- 判据：`terminalFocus === true` **且** 事件 target 的祖先链含 `[data-terminal-id]`。第二项防陈旧 context key 吞掉终端外的快捷键（隐藏面板终端已有先例）。
+- 纯 `Ctrl+字母`（无 Shift/Alt/Meta）不解析、不 `preventDefault`，交给 xterm 编码为 C0 控制字符发给 pty：`Ctrl+J` 是 LF、`Ctrl+K` 是 VT、`Ctrl+W` 是 kill-word。
+- 例外是白名单：`workbench/panel/terminal/terminalKeyRouting.ts` 的 `TERMINAL_SKIP_SHELL_COMMANDS`，外加 `workbench.action.terminal.*` 前缀。命中时仍由工作台执行并吞键。新增「终端内必须可用」的命令加到白名单，不要逐条加 `!terminalFocus`。
+- 终端聚焦时 chord 一律不启动（含全部 `Ctrl+K` 系列），终端内 `Ctrl+K Ctrl+S` 等不可用——与 VS Code 集成终端一致。
+
+**不要用逐条 `when: '!terminalFocus'` 修 `ctrl+k ...`**：chord-first 解析与 weight 无关（`keybindingRegistry.ts` 的 `resolveKeystroke`），只要还剩一条 when 成立的 `ctrl+k` 弦，第一击就仍进 pending；漏一条即复发。`togglePanel` 的 `!terminalFocus` 只是纵深防御，真正承载修复的是 dispatcher 旁路。回归：e2e `smoke.terminalShellKeys.spec.ts` + `useGlobalKeybindingHandler.test.tsx` 的 terminal key routing 用例。
+
 ## Vim 模式：Normal 模式的按键归属
 
 `vim.enabled` 打开后，Normal 模式的裸键必须先于全局 dispatcher 被认领，否则 `d` 会触发删除、`p` 会打开 Quick Open 之类。机制、surface API 与排障见 [Vim 模式](vim-mode.md)，这里只列会静默失效的判据：

@@ -153,7 +153,7 @@ export class TogglePanelAction extends Action2 {
       id: TogglePanelAction.ID,
       title: localize2('action.togglePanel.title', 'Toggle Panel'),
       category: localize2('command.category.view', 'View'),
-      keybinding: { primary: 'ctrl+j' },
+      keybinding: { primary: 'ctrl+j', when: '!terminalFocus' },
       menu: [
         { id: MenuId.MenubarViewMenu, group: '2_layout', order: 3 },
         { id: MenuId.LayoutControlMenu, group: '0_visibility', order: 1 },

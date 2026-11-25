@@ -42,6 +42,10 @@ import {
   hasFunctionalModifier,
   isModifierOnly,
 } from './keybindings/keyEventUtils.js'
+import {
+  isShellControlStroke,
+  isTerminalSkipShellCommand,
+} from './panel/terminal/terminalKeyRouting.js'
 
 const CHORD_TIMEOUT_MS = 1500
 
@@ -192,6 +196,15 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
         void commandService.executeCommand(command, ...(args !== undefined ? [args] : []))
       })
 
+    // Resolve the single-stroke binding for a skip-shell exemption. Chord-first
+    // resolution is intentionally bypassed: Ctrl+K must stay a shell key even
+    // though Ctrl+K Ctrl+S is bound.
+    const terminalSkipCommand = (stroke: string): string | undefined => {
+      const command = KeybindingsRegistry.resolveKeybinding(stroke, contextKeyService)
+      if (command === undefined || !isTerminalSkipShellCommand(command)) return undefined
+      return CommandsRegistry.getCommand(command) !== undefined ? command : undefined
+    }
+
     // Single document capture-phase listener. It always runs *before* Monaco's
     // own dispatch, then decides per keystroke who wins — by consulting the one
     // registry (KeybindingsRegistry) for every key, focused editor or not.
@@ -299,6 +312,50 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
           executeWithPhase(result.command, result.args)
         }
         return
+      }
+
+      // The integrated terminal owns Ctrl+<letter> while it has DOM focus: those
+      // are the shell's C0 control keys. Anchor on the host as well, so a stale
+      // terminalFocus cannot swallow workbench shortcuts outside the terminal.
+      const terminalOwnsKeyboard =
+        contextKeyService.get('terminalFocus') === true &&
+        isElementLike(e.target) &&
+        e.target.closest('[data-terminal-id]') != null
+
+      if (terminalOwnsKeyboard) {
+        // A chord started before focus moved into the terminal must not claim
+        // the first shell stroke: the pending branch below is unconditional.
+        if (pendingRef.current !== null) clearChord()
+
+        if (isShellControlStroke(e)) {
+          const stroke = buildKeyString(e)
+          const skipCommand = terminalSkipCommand(stroke)
+          if (skipCommand !== undefined) {
+            if (dbg) {
+              keyboardDebugService.append(
+                formatGuardStop(
+                  toDiagnostics(e, stroke),
+                  `terminalFocus: ${skipCommand} kept (skip-shell list)`,
+                ),
+              )
+            }
+            e.preventDefault()
+            e.stopPropagation()
+            executeWithPhase(skipCommand, undefined)
+            return
+          }
+          if (dbg) {
+            keyboardDebugService.append(
+              formatGuardStop(
+                toDiagnostics(e, stroke),
+                'terminalFocus: Ctrl+<letter> goes to the pty',
+              ),
+            )
+          }
+          // No preventDefault/stopPropagation: xterm's helper textarea emits the
+          // control byte to the pty.
+          return
+        }
       }
 
       const pending = pendingRef.current
@@ -452,6 +509,29 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
         return
       }
 
+      // A chord must never start while the terminal owns the keyboard. Every
+      // shipped chord begins with Ctrl+K (a shell control key); this also covers
+      // a future non-Ctrl prefix. A skip-shell single binding on the same key
+      // still wins (e.g. a user rebind of the command palette).
+      if (result.kind === 'enter-chord' && terminalOwnsKeyboard) {
+        const skipCommand = terminalSkipCommand(key)
+        if (skipCommand !== undefined) {
+          if (dbg && diag) {
+            keyboardDebugService.append(
+              formatGuardStop(diag, `terminalFocus: ${skipCommand} kept (skip-shell list)`),
+            )
+          }
+          e.preventDefault()
+          e.stopPropagation()
+          executeWithPhase(skipCommand, undefined)
+          return
+        }
+        if (dbg && diag) {
+          keyboardDebugService.append(formatGuardStop(diag, 'terminalFocus: chord not started'))
+        }
+        return
+      }
+
       e.preventDefault()
       e.stopPropagation()
       if (result.kind === 'execute') {
@@ -470,11 +550,22 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
 
     const view = targetDocument.defaultView ?? window
     const clearOnBlur = (): void => clearChord()
+    // Focus moving into the terminal must drop a chord pending started elsewhere;
+    // otherwise its timer would claim the first shell stroke.
+    const chordClearOnTerminalFocus = contextKeyService.onDidChangeContext((ev) => {
+      if (
+        ev.affectsContextKey('terminalFocus') &&
+        contextKeyService.get('terminalFocus') === true
+      ) {
+        clearChord()
+      }
+    })
     targetDocument.addEventListener('keydown', captureHandler, true)
     view.addEventListener('blur', clearOnBlur)
     return () => {
       targetDocument.removeEventListener('keydown', captureHandler, true)
       view.removeEventListener('blur', clearOnBlur)
+      chordClearOnTerminalFocus.dispose()
       clearChord()
     }
   }, [

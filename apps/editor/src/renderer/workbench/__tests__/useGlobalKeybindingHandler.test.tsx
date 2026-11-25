@@ -30,9 +30,10 @@ function createHarness() {
   const executeCommand = vi.fn().mockResolvedValue(undefined)
   const commandService = { _serviceBrand: undefined, executeCommand }
   const statusBar = new StatusBarService()
+  const contextKeyService = new ContextKeyService()
   const services = new ServiceCollection()
   services.set(ICommandService, commandService as never)
-  services.set(IContextKeyService, new ContextKeyService())
+  services.set(IContextKeyService, contextKeyService)
   services.set(IStatusBarService, statusBar)
   services.set(IKeyboardDebugService, {
     _serviceBrand: undefined,
@@ -42,7 +43,7 @@ function createHarness() {
     append: () => {},
   } as never)
   const instantiation = new InstantiationService(services)
-  return { executeCommand, instantiation, statusBar }
+  return { executeCommand, instantiation, statusBar, contextKeyService }
 }
 
 interface DispatchOpts extends KeyboardEventInit {
@@ -1271,5 +1272,169 @@ describe('useGlobalKeybindingHandler — Monaco interop (capture phase)', () => 
     const { preventDefault } = dispatch({ key: 'F3' })
     expect(executeCommand).toHaveBeenCalledWith('workbench.action.editor.findNext')
     expect(preventDefault).toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+describe('useGlobalKeybindingHandler — terminal key routing', () => {
+  let disposables: IDisposable[] = []
+
+  afterEach(() => {
+    disposables.forEach((d) => d.dispose())
+    disposables = []
+    document.body.innerHTML = ''
+  })
+
+  function bind(key: string, command: string) {
+    disposables.push(KeybindingsRegistry.registerKeybinding({ key, command }))
+    disposables.push(CommandsRegistry.registerCommand(command, () => {}))
+  }
+
+  function bindChord(chords: readonly [string, string], command: string) {
+    disposables.push(KeybindingsRegistry.registerKeybinding({ chords, command }))
+    disposables.push(CommandsRegistry.registerCommand(command, () => {}))
+  }
+
+  function mountHost(instantiation: InstantiationService) {
+    return render(
+      <ServicesContext.Provider value={instantiation}>
+        <TestHost />
+      </ServicesContext.Provider>,
+    )
+  }
+
+  function mountTerminalTarget(): HTMLTextAreaElement {
+    const host = document.createElement('div')
+    host.setAttribute('data-terminal-id', 'terminal-1')
+    const textarea = document.createElement('textarea')
+    host.appendChild(textarea)
+    document.body.appendChild(host)
+    return textarea
+  }
+
+  it('sends Ctrl+<letter> to the terminal instead of executing a workbench binding', () => {
+    const { executeCommand, instantiation, contextKeyService } = createHarness()
+    bind('ctrl+j', 'test.togglePanel')
+    mountHost(instantiation)
+    contextKeyService.set('terminalFocus', true)
+    const textarea = mountTerminalTarget()
+
+    const { preventDefault, stopPropagation } = dispatch({
+      from: textarea,
+      ctrlKey: true,
+      key: 'j',
+    })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopPropagation).not.toHaveBeenCalled()
+  })
+
+  it('does not start a Ctrl+K chord and lets the second stroke reach the terminal', () => {
+    const { executeCommand, instantiation, statusBar, contextKeyService } = createHarness()
+    bindChord(['ctrl+k', 'ctrl+s'], 'test.chord')
+    mountHost(instantiation)
+    contextKeyService.set('terminalFocus', true)
+    const textarea = mountTerminalTarget()
+
+    const first = dispatch({ from: textarea, ctrlKey: true, key: 'k' })
+    expect(statusBar.entries.get()).toHaveLength(0)
+    expect(first.preventDefault).not.toHaveBeenCalled()
+    expect(first.stopPropagation).not.toHaveBeenCalled()
+
+    const second = dispatch({ from: textarea, ctrlKey: true, key: 's' })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(second.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('keeps a skip-shell command in the workbench', () => {
+    const { executeCommand, instantiation, contextKeyService } = createHarness()
+    bind('ctrl+s', 'workbench.action.openSettings')
+    mountHost(instantiation)
+    contextKeyService.set('terminalFocus', true)
+    const textarea = mountTerminalTarget()
+
+    const { preventDefault, stopPropagation } = dispatch({
+      from: textarea,
+      ctrlKey: true,
+      key: 's',
+    })
+
+    expect(executeCommand).toHaveBeenCalledWith('workbench.action.openSettings')
+    expect(preventDefault).toHaveBeenCalled()
+    expect(stopPropagation).toHaveBeenCalled()
+  })
+
+  it('leaves non-letter shortcuts on the normal dispatch path', () => {
+    const { executeCommand, instantiation, contextKeyService } = createHarness()
+    bind('ctrl+shift+p', 'test.commandPalette')
+    mountHost(instantiation)
+    contextKeyService.set('terminalFocus', true)
+    const textarea = mountTerminalTarget()
+
+    const { preventDefault } = dispatch({
+      from: textarea,
+      ctrlKey: true,
+      shiftKey: true,
+      key: 'P',
+    })
+
+    expect(executeCommand).toHaveBeenCalledWith('test.commandPalette')
+    expect(preventDefault).toHaveBeenCalled()
+  })
+
+  it('keeps normal dispatch when terminalFocus is false', () => {
+    const { executeCommand, instantiation } = createHarness()
+    bind('ctrl+j', 'test.togglePanel')
+    mountHost(instantiation)
+    const textarea = mountTerminalTarget()
+
+    const { preventDefault } = dispatch({ from: textarea, ctrlKey: true, key: 'j' })
+
+    expect(executeCommand).toHaveBeenCalledWith('test.togglePanel')
+    expect(preventDefault).toHaveBeenCalled()
+  })
+
+  it('keeps normal dispatch when the target is outside any terminal host', () => {
+    const { executeCommand, instantiation, contextKeyService } = createHarness()
+    bind('ctrl+j', 'test.togglePanel')
+    mountHost(instantiation)
+    contextKeyService.set('terminalFocus', true)
+
+    const { preventDefault } = dispatch({ ctrlKey: true, key: 'j' })
+
+    expect(executeCommand).toHaveBeenCalledWith('test.togglePanel')
+    expect(preventDefault).toHaveBeenCalled()
+  })
+
+  it('drops a pending chord when terminalFocus turns on', () => {
+    const { executeCommand, instantiation, statusBar, contextKeyService } = createHarness()
+    bindChord(['ctrl+k', 'ctrl+s'], 'test.chord')
+    mountHost(instantiation)
+
+    dispatch({ ctrlKey: true, key: 'k' })
+    expect(statusBar.entries.get()).toHaveLength(1)
+
+    contextKeyService.set('terminalFocus', true)
+    expect(statusBar.entries.get()).toHaveLength(0)
+
+    const textarea = mountTerminalTarget()
+    dispatch({ from: textarea, ctrlKey: true, key: 's' })
+    expect(executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('does not start a non-Ctrl chord while the terminal owns the keyboard', () => {
+    const { executeCommand, instantiation, statusBar, contextKeyService } = createHarness()
+    bindChord(['ctrl+shift+x', 'ctrl+s'], 'test.chord')
+    mountHost(instantiation)
+    contextKeyService.set('terminalFocus', true)
+    const textarea = mountTerminalTarget()
+
+    const first = dispatch({ from: textarea, ctrlKey: true, shiftKey: true, key: 'X' })
+    expect(statusBar.entries.get()).toHaveLength(0)
+    expect(first.preventDefault).not.toHaveBeenCalled()
+
+    dispatch({ from: textarea, ctrlKey: true, key: 's' })
+    expect(executeCommand).not.toHaveBeenCalled()
   })
 })
