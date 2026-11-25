@@ -13,10 +13,12 @@ import {
   IInstantiationService,
   IStatusBarService,
   ITextSearchService,
+  IUriIdentityService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   observableValue,
   type IEditorInput,
   type IFileChangeEvent,
@@ -153,6 +155,7 @@ function renderWithServices(search: FakeTextSearch) {
   services.set(IFileWatcherService, watcher as never)
   services.set(IWorkspaceService, workspace as never)
   services.set(IConfigurationService, stubConfigurationService())
+  services.set(IUriIdentityService, new UriIdentityService('linux'))
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
   return {
@@ -224,6 +227,72 @@ describe('SearchView watcher + workspace', () => {
       ctx.watcherEmitter.fire([{ type: 'modified', resource: URI.file('/ws/other.ts') }])
     })
     expect(screen.queryByTestId('search-stale')).toBeNull()
+  })
+
+  it('drops results when a result file is deleted on disk', async () => {
+    const search = new FakeTextSearch()
+    search.results = [makeFileMatch('/ws/a.ts'), makeFileMatch('/ws/b.ts')]
+    const ctx = renderWithServices(search)
+    await runQuery(search)
+    expect(screen.getByTestId('search-summary').textContent).toContain('2 matches in 2 files')
+    act(() => {
+      ctx.watcherEmitter.fire([{ type: 'deleted', resource: URI.file('/ws/a.ts') }])
+    })
+    // The deleted file's matches are gone immediately — no re-run needed…
+    expect(screen.getByTestId('search-summary').textContent).toContain('1 matches in 1 files')
+    // …and nothing is left to be "outdated".
+    expect(screen.queryByTestId('search-stale')).toBeNull()
+  })
+
+  it('drops results nested under a deleted directory', async () => {
+    const search = new FakeTextSearch()
+    search.results = [makeFileMatch('/ws/dir/a.ts'), makeFileMatch('/ws/other.ts')]
+    const ctx = renderWithServices(search)
+    await runQuery(search)
+    expect(screen.getByTestId('search-summary').textContent).toContain('2 matches in 2 files')
+    act(() => {
+      ctx.watcherEmitter.fire([{ type: 'deleted', resource: URI.file('/ws/dir') }])
+    })
+    expect(screen.getByTestId('search-summary').textContent).toContain('1 matches in 1 files')
+    expect(screen.queryByTestId('search-stale')).toBeNull()
+  })
+
+  it('ignores deletions outside the current results', async () => {
+    const search = new FakeTextSearch()
+    search.results = [makeFileMatch('/ws/a.ts')]
+    const ctx = renderWithServices(search)
+    await runQuery(search)
+    act(() => {
+      ctx.watcherEmitter.fire([{ type: 'deleted', resource: URI.file('/ws/other.ts') }])
+    })
+    expect(screen.getByTestId('search-summary').textContent).toContain('1 matches in 1 files')
+    expect(screen.queryByTestId('search-stale')).toBeNull()
+  })
+
+  it('filters a deleted file out of a search that is still running', async () => {
+    const search = new FakeTextSearch()
+    const a = makeFileMatch('/ws/a.ts')
+    const b = makeFileMatch('/ws/b.ts')
+    search.batches = [[a]]
+    search.batchDelayMs = 200
+    // The final result list still names the file ripgrep scanned before the delete.
+    search.results = [a, b]
+    const ctx = renderWithServices(search)
+    const input = screen.getByLabelText('Search') as HTMLInputElement
+    act(() => {
+      fireEvent.change(input, { target: { value: 'foo' } })
+    })
+    // Enter the streamed-batch wait window (debounce elapsed, first batch emitted).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350)
+    })
+    act(() => {
+      ctx.watcherEmitter.fire([{ type: 'deleted', resource: URI.file('/ws/a.ts') }])
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(screen.getByTestId('search-summary').textContent).toContain('1 matches in 1 files')
   })
 
   it('clears results then re-runs the search when the workspace changes', async () => {

@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  useSearchEngine — owns the search lifecycle: query → debounced execute → abort,
- *  the file-watcher "stale" marker, the workspace-switch reset, and the status
+ *  the file-watcher follow-up (deletions drop their matches outright, other
+ *  changes raise the "stale" marker), the workspace-switch reset, and the status
  *  bar entry that follows isSearching + progress.
  *
  *  Returned `setResults` lets callers optimistically drop entries after a replace
@@ -14,6 +15,7 @@ import {
   IFileWatcherService,
   IStatusBarService,
   ITextSearchService,
+  IUriIdentityService,
   IWorkspaceService,
   localize,
   StatusBarAlignment,
@@ -21,11 +23,13 @@ import {
   type IFileMatch,
   type IStatusBarEntryAccessor,
   type ITextSearchProgress,
+  type URI,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { recordPerfPhase } from '../../services/performance/perfPhases.js'
 import { searchSession } from './searchSession.js'
 import { searchDebounceDelay } from './searchDebounce.js'
+import { deletedResources, isDeletedResource, removeDeletedMatches } from './searchResultFilter.js'
 
 // Base keystroke debounce, matching VSCode's search.searchOnTypeDebouncePeriod.
 // Loose regexes stretch it further — see searchDebounce.ts.
@@ -66,6 +70,7 @@ export function useSearchEngine(
   const fileWatcherService = useService(IFileWatcherService)
   const workspaceService = useService(IWorkspaceService)
   const configurationService = useService(IConfigurationService)
+  const uriIdentity = useService(IUriIdentityService)
 
   const [results, setResults] = useState<readonly IFileMatch[]>(initialResults)
   const [progress, setProgress] = useState<ITextSearchProgress | null>(null)
@@ -84,6 +89,10 @@ export function useSearchEngine(
   // (append-only, stable order) instead of appearing all at once at the end.
   const accumRef = useRef<Map<string, IFileMatch>>(new Map())
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Resources deleted since the current search started. ripgrep may have
+  // scanned them before the deletion landed, so the final result list is
+  // filtered against this set as well as the streamed batches.
+  const deletedRef = useRef<URI[]>([])
   // Resources currently in the results, read by the file watcher without making
   // it re-subscribe on every streamed batch.
   const knownRef = useRef<Set<string>>(new Set(initialResults.map((fm) => fm.resource.toString())))
@@ -109,6 +118,7 @@ export function useSearchEngine(
       }
       accumRef.current = new Map()
       knownRef.current = new Set()
+      deletedRef.current = []
       if (q.length === 0) {
         setResults([])
         setProgress(null)
@@ -165,8 +175,9 @@ export function useSearchEngine(
             flushTimerRef.current = null
           }
           // The promise result is authoritative — replace any accumulated batches.
-          accumRef.current = new Map(res.map((fm) => [fm.resource.toString(), fm]))
-          setResults(res)
+          const current = removeDeletedMatches(res, deletedRef.current, uriIdentity)
+          accumRef.current = new Map(current.map((fm) => [fm.resource.toString(), fm]))
+          setResults(current)
           setIsSearching(false)
         })
         .catch(() => {
@@ -175,7 +186,16 @@ export function useSearchEngine(
           setIsSearching(false)
         })
     },
-    [searchService, isRegex, matchCase, matchWholeWord, includes, excludes, useExcludeSettings],
+    [
+      searchService,
+      isRegex,
+      matchCase,
+      matchWholeWord,
+      includes,
+      excludes,
+      useExcludeSettings,
+      uriIdentity,
+    ],
   )
 
   useEffect(() => {
@@ -225,8 +245,20 @@ export function useSearchEngine(
   useEffect(() => {
     const disposable = markAsSingleton(
       fileWatcherService.onDidChangeFiles((events) => {
+        // A deleted file can no longer match: drop its results (and pending
+        // streamed batches) right away. Deletion is checked even when
+        // `knownRef` is empty, because a search may be mid-flight.
+        const deleted = deletedResources(events)
+        if (deleted.length > 0) {
+          deletedRef.current.push(...deleted)
+          for (const [key, fm] of accumRef.current) {
+            if (isDeletedResource(fm.resource, deleted, uriIdentity)) accumRef.current.delete(key)
+          }
+          setResults((prev) => removeDeletedMatches(prev, deleted, uriIdentity))
+        }
         if (knownRef.current.size === 0) return
         for (const ev of events) {
+          if (ev.type === 'deleted') continue
           if (knownRef.current.has(ev.resource.toString())) {
             setIsStale(true)
             return
@@ -235,7 +267,7 @@ export function useSearchEngine(
       }),
     )
     return () => disposable.dispose()
-  }, [fileWatcherService])
+  }, [fileWatcherService, uriIdentity])
 
   useEffect(() => {
     const disposable = markAsSingleton(

@@ -26,6 +26,7 @@ import { MemoryPressureContribution } from '../MemoryPressureContribution.js'
 import { MemoryReminderContribution } from '../MemoryReminderContribution.js'
 import { DirtyDiffContribution } from '../DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
+import { SearchResultsFileWatchContribution } from '../SearchResultsFileWatchContribution.js'
 import { GlobalDragAndDropContribution } from '../GlobalDragAndDropContribution.js'
 import { WorkspaceRecentMenuContribution } from '../WorkspaceRecentMenuContribution.js'
 import { WorkspaceFocusRestoreContribution } from '../WorkspaceFocusRestoreContribution.js'
@@ -269,6 +270,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.externalChangeWatcher',
   ExternalChangeWatcher,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Keeps the cached Search results honest while the view is unmounted — opening
+// Search after deleting a file must not restore matches for it from the session
+// cache. AfterRestore for the same reason as the external-change watcher.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.searchResultsFileWatch',
+  SearchResultsFileWatchContribution,
   WorkbenchPhase.AfterRestore,
 )
 
