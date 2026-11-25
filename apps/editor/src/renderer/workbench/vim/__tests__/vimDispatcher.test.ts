@@ -15,6 +15,7 @@ import {
   __resetVimSurfacesForTests,
   registerVimSurface,
   type IVimKeymapEntry,
+  type IVimPendingHint,
   type IVimSurfaceRegistration,
   type VimSurfaceKind,
   type VimSurfaceMode,
@@ -983,6 +984,104 @@ describe('VimDispatcher editor strokes', () => {
       expect(dispatcher.handleKeyDown(doc, stroke())).toBe(false)
       expect(handleStroke).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('VimDispatcher editor which-key', () => {
+  function editorWithHint(hint: () => IVimPendingHint | undefined) {
+    const handleStroke = vi.fn(() => true)
+    editorSurface({ handleStroke, getPendingHint: hint })
+    return handleStroke
+  }
+
+  it('opens the core hint after the delay and follows the prefix immediately', () => {
+    vi.useFakeTimers()
+    let hint: IVimPendingHint | undefined = {
+      prefix: 'g',
+      items: [{ key: 'g', title: 'First line', isGroup: false }],
+    }
+    editorWithHint(() => hint)
+    const vim = createVim({ whichKeyEnabled: true })
+    const { dispatcher } = createDispatcher({ vim })
+
+    expect(dispatcher.handleKeyDown(doc, press('g'))).toBe(true)
+    expect(vim.whichKey).toBeUndefined()
+    vi.advanceTimersByTime(300)
+    expect(vim.whichKey?.prefix).toBe('g')
+
+    hint = { prefix: 'gg', items: [{ key: 'g', title: 'First line', isGroup: false }] }
+    dispatcher.handleKeyDown(doc, press('g'))
+    // Already open: refreshed without waiting another 300ms.
+    expect(vim.whichKey?.prefix).toBe('gg')
+
+    hint = undefined
+    dispatcher.handleKeyDown(doc, press('j'))
+    expect(vim.whichKey).toBeUndefined()
+  })
+
+  it('does not open over a visible suggest widget on an editor, but lists still do', () => {
+    vi.useFakeTimers()
+    const context = createContext()
+    context.createKey<boolean>('suggestWidgetVisible', true).set(true)
+    const hint: IVimPendingHint = {
+      prefix: 'g',
+      items: [{ key: 'g', title: 'First line', isGroup: false }],
+    }
+    editorWithHint(() => hint)
+    const vim = createVim({ whichKeyEnabled: true })
+    const { dispatcher } = createDispatcher({ vim, context })
+    dispatcher.handleKeyDown(doc, press('g'))
+    vi.advanceTimersByTime(400)
+    expect(vim.whichKey).toBeUndefined()
+
+    __resetVimSurfacesForTests()
+    doc.body.innerHTML = ''
+    mountList(doc, 'list:1')
+    const listVim = createVim({
+      whichKeyEnabled: true,
+      getSequenceTimeoutMs: () => 800,
+      getEffectiveKeymap: () => [{ id: 'a', keys: ['space', 'e'], command: 'x' }],
+    })
+    const list = createDispatcher({ vim: listVim, context })
+    list.dispatcher.handleKeyDown(doc, press(' '))
+    vi.advanceTimersByTime(300)
+    expect(listVim.whichKey?.prefix).toBe('<Space>')
+  })
+
+  it('closes on resetAll and stays closed while vim.whichKey is off', () => {
+    vi.useFakeTimers()
+    let hint: IVimPendingHint | undefined = {
+      prefix: 'g',
+      items: [{ key: 'g', title: 'First line', isGroup: false }],
+    }
+    editorWithHint(() => hint)
+    const vim = createVim({ whichKeyEnabled: true })
+    const { dispatcher } = createDispatcher({ vim })
+    dispatcher.handleKeyDown(doc, press('g'))
+    vi.advanceTimersByTime(300)
+    expect(vim.whichKey).toBeDefined()
+    dispatcher.resetAll(doc)
+    expect(vim.whichKey).toBeUndefined()
+
+    hint = { prefix: 'g', items: [{ key: 'g', title: 'First line', isGroup: false }] }
+    vim.whichKeyEnabled = false
+    dispatcher.handleKeyDown(doc, press('g'))
+    vi.advanceTimersByTime(400)
+    expect(vim.whichKey).toBeUndefined()
+  })
+
+  it('does not ask the core for a hint when the engine consumes the stroke', () => {
+    vi.useFakeTimers()
+    const getPendingHint = vi.fn(() => undefined)
+    editorSurface({ handleStroke: vi.fn(() => true), getPendingHint })
+    const vim = createVim({
+      whichKeyEnabled: true,
+      getSequenceTimeoutMs: () => 800,
+      getEffectiveKeymap: () => [{ id: 'a', keys: ['space', 'e'], command: 'x' }],
+    })
+    const { dispatcher } = createDispatcher({ vim })
+    expect(dispatcher.handleKeyDown(doc, press(' '))).toBe(true)
+    expect(getPendingHint).not.toHaveBeenCalled()
   })
 })
 

@@ -28,7 +28,8 @@ export function keyHelpSlug(description: string): string {
   return description.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '')
 }
 
-function describe(description: string): string {
+/** Localized help text shared by the cheat sheet and which-key. */
+export function describeVimKeyHelp(description: string): string {
   return localize(`vim.keyHelp.${keyHelpSlug(description)}`, description)
 }
 
@@ -86,7 +87,7 @@ export function collectVimKeyHelpRows(): VimKeyHelpRow[] {
   const group = groups()
   const rows: VimKeyHelpRow[] = []
   const add = (target: string, keys: string, description: string): void => {
-    rows.push({ group: target, keys, description: describe(description) })
+    rows.push({ group: target, keys, description: describeVimKeyHelp(description) })
   }
 
   for (const motion of VIM_MOTIONS) {

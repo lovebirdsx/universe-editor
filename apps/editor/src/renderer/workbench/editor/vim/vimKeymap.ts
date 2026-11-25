@@ -285,7 +285,7 @@ function visualDelete(state: VimState): VimCommand {
 }
 
 /** What a prefix's second key does: resolve as a motion (so operators apply), run a command, or start an operator. */
-type VimPrefixEntry =
+export type VimPrefixEntry =
   | { readonly motion: VimMotion }
   | {
       readonly command: (count: number) => VimCommand

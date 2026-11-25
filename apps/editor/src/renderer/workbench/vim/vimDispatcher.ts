@@ -168,9 +168,14 @@ export class VimDispatcher {
 
   /** The sequence ended (executed, cancelled, broken): drop pending text and which-key. */
   private clearFeedback(): void {
+    this.clearWhichKey()
+    this._options.vimModeService.setSequencePendingKeys('')
+  }
+
+  /** Drop the overlay and its delay timer without touching the engine's pending text. */
+  private clearWhichKey(): void {
     if (this._whichKeyTimer !== undefined) clearTimeout(this._whichKeyTimer)
     this._whichKeyTimer = undefined
-    this._options.vimModeService.setSequencePendingKeys('')
     this.closeWhichKey()
   }
 
@@ -195,23 +200,22 @@ export class VimDispatcher {
   /**
    * Which-key opens after a pause on a multi-token prefix, then follows the
    * prefix immediately so walking `<leader> w` updates the list without a second delay.
+   * The engine and the editor core both resolve their state through `resolve`.
    */
   private scheduleWhichKey(
     doc: Document,
     active: IActiveVimSurface,
-    entries: readonly IVimKeymapEntry[],
     trace: VimTrace,
     debug: IKeyboardDebugService | undefined,
+    resolve: () => IVimWhichKeyState | undefined,
   ): void {
     const vim = this._options.vimModeService
     if (this._whichKeyTimer !== undefined) clearTimeout(this._whichKeyTimer)
     this._whichKeyTimer = undefined
-    const prefix = active.sequence.prefix
-    if (!vim.getWhichKeyEnabled() || prefix.length === 0) {
+    if (!vim.getWhichKeyEnabled()) {
       this.closeWhichKey()
       return
     }
-    const context = this._options.contextKeyService
     const surfaceKey = active.surfaceKey
     const show = (): void => {
       // The setting may have been switched off while the delay was running.
@@ -219,21 +223,24 @@ export class VimDispatcher {
         this.closeWhichKey()
         return
       }
-      const items = computeWhichKeyItems(
-        entries,
-        prefix,
-        (entry) =>
-          entry.when === undefined || context.contextMatchesRules(whenExpression(entry.when)),
-        resolveVimCommandTitle,
-      )
-      if (debug?.enabled) {
-        debug.append(formatVimWhichKey(trace, formatVimKeys(prefix), items.length))
-      }
-      if (items.length === 0) {
+      // Completion has visual priority: the overlay is a workbench popover
+      // (z-index above Monaco's suggest widget), so showing both would cover
+      // the list the user is reading.
+      if (
+        active.surface.kind === 'editor' &&
+        this._options.contextKeyService.get('suggestWidgetVisible') === true
+      ) {
         this.closeWhichKey()
         return
       }
-      const state: IVimWhichKeyState = { prefix: formatVimKeys(prefix), items }
+      const state = resolve()
+      if (debug?.enabled && state !== undefined) {
+        debug.append(formatVimWhichKey(trace, state.prefix, state.items.length))
+      }
+      if (state === undefined || state.items.length === 0) {
+        this.closeWhichKey()
+        return
+      }
       this._whichKeyOwner = { state, doc, surfaceKey }
       vim.setWhichKey(state)
     }
@@ -243,8 +250,27 @@ export class VimDispatcher {
     }
     this._whichKeyTimer = setTimeout(() => {
       this._whichKeyTimer = undefined
-      if (!this._disposed && active.sequence.isPending) show()
+      if (!this._disposed) show()
     }, WHICH_KEY_DELAY_MS)
+  }
+
+  /** Which-key for the editor core's own prefix (`g`, operators, text objects). */
+  private scheduleEditorWhichKey(
+    doc: Document,
+    active: IActiveVimSurface,
+    trace: VimTrace,
+    debug: IKeyboardDebugService | undefined,
+  ): void {
+    if (!this._options.vimModeService.getWhichKeyEnabled()) {
+      this.clearWhichKey()
+      return
+    }
+    const hint = active.surface.actions.getPendingHint?.()
+    if (hint === undefined || hint.items.length === 0) {
+      this.clearWhichKey()
+      return
+    }
+    this.scheduleWhichKey(doc, active, trace, debug, () => hint)
   }
 
   private dispatch(doc: Document, event: KeyboardEvent): boolean {
@@ -292,7 +318,12 @@ export class VimDispatcher {
       // Keep checking the dialog here: opening the settings modal while an
       // editor is in Insert mode must still leave Escape to the dialog.
       if (hasRendererDialog(doc)) return false
-      if (kind === 'editor') return this.editorStroke(active, event)
+      if (kind === 'editor') {
+        const handled = this.editorStroke(active, event)
+        // Only Escape / Ctrl+[ reach the core in Insert; this clears a stale overlay.
+        this.scheduleEditorWhichKey(doc, active, trace, debug)
+        return handled
+      }
       vim.setMode(surfaceKey, 'normal')
       return true
     }
@@ -340,7 +371,10 @@ export class VimDispatcher {
       // The leader and an in-flight sequence belong to the shared engine even
       // on editors; every other Normal-mode stroke is the editor's Vim core.
       if (this.dispatchEditorSequence(doc, active, token, surfaceKey, trace, debug)) return true
-      return this.editorStroke(active, event)
+      const handled = this.editorStroke(active, event)
+      // The core owns `g`/`z`/operators/text objects: refresh or drop its overlay.
+      this.scheduleEditorWhichKey(doc, active, trace, debug)
+      return handled
     }
 
     active.sequence.setEntries(
@@ -409,18 +443,31 @@ export class VimDispatcher {
           this.clearPending(surfaceKey)
           this.clearFeedback()
           return true
-        case 'pending':
+        case 'pending': {
           this.armPending(active, doc, surfaceKey, trace)
           vim.setSequencePendingKeys(formatPendingKeys(step.count, step.prefix))
-          this.scheduleWhichKey(
-            doc,
-            active,
-            vim.getEffectiveKeymap(active.surface.kind, active.keymap),
-            trace,
-            debug,
-          )
+          const entries = vim.getEffectiveKeymap(active.surface.kind, active.keymap)
+          const context = this._options.contextKeyService
+          this.scheduleWhichKey(doc, active, trace, debug, () => {
+            if (!active.sequence.isPending) return undefined
+            const prefix = active.sequence.prefix
+            // A bare count (`3`) has no candidates: listing every key would be noise.
+            if (prefix.length === 0) return undefined
+            return {
+              prefix: formatVimKeys(prefix),
+              items: computeWhichKeyItems(
+                entries,
+                prefix,
+                (entry) =>
+                  entry.when === undefined ||
+                  context.contextMatchesRules(whenExpression(entry.when)),
+                resolveVimCommandTitle,
+              ),
+            }
+          })
           if (debug?.enabled) debug.append(formatVimPending(trace, [...step.prefix]))
           return true
+        }
         case 'execute':
           this.clearPending(surfaceKey)
           this.clearFeedback()

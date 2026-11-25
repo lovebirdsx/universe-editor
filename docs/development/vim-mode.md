@@ -36,7 +36,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | `services/vim/vimModeService.ts` | 配置读取、per-surface 模式记忆、编辑器 Visual 子模式、context key（`vim*`）、状态栏条目（模式文字 + pending / Unsupported 反馈）、有效 keymap 缓存、保留集、which-key 状态 |
 | `services/vim/vimKeyFormat.ts` | token → 显示文字（`space`→`<Space>`、`ctrl+d`→`<C-d>`），供状态栏 / which-key / 速查表 |
 | `services/vim/vimCheatSheet.ts` / `vimCommandTitle.ts` | 速查表的分组与行格式化（纯函数）；命令 id → 展示标题 |
-| `workbench/vim/vimDispatcher.ts` | 纯决策类：这一击是否归 Vim、归哪个 surface、执行哪条命令；计时器、which-key 调度 |
+| `workbench/vim/vimDispatcher.ts` | 纯决策类：这一击是否归 Vim、归哪个 surface、执行哪条命令；计时器、which-key 调度（工作台引擎与编辑器内核共用同一浮层、延迟与归属） |
 | `workbench/vim/useVimDispatcher.ts` | 把 dispatcher 装成 provider，按 Document 隔离并维护 focus 事件 |
 | `workbench/vim/vimWhichKeyItems.ts` / `VimWhichKey.tsx` | which-key 的候选计算（纯函数）与浮层（`Workbench.tsx` 挂载，pointer-events none，不抢键） |
 | `workbench/vim/vimImeCoordinator.ts` | 非编辑器 / 非终端 surface 的输入法自动切换（Normal→英文，离开归还）；跟踪所有工作台窗口的焦点（窗口失焦释放、回焦重新声明，多窗口）；由 `VimModeContribution` 创建 |
@@ -70,7 +70,8 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | `vimSearch.ts` / `vimSearchController.ts` / `vimSearchWidget.ts` / `vimSearch.css` | 字面量搜索纯逻辑（smartcase、`\c`/`\C`、wrapscan）/ `/ ? n N * #` 与 hlsearch 生命周期 / 搜索框 widget（IME 组合守卫） |
 | `vimInputMethod.ts` | **窗口级**输入法归属（owner 模型）：`requestInputMethod(owner, service, desired)` 只在状态迁移时发 IPC 并串行化；`releaseInputMethod(owner, service)` 仅当前持有英文的 owner 才生效。编辑器 controller / 终端 Normal / `VimImeCoordinator` 共用 |
 | `vimKeyUtils.ts` | `isFunctionKeyName` / `accumulateCount` / `consumeEvent` / `toVimKeyInput`（含 AltGr / Option 产生的字符）/ `scrollViewportPayload` / `pageScrollPayload`，编辑器与 Output 共用 |
-| `vimKeyHelp.ts` | 速查表里的编辑器键位说明——**从上面的注册表派生**（motion / operator / 文本对象 / 前缀表 / 简单命令 / Visual 键），加键位自动出现在速查表；`EXTRA_ROWS` 只放 reducer 内联处理的键（`.` `v` `"x` `r`…）。描述用英文，`vim.keyHelp.<slug>` 本地化 |
+| `vimKeyHelp.ts` | 速查表里的编辑器键位说明——**从上面的注册表派生**（motion / operator / 文本对象 / 前缀表 / 简单命令 / Visual 键），加键位自动出现在速查表；`EXTRA_ROWS` 只放 reducer 内联处理的键（`.` `v` `"x` `r`…）。描述用英文，`vim.keyHelp.<slug>` 本地化；`describeVimKeyHelp()` 同时供 which-key 使用 |
+| `vimPendingHints.ts` | 纯函数 `computeVimPendingHint(state)`：从同一批注册表派生编辑器内核前缀的 which-key 候选（`g` / `z` / `[` / `]`、操作符等待、`i`/`a` 文本对象、Visual `g`），静态表按类别 memo；等待字符参数（`f` / `r` / `"`）与纯计数返回 undefined |
 | `vimEditorController.ts` | 把 reducer 的输出绑到 Monaco：`COMMAND_HANDLERS`（`Record` 覆盖每个 `VimCommand['type']`，缺一个编译器就报）、Visual 状态（anchor + cursor）、`.` 重放、Insert 会话记录（`3ifoo<Esc>`）、块状光标、`"+`/`"*`/`vim.useSystemClipboard` |
 | `attachVim.ts` | 一次调用接好 controller + surface 注册；`FileEditor` / `DiffEditor` 共用，两处不再各写一遍 |
 | `vimSurfaceKeys.ts` | `editorVimSurfaceKey(groupId, inputId)` |
@@ -297,8 +298,12 @@ KeybindingsRegistry.hasBindingAtOrAbove(
 - 状态栏有两个条目，都由 `VimModeService` 管理：
   - `vim-mode`：图标 + 文字（`NORMAL` / `INSERT` / `VISUAL` / `V-LINE` / `V-BLOCK` / `TERMINAL`），点击切换 `vim.enabled`。受 `vim.showStatusBar` 控制。
   - `vim-feedback`（紧挨着，priority 低 1）：编辑器内核的待定键（`"a2d3`、`g`、`ci`，`formatPendingKeys`）优先，否则是工作台序列引擎的「计数 + 前缀」（`3gg`、`<Space>w`）；若有 `Unsupported: <key>`（吞掉了一个没有映射的键；**`reportUnsupportedKey` 不再自己格式化，由调用方传展示串**——dispatcher 用 `formatVimKeys(tokens)`，编辑器内核传原始键名）则先显示它，1.5s 后自动消失，同键连发按 100ms 节流。切换 active surface 时这些反馈一并清空。
-- **which-key**：dispatcher 在多 token 前缀 pending 后 300ms（`WHICH_KEY_DELAY_MS`）调 `computeWhichKeyItems`（按有效键位 + `when` 过滤，列出下一键及其命令标题，只开新分支的显示 `+N`）并 `setWhichKey`；一旦打开，之后每次前缀推进**立即**刷新（`<Space>` → `<Space>w` 不再等 300ms），且**暂停序列超时**（除非有 deferred 匹配）——只有 `Esc`、新一击或焦点切换才结束。`vim.whichKey=false` 关闭。`VimWhichKey` 组件经 portal 渲染到活动窗口 document，纯展示。
-- 编辑器内核的前缀（`g` / `z` / 计数等）不走引擎，因此没有 which-key，只有状态栏 pending。
+- **which-key**：dispatcher 是多键提示的唯一调度者，工作台引擎与编辑器内核共用同一浮层、300ms 延迟（`WHICH_KEY_DELAY_MS`）与 `vim.whichKey` 开关。
+  - 工作台引擎：前缀 pending 后调 `computeWhichKeyItems`（按有效键位 + `when` 过滤，列出下一键及其命令标题，只开新分支的显示 `+N`）。
+  - 编辑器内核：每次 Normal / Visual / Insert 击键后由 surface 的 `getPendingHint()` 拉取 `computeVimPendingHint`（`vim/editor/vimPendingHints.ts`）。覆盖 `g` / `z` / `[` / `]`、操作符等待（`d`/`y`/`c`/`>`/`<`/`g~`…）、`i`/`a` 文本对象与 Visual `g`；等待字符参数（`f`/`r`/`"`）和纯计数不弹。候选标题与速查表同源（`describeVimKeyHelp`）。
+  - 一旦打开，之后每次前缀推进**立即**刷新（`<Space>` → `<Space>w`、`d` → `di` 不再等 300ms），且引擎序列**暂停超时**（除非有 deferred 匹配）——只有 `Esc`、新一击或焦点切换才结束。`vim.whichKey=false` 关闭。`VimWhichKey` 组件经 portal 渲染到活动窗口 document，纯展示。
+  - **补全优先**：编辑器 surface 在 `show()` 时检查全局 `suggestWidgetVisible`，为真则暂不弹（状态栏 pending 保留）；退出 Insert 时 controller 主动 `hideSuggestWidget`，避免补全残留到 Normal 后再被浮层压住。
+  - `vim.keymap` 只影响工作台引擎，不改变内核前缀的候选；`vim.leader` 若与 `g`/`z`/`[`/`]` 同键，引擎先截获，提示跟随引擎键位表。
 
 ## 上下文键
 
@@ -379,14 +384,14 @@ releaseInputMethod(owner, service)          // 仅当 owner 正持有英文时�
 | workbench-ui | `src/__tests__/vimSequence.test.ts`、`vimSurfaceRegistry.test.tsx`、`vimSurfaceAdapters.test.tsx`、`vimIndexActions.test.ts`、`vimDefaultKeymap.test.ts`、`vimSurfaceKeymap.test.tsx`、`ctrlNavigationRegistry.test.tsx` |
 | platform | `src/__tests__/command/keybindingRegistry.test.ts`（含 User 覆盖 / `hasBindingAtOrAbove`） |
 | 服务 / 键位 | `services/vim/__tests__/`：`vimModeService.test.ts`、`vimAppKeymap.test.ts`、`vimKeymapMerge.test.ts`、`vimKeyFormat.test.ts`、`vimCheatSheet.test.ts`、`vimCommandTitle.test.ts`；`contributions/__tests__/vimConfigKeys.test.ts`（保证 `VIM_SERVICE_CONFIG_KEYS` 覆盖 `SettingsContribution` 注册的 `vim.*`） |
-| 分发 / 反馈 | `workbench/vim/__tests__/`：`vimDispatcher.test.ts`、`useVimDispatcher.test.tsx`、`vimImeCoordinator.test.ts`、`vimWhichKeyItems.test.ts`、`VimWhichKey.test.tsx`；`actions/__tests__/vimActions.test.ts` / `vimSurfaceActions.test.ts` / `vimCheatSheetAction.test.ts` |
+| 分发 / 反馈 | `workbench/vim/__tests__/`：`vimDispatcher.test.ts`（含内核前缀的 300ms 打开、已打开时立即刷新、`suggestWidgetVisible` 抑制、engine 优先）、`useVimDispatcher.test.tsx`、`vimImeCoordinator.test.ts`、`vimWhichKeyItems.test.ts`、`VimWhichKey.test.tsx`；`actions/__tests__/vimActions.test.ts` / `vimSurfaceActions.test.ts` / `vimCheatSheetAction.test.ts` |
 | surface 适配 | `workbench/editor/__tests__/useEditorTabsVim.test.tsx` / `useMarkdownKeyboardNav.test.tsx`、`activitybar/__tests__/ActivityBar.vim.test.tsx`、`paneComposite/__tests__/PaneCompositeHeader.vim.test.tsx`、`preferences/__tests__/SettingsEditor.vim.test.tsx`、`gitGraph/__tests__/useGraphKeyboardNav.vim.test.tsx`、`terminal/__tests__/terminalNormalMode.test.ts` / `terminalNormalMode.inputMethod.test.ts`（owner 模型下的焦点 / 归还）/ `TerminalInstance.vimReparent.test.tsx`（面板 ↔ 编辑器区 reparent 保持 Normal） |
-| 编辑器内核（纯） | `workbench/editor/vim/__tests__/`：`vimKeymap` / `vimMotions` / `vimOperators` / `vimTextObjects` / `vimRegisters` / `vimSearch` / `vimInputMethod` / `vimKeyHelp` / `vimVisual` / `vimKeyUtils` / `vimViewport`（显示行几何与折叠，内联 mock `getTopForPosition`）`.test.ts` |
-| 编辑器内核（绑 Monaco） | 同目录 `vimEditorController.test.tsx`、`vimEditorFeatures.test.tsx`（`.` / 寄存器 / Insert 分组等）、`vimEditorVisual.test.tsx`、`vimEditorRegressions.test.tsx`（审查修复的回归集：pending 取消、curswant、折叠、只读、`.` 按键流、输入法归属…），统一用 `fakeVimEditor.ts` 搭假编辑器 |
+| 编辑器内核（纯） | `workbench/editor/vim/__tests__/`：`vimKeymap` / `vimMotions` / `vimOperators` / `vimTextObjects` / `vimRegisters` / `vimSearch` / `vimInputMethod` / `vimKeyHelp` / `vimPendingHints`（内核 which-key 候选）/ `vimVisual` / `vimKeyUtils` / `vimViewport`（显示行几何与折叠，内联 mock `getTopForPosition`）`.test.ts` |
+| 编辑器内核（绑 Monaco） | 同目录 `vimEditorController.test.tsx`（含 Insert 退出关补全、`getPendingHint`）、`vimEditorFeatures.test.tsx`（`.` / 寄存器 / Insert 分组等）、`vimEditorVisual.test.tsx`、`vimEditorRegressions.test.tsx`（审查修复的回归集：pending 取消、curswant、折叠、只读、`.` 按键流、输入法归属…），统一用 `fakeVimEditor.ts` 搭假编辑器 |
 | Output | `workbench/panel/output/__tests__/outputVimKeymap.test.ts` / `outputVimController.test.ts` / `LogOutputView.test.tsx` |
 | 视口滚动 | `packages/workbench-ui/src/__tests__/scrollViewport.test.ts`、`vimSurfaceAdapters.test.tsx`（Tree/FlatList/Overlay）、`gitGraph/__tests__/useGraphKeyboardNav.vim.test.tsx`、`agents/__tests__/ChatBody.test.tsx` |
 | DI 脚手架 | `renderer/__tests__/_helpers/vimTestHarness.ts`（真 ContextKeyService + ViewDescriptorService，ActivityBar / 容器标题测试共用；新写 surface 测试先看它） |
-| e2e | `smoke.vimGlobal.spec.ts` / `smoke.vimPriority.spec.ts`（@p0）、`smoke.vimMode` / `smoke.vimKeymapNavigation` / `smoke.vimTabs` / `smoke.vimTerminalNormal` / `smoke.vimSettings` / `smoke.vimWebview` / `smoke.vimChat` / `smoke.vimInteraction`（@p1；状态栏 VISUAL / V-LINE、文本对象与 `.`、which-key、速查表、空闲 `Esc`、`Unsupported:` 反馈）；公共驱动在 `e2e/pages/vimHelpers.ts`（`setVimEnabled` / `statusIcon` / `statusText` / `feedbackText` / `openTextEditor` / `setText` / `focusExplorerTree` / 光标与文本读取 / `expectStableFor`——断言「一段时间内保持不变」，用于验证按键没有副作用） |
+| e2e | `smoke.vimGlobal.spec.ts` / `smoke.vimPriority.spec.ts`（@p0）、`smoke.vimMode` / `smoke.vimKeymapNavigation` / `smoke.vimTabs` / `smoke.vimTerminalNormal` / `smoke.vimSettings` / `smoke.vimWebview` / `smoke.vimChat` / `smoke.vimInteraction`（@p1；状态栏 VISUAL / V-LINE、文本对象与 `.`、leader 与内核前缀的 which-key、补全优先、速查表、空闲 `Esc`、`Unsupported:` 反馈）；公共驱动在 `e2e/pages/vimHelpers.ts`（`setVimEnabled` / `statusIcon` / `statusText` / `feedbackText` / `openTextEditor` / `setText` / `focusExplorerTree` / 光标与文本读取 / `expectStableFor`——断言「一段时间内保持不变」，用于验证按键没有副作用） |
 
 e2e 通过 `window.__E2E__.runCommand('_workbench.updateConfiguration', 'vim.enabled', value)` 开关（先 `whenUserSettingsInitialized`，冷启动早写会丢），并用 `getContextKey` / `getStatusBarEntries` / `getActiveEditorUri` 断言，不戳 Monaco 内部 DOM。
 

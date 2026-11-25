@@ -61,6 +61,22 @@ export interface IVimKeymapEntry {
   readonly scope?: 'surface'
 }
 
+/** One which-key row: the next key, already display-formatted, and what it does. */
+export interface IVimPendingHintItem {
+  readonly key: string
+  readonly title: string
+  readonly isGroup: boolean
+}
+
+/**
+ * A surface's own pending prefix (the editor core's `g` / operator / text-object
+ * sequences). `prefix` uses the same display spelling as the status bar (`g`, `2d`, `ci`).
+ */
+export interface IVimPendingHint {
+  readonly prefix: string
+  readonly items: readonly IVimPendingHintItem[]
+}
+
 export interface IVimSurfaceActions {
   readonly move?: (direction: VimDirection, count: number) => void
   /**
@@ -99,6 +115,12 @@ export interface IVimSurfaceActions {
    * — is that character and must reach `handleStroke`, not start a leader sequence.
    */
   readonly isAwaitingCharArg?: () => boolean
+  /**
+   * Editor surfaces only. Keys that can follow the core's pending prefix, for
+   * which-key; undefined when nothing is listable (idle, Insert, a char argument
+   * such as `f` / `r` / `"`, a bare count). Read after every stroke, so keep it cheap.
+   */
+  readonly getPendingHint?: () => IVimPendingHint | undefined
 }
 
 export interface IVimSurfaceRegistration {

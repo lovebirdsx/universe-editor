@@ -48,6 +48,7 @@ export function attachVim(options: AttachVimOptions): VimAttachment {
     actions: {
       handleStroke: (event) => controller.handleKeyDown(event),
       isAwaitingCharArg: () => controller.isAwaitingCharArg(),
+      getPendingHint: () => controller.getPendingHint(),
     },
   })
   let disposed = false

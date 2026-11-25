@@ -383,7 +383,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: true,
             description: localize(
               'settings.vim.whichKey.description',
-              'After a multi-key prefix such as the leader, pause briefly to list the keys that can follow and what they do.',
+              'After the leader or an editor core multi-key prefix (g / z / [ / ], an operator, an i/a text object), pause briefly to list the keys that can follow and what they do. Hidden while the completion popup is visible.',
             ),
           },
           'vim.useSystemClipboard': {

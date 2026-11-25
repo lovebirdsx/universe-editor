@@ -25,7 +25,11 @@ import {
   type IContextKeyService,
   type IDisposable,
 } from '@universe-editor/platform'
-import { readClipboardText, writeClipboardText } from '@universe-editor/workbench-ui'
+import {
+  readClipboardText,
+  writeClipboardText,
+  type IVimPendingHint,
+} from '@universe-editor/workbench-ui'
 import type { monaco } from '../monaco/MonacoLoader.js'
 import type { IVimModeService } from '../../../services/vim/vimModeService.js'
 import type { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
@@ -34,6 +38,7 @@ import { createVimEdits, visualStartPosition } from './vimEdits.js'
 import { releaseInputMethod, requestInputMethod } from './vimInputMethod.js'
 import { consumeEvent, isImeKeyEvent, toVimKeyInput } from './vimKeyUtils.js'
 import { formatPendingKeys, idle, isAwaitingCharArg, reduceVimKey } from './vimKeymap.js'
+import { computeVimPendingHint } from './vimPendingHints.js'
 import { clampNormalPosition } from './vimMotions.js'
 import { getVimRegister, isVimClipboardRegister, type VimRegisterContent } from './vimRegisters.js'
 import { createVimSearchController } from './vimSearchController.js'
@@ -90,6 +95,8 @@ export interface IVimEditorController extends IDisposable {
   handleKeyDown(event: KeyboardEvent): boolean
   /** The next key is consumed as the argument of `f`/`t`/`r`/`"`/`i`/`a` (a leader key must not steal it). */
   isAwaitingCharArg(): boolean
+  /** Which-key candidates for the core's pending prefix; undefined while Insert or idle. */
+  getPendingHint(): IVimPendingHint | undefined
 }
 
 export interface VimClipboard {
@@ -303,6 +310,11 @@ export function createVimEditorController(
     if (text === lastReportedPending) return
     lastReportedPending = text
     onPendingKeysChange?.(text)
+  }
+
+  function getPendingHint(): IVimPendingHint | undefined {
+    if (disposed || !active() || state.mode === 'insert') return undefined
+    return computeVimPendingHint(state)
   }
 
   function editorPosition(): VimPosition {
@@ -946,10 +958,14 @@ export function createVimEditorController(
       state = { ...state, mode: 'normal' }
       syncContextKeys()
     }
+    const wasInsert = state.mode === 'insert'
     dropStaleVisual()
     const result = reduceVimKey(state, toVimKeyInput(event))
     // An unhandled key still resets a half-typed prefix (`d` then Ctrl+Z).
     state = result.state
+    // Monaco never sees the Escape that leaves Insert (we consume it), so the
+    // suggest widget would otherwise stay open behind Normal-mode which-key.
+    if (wasInsert && state.mode !== 'insert') editor.trigger('vim', 'hideSuggestWidget', null)
     if (!result.handled) {
       if (state.mode === 'insert') recordInsertKey(event)
       reportPending()
@@ -965,6 +981,7 @@ export function createVimEditorController(
 
   /** Back to a pristine Normal state: nothing in flight, no selection, no search UI. */
   function deactivate(): void {
+    if (state.mode === 'insert') editor.trigger('vim', 'hideSuggestWidget', null)
     state = INITIAL_VIM_STATE
     if (visual !== null) {
       const at = visual.cursor
@@ -1049,6 +1066,7 @@ export function createVimEditorController(
     hasTextFocus: () => textFocused,
     handleKeyDown,
     isAwaitingCharArg: () => active() && textFocused && isAwaitingCharArg(state),
+    getPendingHint,
     dispose: () => {
       if (disposed) return
       disposed = true

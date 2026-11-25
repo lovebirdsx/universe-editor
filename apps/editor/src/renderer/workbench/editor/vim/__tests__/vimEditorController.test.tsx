@@ -363,6 +363,46 @@ describe('createVimEditorController', () => {
     controller.dispose()
   })
 
+  it('dismisses the suggest widget when leaving Insert', () => {
+    const { fake, controller } = createNormalHarness(['abc'])
+    expect(controller.handleKeyDown(key('i'))).toBe(true)
+    expect(fake.editor.trigger).not.toHaveBeenCalledWith('vim', 'hideSuggestWidget', null)
+
+    expect(controller.handleKeyDown(key('Escape'))).toBe(true)
+    expect(fake.editor.trigger).toHaveBeenCalledWith('vim', 'hideSuggestWidget', null)
+
+    // Leaving Visual is not an Insert exit.
+    vi.mocked(fake.editor.trigger).mockClear()
+    expect(controller.handleKeyDown(key('v'))).toBe(true)
+    expect(controller.handleKeyDown(key('Escape'))).toBe(true)
+    expect(fake.editor.trigger).not.toHaveBeenCalledWith('vim', 'hideSuggestWidget', null)
+    controller.dispose()
+  })
+
+  it('exposes the core pending prefix for which-key', () => {
+    const { controller } = createNormalHarness(['abc'])
+    expect(controller.getPendingHint()).toBeUndefined()
+
+    controller.handleKeyDown(key('g'))
+    expect(controller.getPendingHint()?.prefix).toBe('g')
+    expect(controller.getPendingHint()?.items.length).toBeGreaterThan(10)
+
+    controller.handleKeyDown(key('Escape'))
+    expect(controller.getPendingHint()).toBeUndefined()
+
+    controller.handleKeyDown(key('d'))
+    expect(controller.getPendingHint()?.prefix).toBe('d')
+    controller.handleKeyDown(key('i'))
+    expect(controller.getPendingHint()?.prefix).toBe('di')
+
+    controller.handleKeyDown(key('Escape'))
+    controller.handleKeyDown(key('i'))
+    expect(controller.getPendingHint()).toBeUndefined()
+
+    controller.dispose()
+    expect(controller.getPendingHint()).toBeUndefined()
+  })
+
   it('keeps the mode across a focus move and restores it on return', () => {
     const fake = createFakeEditor(['abc'])
     const vim = createVimModeService()

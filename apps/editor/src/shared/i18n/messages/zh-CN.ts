@@ -555,6 +555,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'vim.status.unsupportedTooltip': 'Vim 未绑定该按键',
   'vim.status.pendingTooltip': 'Vim 正在等待后续按键',
   'vim.whichKey.more': '+{count} 项',
+  'vim.whichKey.linewise': '{action}（整行）',
+  'vim.whichKey.innerTextObject': '内部文本对象',
+  'vim.whichKey.aroundTextObject': '周围文本对象',
   'vim.cheatSheet.current': '（当前）',
   'vim.cheatSheet.workbenchKeys': '工作台命令',
   'vim.cheatSheet.placeholder': '筛选 Vim 键位或命令',
@@ -1541,7 +1544,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.vim.searchCaseSensitivity.sensitive': '区分大小写',
   'settings.vim.searchCaseSensitivity.insensitive': '忽略大小写',
   'settings.vim.whichKey.description':
-    '输入 leader 等多键前缀后停顿片刻，在屏幕底部列出可继续输入的按键及其命令。',
+    '输入 leader 或编辑器内核的多键前缀（g / z / [ / ]、操作符、i/a 文本对象）后停顿片刻，在屏幕底部列出可继续输入的按键。补全弹窗可见时不显示。',
   'settings.vim.useSystemClipboard.description':
     '编辑器 Vim 的无名寄存器与系统剪贴板同步：y/d/c 写入剪贴板，p/P 从剪贴板粘贴。',
   'settings.vim.highlightSearch.description':

@@ -147,7 +147,7 @@
 
 操作符可以和移动、文本对象、数字组合：`d2w`（删两个词）、`ciw`（改当前词）、`ci"`（改引号内文字）、`3dd`、`2d3w`（等于 `d6w`）。
 
-**离开编辑器文本时**：在资源管理器、搜索结果、菜单、标签栏等界面里，同样用 `j` / `k` 移动、`gg` / `G` 跳首末、`Enter` 激活；按 `Space` 再按字母是 leader 序列（如 `Space e` 聚焦资源管理器、`Space f` 快速打开），按住不动约 0.3 秒会弹出 which-key 提示列出可用的下一个键。
+**在资源管理器、搜索结果、菜单、标签栏等界面里**，同样用 `j` / `k` 移动、`gg` / `G` 跳首末、`Enter` 激活；按 `Space` 再按字母是 leader 序列（如 `Space e` 聚焦资源管理器、`Space f` 快速打开）。无论焦点在编辑器文本还是这些界面，输入多键前缀后停顿约 0.3 秒都会弹出 which-key 提示，列出可用的下一个键。
 
 **常见问题**：
 
@@ -182,7 +182,7 @@
 - **未映射键**：Normal 模式下，列表 / 菜单 / 浮层 / 终端里未映射的可打印键会被 Vim 吞掉，不会触发 Quick Open 或输入到别处，并在状态栏短暂提示 `Unsupported: <键>`；功能键和组合键照常交给工作台。把 `vim.passThroughUnmappedKeys` 设为 `true` 可让这些可打印键继续下传。
 - **计数与前缀**：支持数字前缀（如 `3j`、`2dd`）。键位表里的多段序列（leader、列表命令等）在 `vim.sequenceTimeoutMs`（默认 800ms）内等待下一键；编辑器内核的 `g` / `z` / `[` / `]` / `>` / `<` 前缀同 Vim 内置命令，无限等待下一键。`Esc` 会取消待定状态，焦点移出 surface 时计数与前缀重置。
 - **`G` / `gg` 的计数**：所有列表、树、标签栏等 surface 与编辑器一致——不带数字 `gg` 是首项、`G` 是末项；带数字则跳到第 N 项（`3G` / `3gg` 是第 3 项，`1G` 是首项）。终端 Normal 的 `NG` / `Ngg` 跳到第 N 行（buffer 行号），Markdown 预览的 `NG` / `Ngg` 跳到第 N 行**源码**（预览里没有源码行信息时退回首 / 末）。**例外**：Chat 时间线与通知中心的 `G` / `gg` 忽略数字，始终是首 / 末项。
-- **which-key 提示**：leader 等多键序列按下后停顿约 0.3 秒，屏幕上会列出可用的下一个键与对应命令；列表打开期间不会超时，按 `Esc`、继续输入或切换焦点才结束。`vim.whichKey` 设为 `false` 可关闭。编辑器内核的 `g` / `z` 等前缀只在状态栏显示待定键，没有 which-key。
+- **which-key 提示**：leader 等工作台多键序列、以及编辑器内核的 `g` / `z` / `[` / `]`、操作符等待（`d` / `y` / `c` / `>` / `<`）、`i` / `a` 文本对象等前缀，按下后停顿约 0.3 秒，屏幕上会列出可用的下一个键与对应命令；打开期间不会超时，按 `Esc`、继续输入或切换焦点才结束。补全弹窗可见时暂不显示（状态栏仍显示待定键），离开 Insert 时补全弹窗会自动关闭。`vim.whichKey` 设为 `false` 可关闭。
 - **键位速查表**：命令「Vim：显示键位速查」（`workbench.action.vim.showKeymapCheatSheet`，默认 `Space ?`）列出每类界面当前生效的键位（已合并你的 `vim.keymap`，当前界面排在最前），编辑器部分还包含全部内核键位说明；可输入文字过滤。
 
 ### 编辑器
@@ -440,7 +440,7 @@ Panel / 辅助侧边栏的**标签式**容器标题聚焦时：`h` / `l` 切换�
 | `vim.autoSwitchInputMethod` | `true` | Normal / 终端 Normal 时切英文输入法，Insert 恢复；仅 Windows 生效 |
 | `vim.searchCaseSensitivity` | `smart` | 编辑器 `/` 与 `?` 搜索的大小写策略：`smart` / `sensitive` / `insensitive` |
 | `vim.highlightSearch` | `false` | 编辑器搜索：高亮全部匹配并在编辑时刷新；Normal 下 `Esc` 清除 |
-| `vim.whichKey` | `true` | 多键前缀停顿约 0.3 秒后列出可用的下一个键 |
+| `vim.whichKey` | `true` | leader 与编辑器内核多键前缀停顿约 0.3 秒后列出可用的下一个键；补全弹窗可见时不显示 |
 | `vim.useSystemClipboard` | `false` | 编辑器默认寄存器与系统剪贴板互通（`y` / `d` / `c` 写入，`p` / `P` 读取） |
 | `vim.leader` | `space` | Leader 键的 Vim token |
 | `vim.sequenceTimeoutMs` | `800` | 键位表多段序列（leader 等）等待下一键的超时；编辑器内核前缀（`g`/`z` 等）无限等待 |
