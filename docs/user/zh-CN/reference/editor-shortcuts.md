@@ -275,7 +275,7 @@
 
 Normal 模式下**未实现的字符键会被吞掉**，不会输入到缓冲区；`F1`–`F12`、媒体键、输入法组合键等非文本功能键不拦截，仍交给工作台和编辑器处理。
 
-**Ctrl 组合键的归属**：`Ctrl+H` / `Ctrl+J` / `Ctrl+K` / `Ctrl+L` 仍归工作台（替换 / 切换底栏 / 和弦 / 扩选），Ctrl+K 和弦照常可用。编辑器 Normal 下 Vim 接管 `Ctrl+F` / `Ctrl+B` / `Ctrl+D` / `Ctrl+U` / `Ctrl+E` / `Ctrl+Y`（滚动，`Ctrl+Y` 不再重做）、`Ctrl+R`（重做）、`Ctrl+O` / `Ctrl+I`（导航后退 / 前进）、`Ctrl+V`（块选择，不再粘贴）。这些组合若你有自己的同键绑定，用户键位优先（见下文优先级）。
+**Ctrl 组合键的归属**：`Ctrl+H` / `Ctrl+J` / `Ctrl+K` / `Ctrl+L` 仍归工作台（替换 / 切换底栏 / 和弦 / 扩选），Ctrl+K 和弦照常可用。编辑器 Normal 下 Vim 接管 `Ctrl+F` / `Ctrl+B` / `Ctrl+D` / `Ctrl+U` / `Ctrl+E` / `Ctrl+Y`（滚动，`Ctrl+Y` 不再重做）、`Ctrl+R`（重做）、`Ctrl+V`（块选择，不再粘贴）；`Ctrl+O` / `Ctrl+I`（导航后退 / 前进，可带计数如 `3<C-o>`）在所有 Normal surface 上同义，走 Vim 键位表，可用 `vim.keymap` 改绑（id `nav.back` / `nav.forward`）。这些组合若你有自己的同键绑定，用户键位优先（见下文优先级）。
 
 **光标与 `Esc`**：Normal / Visual 下光标是块状，Insert 下恢复为你设置的光标样式。`j` / `k` 会记住期望列：经过短行后回到原来的列；`$` 之后上下移动都贴着行尾。`gj` / `gk` 单独记住视觉行内的横向位置，跨过较短的行后同样会回到原来的位置。从 Insert 按 `Esc` 光标左移一格（同 Vim），并且一次 `u` 撤销整段 Insert 输入。Normal 下**没有任何待定状态时**按 `Esc`：先清除搜索高亮，没有高亮可清时把焦点交给编辑器标签栏（可用 `h` / `l` 切换标签，`Enter` 回正文）；取消前缀 / 计数的那一次 `Esc` 不会跳到标签栏。`Ctrl+[` 在 Normal / Visual / Insert 下都等同 `Esc`。
 
@@ -305,7 +305,8 @@ Insert 模式：所有键原样输入，`Esc` 或 `Ctrl+[` 回到 Normal 模式�
 | 右键菜单 | `m` |
 | 复制 / 删除 | `yy` / `dd`（宿主实现时） |
 | 筛选 / 查找 | `/`（宿主有筛选框时：Outline、设置页、Git / Perforce 图谱等，聚焦其搜索框） |
-| 退出 surface | `Esc`（具体动作由宿主决定：菜单收一层或关闭、浮层关闭等） |
+| 退出 surface | `Esc`（具体动作由宿主决定：菜单收一层或关闭、浮层关闭等）。侧栏 / 底栏里的视图列表（Explorer、SCM、搜索结果等）先收拢多选，**没有可退出的状态时把焦点交回编辑器**，与关闭 Vim 时的 `Esc` 一致 |
+| 导航历史后退 / 前进 | `Ctrl+O` / `Ctrl+I`：与编辑器内同义，跳回 / 跳到上一处编辑位置并把焦点交回编辑器（所以在 Explorer 里 `Ctrl+O` 不再弹出「打开文件」；菜单 / 浮层除外） |
 
 Markdown 预览与文档中心也是列表类 surface（`vim.surfaces.lists` 控制）：`j` / `k` 滚动、`gg` / `G`、`Ctrl+D` / `Ctrl+U`、`Ctrl+E` / `Ctrl+Y` 等与原有的预览键盘导航（`f` 链接提示、`/` 查找等）共存；见 [Markdown 编辑与预览](../editing/markdown.md)。
 
@@ -369,7 +370,7 @@ Panel / 辅助侧边栏的**标签式**容器标题聚焦时：`h` / `l` 切换�
 | `<leader> o` | 聚焦大纲 |
 | `<leader> q` | 关闭当前编辑器 |
 | `<leader> n` / `<leader> N` | 下一个 / 上一个编辑器 |
-| `<leader> w h/j/k/l` | 聚焦左 / 下 / 上 / 右编辑器组 |
+| `<leader> w h/j/k/l` | 向左 / 下 / 上 / 右移动焦点：先在编辑器组之间移动，到边缘后进入该方向的侧栏 / 底栏 / 辅助侧栏（命令 `workbench.action.navigateLeft/Down/Up/Right`）；在 Explorer 里 `<leader> w l` 回到编辑器 |
 | `<leader> w H/J/K/L` | 把当前编辑器标签移到左 / 下 / 上 / 右相邻编辑器组 |
 | `<leader> w w` | 聚焦下一个编辑器组 |
 | `<leader> w s` | 向下拆分编辑器 |

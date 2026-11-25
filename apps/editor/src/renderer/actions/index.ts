@@ -224,7 +224,14 @@ import { FOCUS_SURFACE_ACTIONS } from './focusSurfaceActions.js'
 import { VIM_SURFACE_ACTIONS } from './vimSurfaceActions.js'
 import { TERMINAL_NORMAL_ACTIONS } from './terminalNormalActions.js'
 import { CloseQuickInputAction } from './quickInputActions.js'
-import { FocusNextPartAction, FocusPreviousPartAction } from './focusActions.js'
+import {
+  FocusNextPartAction,
+  FocusPreviousPartAction,
+  NavigateDownAction,
+  NavigateLeftAction,
+  NavigateRightAction,
+  NavigateUpAction,
+} from './focusActions.js'
 import { ClearHistoryAction, GoBackAction, GoForwardAction } from './historyActions.js'
 import { GoToWorkspaceSymbolAction, GoToFileSymbolAction } from './gotoSymbolActions.js'
 import { gotoLocationActions } from './gotoLocationActions.js'
@@ -614,6 +621,10 @@ registerAction2(FocusBelowGroupAction)
 // Focus — cross-part navigation
 registerAction2(FocusNextPartAction)
 registerAction2(FocusPreviousPartAction)
+registerAction2(NavigateLeftAction)
+registerAction2(NavigateRightAction)
+registerAction2(NavigateUpAction)
+registerAction2(NavigateDownAction)
 
 // History — back/forward navigation
 registerAction2(GoBackAction)

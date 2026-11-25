@@ -39,6 +39,7 @@ import type { IKeyboardDebugService } from '../../services/keybinding/keyboardDe
 import { buildKeyString } from '../keybindings/keyEventUtils.js'
 import type { IVimModeService, IVimWhichKeyState } from '../../services/vim/vimModeService.js'
 import { resolveVimCommandTitle } from '../../services/vim/vimCommandTitle.js'
+import { isModifierChord } from '../../services/vim/vimKeymapMerge.js'
 import {
   formatVimKeys,
   formatVimPending as formatPendingKeys,
@@ -110,6 +111,20 @@ function entriesWithActiveWhen(
 function matchRank(entry: IVimKeymapEntry): number {
   if (entry.scope === 'surface') return 0
   return entry.when === undefined ? 2 : 1
+}
+
+// Keyed by the (cached) effective-keymap array, so the set is rebuilt only when
+// the keymap or a `when` filter result changes.
+const chordStartersCache = new WeakMap<readonly IVimKeymapEntry[], ReadonlySet<string>>()
+
+/** First tokens of the modifier-chord entries an editor hands to the engine (`ctrl+o`). */
+function editorChordStarters(entries: readonly IVimKeymapEntry[]): ReadonlySet<string> {
+  let starters = chordStartersCache.get(entries)
+  if (starters === undefined) {
+    starters = new Set(entries.map((entry) => entry.keys[0]).filter(isModifierChord))
+    chordStartersCache.set(entries, starters)
+  }
+  return starters
 }
 
 function mergeCommandArgs(entry: IVimKeymapEntry, rawCount: number): Record<string, unknown> {
@@ -390,9 +405,10 @@ export class VimDispatcher {
 
   /**
    * Editors own their Vim core (counts, operators, search) and normally bypass
-   * the shared sequence engine. The configured leader and a sequence already
-   * pending on this surface are workbench commands, so they go through the
-   * engine; a broken prefix falls back to the controller like any other key.
+   * the shared sequence engine. The configured leader, a sequence already
+   * pending on this surface and a modifier chord the keymap maps on editors
+   * (`Ctrl+O`) are workbench commands, so they go through the engine; a broken
+   * prefix falls back to the controller like any other key.
    */
   private dispatchEditorSequence(
     doc: Document,
@@ -403,16 +419,24 @@ export class VimDispatcher {
     debug: IKeyboardDebugService | undefined,
   ): boolean {
     const vim = this._options.vimModeService
+    const actions = active.surface.actions
     // `r<Space>` / `f<Space>`: the core is waiting for a literal character, so
     // the leader is that character and must not open a leader sequence.
-    if (active.surface.actions.isAwaitingCharArg?.() === true) return false
-    if (token !== vim.getLeader() && !active.sequence.isPending) return false
-    active.sequence.setEntries(
-      entriesWithActiveWhen(
-        vim.getEffectiveKeymap('editor', active.keymap),
-        this._options.contextKeyService,
-      ),
+    if (actions.isAwaitingCharArg?.() === true) return false
+    const entries = entriesWithActiveWhen(
+      vim.getEffectiveKeymap('editor', active.keymap),
+      this._options.contextKeyService,
     )
+    let coreCount = 0
+    if (token !== vim.getLeader() && !active.sequence.isPending) {
+      if (!editorChordStarters(entries).has(token)) return false
+      // `3<C-o>`: the digits went to the core; hand them over with the chord.
+      const taken = actions.takeCount === undefined ? 0 : actions.takeCount()
+      if (taken === undefined) return false
+      coreCount = taken
+    }
+    active.sequence.setEntries(entries)
+    if (coreCount > 0) for (const digit of String(coreCount)) active.sequence.feed(digit)
     // An unmatched token is the controller's: it was never ours to swallow.
     return this.feedSequence(doc, active, token, surfaceKey, trace, debug, () => false, true)
   }

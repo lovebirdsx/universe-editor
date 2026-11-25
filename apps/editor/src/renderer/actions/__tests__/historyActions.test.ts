@@ -78,13 +78,14 @@ async function runCommand(
   inst: InstantiationService,
   ctor: new () => unknown,
   disposables: IDisposable[],
+  args?: unknown,
 ): Promise<void> {
   disposables.push(registerAction2(ctor as never))
   const id = (ctor as unknown as { ID: string }).ID
   const cmd = CommandsRegistry.getCommand(id)
   if (!cmd) throw new Error(`command not registered: ${id}`)
   await inst.invokeFunction(async (accessor) => {
-    await cmd.handler(accessor)
+    await cmd.handler(accessor, args)
   })
 }
 
@@ -135,6 +136,26 @@ describe('History navigation actions', () => {
     const active = groups.activeGroup.activeEditor
     expect(active).toBeDefined()
     expect(active?.resource?.toString()).toBe(uriA.toString())
+  })
+
+  it('GoBack / GoForward take a Vim count and jump that many entries at once', async () => {
+    const { groups, history, inst } = setup()
+    const inputs = ['a', 'b', 'c'].map((name) => {
+      const uri = URI.file(`/repo/${name}.ts`)
+      const input = inst.createInstance(FileEditorInput, uri)
+      groups.activeGroup.openEditor(input, { pinned: true, activate: true })
+      history.record({
+        resource: uri,
+        selection: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 },
+      })
+      return input
+    })
+
+    await runCommand(inst, GoBackAction, disposables, { count: 2 })
+    expect(groups.activeGroup.activeEditor).toBe(inputs[0])
+    // More than the history holds stops at the oldest / newest entry.
+    await runCommand(inst, GoForwardAction, disposables, { count: 5 })
+    expect(groups.activeGroup.activeEditor).toBe(inputs[2])
   })
 
   it('GoBack activates the existing tab when the previous file is still open and pinned', async () => {

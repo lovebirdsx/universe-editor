@@ -347,4 +347,19 @@ describe('entryAppliesTo', () => {
       entryAppliesTo({ id: 'a', keys: ['x'], command: 'c', scope: 'surface' }, 'editor', 'space'),
     ).toBe(true)
   })
+
+  it('lets an explicit editor entry reach the editor only when it starts with a modifier chord', () => {
+    const entry = (keys: string[]) => ({
+      id: 'a',
+      keys,
+      command: 'c',
+      surfaces: ['editor' as const],
+    })
+    expect(entryAppliesTo(entry(['ctrl+o']), 'editor', 'space')).toBe(true)
+    expect(entryAppliesTo(entry(['alt+x', 'y']), 'editor', 'space')).toBe(true)
+    expect(entryAppliesTo(entry(['<leader>', 'x']), 'editor', 'space')).toBe(true)
+    // Bare keys are the editor core's; such an entry could never be dispatched there.
+    expect(entryAppliesTo(entry(['Q']), 'editor', 'space')).toBe(false)
+    expect(entryAppliesTo(entry(['Q']), 'list', 'space')).toBe(false)
+  })
 })

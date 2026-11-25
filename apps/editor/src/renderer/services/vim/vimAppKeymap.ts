@@ -39,10 +39,10 @@ const LEADER_ENTRIES: readonly IVimKeymapEntry[] = (
     ['leader.closeEditor', ['<leader>', 'q'], 'workbench.action.closeActiveEditor'],
     ['leader.nextEditor', ['<leader>', 'n'], 'workbench.action.nextEditor'],
     ['leader.previousEditor', ['<leader>', 'N'], 'workbench.action.previousEditor'],
-    ['leader.groupLeft', ['<leader>', 'w', 'h'], 'workbench.action.focusLeftGroup'],
-    ['leader.groupDown', ['<leader>', 'w', 'j'], 'workbench.action.focusBelowGroup'],
-    ['leader.groupUp', ['<leader>', 'w', 'k'], 'workbench.action.focusAboveGroup'],
-    ['leader.groupRight', ['<leader>', 'w', 'l'], 'workbench.action.focusRightGroup'],
+    ['leader.groupLeft', ['<leader>', 'w', 'h'], 'workbench.action.navigateLeft'],
+    ['leader.groupDown', ['<leader>', 'w', 'j'], 'workbench.action.navigateDown'],
+    ['leader.groupUp', ['<leader>', 'w', 'k'], 'workbench.action.navigateUp'],
+    ['leader.groupRight', ['<leader>', 'w', 'l'], 'workbench.action.navigateRight'],
     ['leader.moveEditorLeft', ['<leader>', 'w', 'H'], 'workbench.action.moveEditorToLeftGroup'],
     ['leader.moveEditorBelow', ['<leader>', 'w', 'J'], 'workbench.action.moveEditorToBelowGroup'],
     ['leader.moveEditorAbove', ['<leader>', 'w', 'K'], 'workbench.action.moveEditorToAboveGroup'],
@@ -141,7 +141,23 @@ const COMPARE_ENTRIES: readonly IVimKeymapEntry[] = [
   },
 ]
 
+// Navigation history is workbench-wide, so the jump keys mean the same on every
+// Normal surface: from the Explorer `Ctrl+O` returns to the last editor location
+// instead of falling through to the global Open File. Menus / overlays excluded.
+const NAVIGATION_ENTRIES: readonly IVimKeymapEntry[] = (
+  [
+    ['nav.back', 'ctrl+o', 'workbench.action.goBack'],
+    ['nav.forward', 'ctrl+i', 'workbench.action.goForward'],
+  ] as const
+).map(([id, key, command]) => ({
+  id,
+  keys: [key],
+  command,
+  surfaces: ['editor', 'list', 'reader', 'tabs', 'activityBar', 'viewContainerTabs', 'terminal'],
+}))
+
 export const VIM_APP_KEYMAP: readonly IVimKeymapEntry[] = [
+  ...NAVIGATION_ENTRIES,
   ...COMPARE_ENTRIES,
   ...CHAT_ENTRIES,
   ...TERMINAL_ENTRIES,

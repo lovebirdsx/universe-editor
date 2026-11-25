@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Window } from 'happy-dom'
 import {
   CommandsRegistry,
+  ICommandService,
+  IContextKeyService,
   InstantiationService,
   ServiceCollection,
   configureNls,
@@ -60,9 +62,13 @@ afterEach(() => {
 type ActionClass = { readonly ID: string; new (): Action2 }
 
 function invoke(action: ActionClass, ...args: unknown[]): void {
+  invokeWith(new ServiceCollection(), action, ...args)
+}
+
+function invokeWith(services: ServiceCollection, action: ActionClass, ...args: unknown[]): void {
   const registration = registerAction2(action)
   cleanups.push(() => registration.dispose())
-  const instantiation = new InstantiationService(new ServiceCollection())
+  const instantiation = new InstantiationService(services)
   instantiation.invokeFunction((accessor) => {
     const command = CommandsRegistry.getCommand(action.ID)
     expect(command).toBeDefined()
@@ -150,6 +156,42 @@ describe('Vim surface commands', () => {
     expect(handlers.get('move')).toHaveBeenCalledWith('down', 1)
     expect(handlers.get('move')).toHaveBeenCalledWith('left', 1)
     expect(handlers.get('move')).toHaveBeenCalledWith('right', 1)
+  })
+
+  describe('Escape with nothing left to escape', () => {
+    function services(focusedView: string) {
+      const executeCommand = vi.fn(async () => undefined)
+      const collection = new ServiceCollection()
+      collection.set(ICommandService, { executeCommand } as never)
+      collection.set(IContextKeyService, {
+        get: (key: string) => (key === 'focusedView' ? focusedView : undefined),
+      } as never)
+      return { collection, executeCommand }
+    }
+
+    it('hands focus back to the editor from a view list', () => {
+      for (const actions of [{ escape: () => false }, {}]) {
+        focusSurface(actions)
+        const { collection, executeCommand } = services('workbench.explorer.fileView')
+        invokeWith(collection, SurfaceEscapeAction)
+        expect(executeCommand).toHaveBeenCalledWith('workbench.action.focusActiveEditorGroup')
+        __resetVimSurfacesForTests()
+      }
+    })
+
+    it('stays put when the surface escaped something or is not a view', () => {
+      focusSurface({ escape: () => true })
+      const handled = services('workbench.explorer.fileView')
+      invokeWith(handled.collection, SurfaceEscapeAction)
+      expect(handled.executeCommand).not.toHaveBeenCalled()
+      __resetVimSurfacesForTests()
+
+      // A list inside the editor area (settings, graph) already is the editor.
+      focusSurface({ escape: () => false })
+      const editorList = services('')
+      invokeWith(editorList.collection, SurfaceEscapeAction)
+      expect(editorList.executeCommand).not.toHaveBeenCalled()
+    })
   })
 
   it('forwards the command count from the dispatcher args', () => {

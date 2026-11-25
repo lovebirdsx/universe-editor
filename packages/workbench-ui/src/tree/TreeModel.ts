@@ -603,12 +603,14 @@ export class TreeModel<T> extends Disposable {
 
   /**
    * Escape gesture: collapse a multi-selection onto the focused row and
-   * re-anchor there. No-op when at most one row is selected.
+   * re-anchor there. No-op when at most one row is selected; returns whether
+   * anything changed so a Vim Escape with nothing to collapse can leave the view.
    */
-  collapseSelectionToFocus(): void {
+  collapseSelectionToFocus(): boolean {
     const focus = this._focused ?? this._selection[0] ?? null
-    if (focus === null || this._selection.length <= 1) return
+    if (focus === null || this._selection.length <= 1) return false
     this.setSelection([focus], focus)
+    return true
   }
 
   /**

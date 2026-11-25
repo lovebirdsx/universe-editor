@@ -100,7 +100,11 @@ export interface IVimSurfaceActions {
   readonly remove?: (count: number) => void
   readonly next?: (count: number) => void
   readonly previous?: (count: number) => void
-  readonly escape?: (count: number) => void
+  /**
+   * Returns false when there was nothing to escape (a tree with a single selected
+   * row): a view list then hands focus back to the editor, like Esc without Vim.
+   */
+  readonly escape?: (count: number) => boolean | void
   /** `/`: open the host's own filter / find box (type-to-filter trees). */
   readonly find?: () => void
   /**
@@ -115,6 +119,13 @@ export interface IVimSurfaceActions {
    * — is that character and must reach `handleStroke`, not start a leader sequence.
    */
   readonly isAwaitingCharArg?: () => boolean
+  /**
+   * Editor surfaces only. Called before a mapped modifier chord (`Ctrl+O`) leaves
+   * the core for the shared engine: returns the count typed so far (0 = none) and
+   * clears the core's prefix, or undefined when the core must keep the stroke
+   * (Visual, Insert, no text focus).
+   */
+  readonly takeCount?: () => number | undefined
   /**
    * Editor surfaces only. Keys that can follow the core's pending prefix, for
    * which-key; undefined when nothing is listable (idle, Insert, a char argument

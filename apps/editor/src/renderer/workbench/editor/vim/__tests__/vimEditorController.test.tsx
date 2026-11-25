@@ -403,6 +403,27 @@ describe('createVimEditorController', () => {
     expect(controller.getPendingHint()).toBeUndefined()
   })
 
+  it('hands its count to a workbench chord and keeps the stroke while in Visual or Insert', () => {
+    const { controller } = createNormalHarness(['abc'])
+    expect(controller.takeCount()).toBe(0)
+
+    controller.handleKeyDown(key('3'))
+    expect(controller.takeCount()).toBe(3)
+    // Taken, not copied: the next core command starts without it.
+    expect(controller.takeCount()).toBe(0)
+
+    controller.handleKeyDown(key('2'))
+    controller.handleKeyDown(key('d'))
+    expect(controller.takeCount()).toBe(2)
+    expect(controller.getPendingHint()).toBeUndefined()
+
+    controller.handleKeyDown(key('v'))
+    expect(controller.takeCount()).toBeUndefined()
+    controller.handleKeyDown(key('Escape'))
+    controller.handleKeyDown(key('i'))
+    expect(controller.takeCount()).toBeUndefined()
+  })
+
   it('keeps the mode across a focus move and restores it on return', () => {
     const fake = createFakeEditor(['abc'])
     const vim = createVimModeService()

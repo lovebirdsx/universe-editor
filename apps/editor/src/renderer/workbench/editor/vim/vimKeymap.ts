@@ -616,35 +616,15 @@ export const SIMPLE_COMMANDS: ReadonlyMap<string, VimSimpleCommandDef> = new Map
   ],
 ])
 
-/** `Ctrl+<key>` commands in Normal mode; the workbench loses these chords while Vim is in Normal. */
+/**
+ * `Ctrl+<key>` commands in Normal mode; the workbench loses these chords while Vim is in Normal.
+ * Workbench-wide chords (`Ctrl+O` / `Ctrl+I` history jumps) live in the Vim keymap instead, so
+ * every surface shares them and `vim.keymap` can rebind them.
+ */
 export const CTRL_COMMANDS: ReadonlyMap<string, VimSimpleCommandDef> = new Map<
   string,
   VimSimpleCommandDef
->([
-  ['r', { create: () => ({ type: 'redo' }), description: 'Redo' }],
-  [
-    'o',
-    {
-      create: (count) => ({
-        type: 'platform-command',
-        commandId: 'workbench.action.goBack',
-        count,
-      }),
-      description: 'Jump back in the navigation history',
-    },
-  ],
-  [
-    'i',
-    {
-      create: (count) => ({
-        type: 'platform-command',
-        commandId: 'workbench.action.goForward',
-        count,
-      }),
-      description: 'Jump forward in the navigation history',
-    },
-  ],
-])
+>([['r', { create: () => ({ type: 'redo' }), description: 'Redo' }]])
 
 const VISUAL_ENTER_KEYS: ReadonlyMap<string, VimVisualMode> = new Map<string, VimVisualMode>([
   ['v', 'visual'],

@@ -16,7 +16,9 @@
  *      `{ "keys": ["d", "d"], "command": "-list.delete" }`  (`-` alone = any command)
  *
  *  A new entry without `surfaces` applies to every non-editor surface, plus the
- *  editor when it starts with `<leader>` (the only keys the editor routes here).
+ *  editor when it starts with `<leader>`. An entry that lists `editor` reaches it
+ *  when it starts with `<leader>` or a modifier chord (`ctrl+o`); bare keys stay
+ *  the editor Vim core's.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -235,10 +237,19 @@ export function entryAppliesTo(
   leader: string,
 ): boolean {
   if (entry.scope === 'surface') return true
-  if (entry.surfaces !== undefined) return entry.surfaces.includes(kind)
-  if (kind !== 'editor') return true
   const first = entry.keys[0]
-  return first === LEADER_TOKEN || first === leader
+  const leaderFirst = first === LEADER_TOKEN || first === leader
+  if (entry.surfaces !== undefined) {
+    if (!entry.surfaces.includes(kind)) return false
+    // Bare keys on the editor belong to its Vim core, which never routes them here.
+    return kind !== 'editor' || leaderFirst || isModifierChord(first)
+  }
+  return kind !== 'editor' || leaderFirst
+}
+
+/** `ctrl+o`, `alt+x`: tokens the editor core leaves to the shared engine when mapped. */
+export function isModifierChord(token: string | undefined): token is string {
+  return token !== undefined && /^(?:ctrl|alt|meta)\+./.test(token)
 }
 
 function inherit(entry: IVimKeymapEntry, item: IVimUserKeymapItem): IVimKeymapEntry {

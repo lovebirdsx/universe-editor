@@ -10,7 +10,7 @@
  *  sidebar Search input (a real text field beside a Vim list surface).
  *--------------------------------------------------------------------------------------------*/
 
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
@@ -174,6 +174,58 @@ test.describe('@p0 vim global', () => {
     await expect
       .poll(() => workbench.getContextKey<string>('focusedView'))
       .toBe('workbench.view.explorer.tree')
+  })
+
+  test('Esc, <leader>w l and Ctrl+O / Ctrl+I lead from the Explorer back to the editor', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await setVimEnabled(page, true)
+    const dir = mkTempDir('universe-editor-e2e-vim-way-back-')
+    seedTreeFiles(dir)
+    // A folder row: clicking a file would open it and rewrite the history under test.
+    mkdirSync(join(dir, 'folder'))
+    await workbench.openWorkspace(dir)
+    for (const name of ['alpha.txt', 'beta.txt']) {
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), join(dir, name))
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorUri()))
+        .toContain(name)
+    }
+    await expect.poll(() => workbench.getContextKey<boolean>('canGoBack')).toBe(true)
+    const activeUri = () => page.evaluate(() => window.__E2E__!.getActiveEditorUri())
+    const editorFocused = () => workbench.getContextKey<boolean>('editorTextFocus')
+
+    await test.step('idle Esc in the Explorer returns to the editor', async () => {
+      await focusExplorerTree(page, 'folder')
+      await page.keyboard.press('Escape')
+      await expect.poll(editorFocused).toBe(true)
+      await expect.poll(activeUri).toContain('beta.txt')
+    })
+
+    await test.step('<leader>w l moves right from the side bar into the editor', async () => {
+      await focusExplorerTree(page, 'folder')
+      await page.keyboard.press('Space')
+      await page.keyboard.press('w')
+      await page.keyboard.press('l')
+      await expect.poll(editorFocused).toBe(true)
+    })
+
+    await test.step('Ctrl+O jumps back from the Explorer instead of opening a file', async () => {
+      await focusExplorerTree(page, 'folder')
+      await page.keyboard.press('Control+o')
+      await expect.poll(activeUri).toContain('alpha.txt')
+      await expect.poll(editorFocused).toBe(true)
+      await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
+    })
+
+    await test.step('Ctrl+I in the editor jumps forward again', async () => {
+      await page.keyboard.press('Control+i')
+      await expect.poll(activeUri).toContain('beta.txt')
+    })
   })
 
   test('editor Normal mode <leader>O opens the workbench symbol picker', async ({

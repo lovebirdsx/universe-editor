@@ -37,7 +37,13 @@ import { affectsBridgedEditorOption } from '../monaco/editorOptionsFromConfig.js
 import { createVimEdits, visualStartPosition } from './vimEdits.js'
 import { releaseInputMethod, requestInputMethod } from './vimInputMethod.js'
 import { consumeEvent, isImeKeyEvent, toVimKeyInput } from './vimKeyUtils.js'
-import { formatPendingKeys, idle, isAwaitingCharArg, reduceVimKey } from './vimKeymap.js'
+import {
+  effectiveCount,
+  formatPendingKeys,
+  idle,
+  isAwaitingCharArg,
+  reduceVimKey,
+} from './vimKeymap.js'
 import { computeVimPendingHint } from './vimPendingHints.js'
 import { clampNormalPosition } from './vimMotions.js'
 import { getVimRegister, isVimClipboardRegister, type VimRegisterContent } from './vimRegisters.js'
@@ -95,6 +101,8 @@ export interface IVimEditorController extends IDisposable {
   handleKeyDown(event: KeyboardEvent): boolean
   /** The next key is consumed as the argument of `f`/`t`/`r`/`"`/`i`/`a` (a leader key must not steal it). */
   isAwaitingCharArg(): boolean
+  /** Count typed before a workbench chord the engine takes over; undefined keeps the stroke in the core. */
+  takeCount(): number | undefined
   /** Which-key candidates for the core's pending prefix; undefined while Insert or idle. */
   getPendingHint(): IVimPendingHint | undefined
 }
@@ -979,6 +987,18 @@ export function createVimEditorController(
     return true
   }
 
+  /** A mapped workbench chord (`Ctrl+O`) is leaving for the engine: hand over the count. */
+  function takeCount(): number | undefined {
+    if (!active() || !textFocused || state.mode === 'insert') return undefined
+    dropStaleVisual()
+    if (state.mode !== 'normal') return undefined
+    // Like a core command, the chord ends any half-typed operator / prefix.
+    const count = effectiveCount(state)
+    state = idle(state)
+    reportPending()
+    return count
+  }
+
   /** Back to a pristine Normal state: nothing in flight, no selection, no search UI. */
   function deactivate(): void {
     if (state.mode === 'insert') editor.trigger('vim', 'hideSuggestWidget', null)
@@ -1066,6 +1086,7 @@ export function createVimEditorController(
     hasTextFocus: () => textFocused,
     handleKeyDown,
     isAwaitingCharArg: () => active() && textFocused && isAwaitingCharArg(state),
+    takeCount,
     getPendingHint,
     dispose: () => {
       if (disposed) return

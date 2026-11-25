@@ -34,6 +34,24 @@ function commandFor(kind: VimSurfaceKind, keys: readonly string[]): string | und
 }
 
 describe('VIM_APP_KEYMAP', () => {
+  it('jumps through the navigation history with Ctrl+O / Ctrl+I on every Normal surface', () => {
+    for (const kind of [
+      'editor',
+      'list',
+      'reader',
+      'tabs',
+      'activityBar',
+      'viewContainerTabs',
+      'terminal',
+    ] as const) {
+      expect(commandFor(kind, ['ctrl+o']), kind).toBe('workbench.action.goBack')
+      expect(commandFor(kind, ['ctrl+i']), kind).toBe('workbench.action.goForward')
+    }
+    // Menus and overlays are transient pickers: a history jump there is never meant.
+    expect(commandFor('menu', ['ctrl+o'])).toBeUndefined()
+    expect(commandFor('overlay', ['ctrl+i'])).toBeUndefined()
+  })
+
   it('chat-only i/a/e/j/k map to the existing agent commands while acpChatFocused', () => {
     const expectations: ReadonlyArray<readonly [string, string]> = [
       ['i', 'workbench.action.agent.focusInput'],
@@ -140,8 +158,8 @@ describe('VIM_APP_KEYMAP', () => {
     expect(commandFor('editor', ['<leader>', 'w', 'L'])).toBe(
       'workbench.action.moveEditorToRightGroup',
     )
-    // Case-sensitive tokens: lowercase still focuses, uppercase moves.
-    expect(commandFor('editor', ['<leader>', 'w', 'h'])).toBe('workbench.action.focusLeftGroup')
+    // Case-sensitive tokens: lowercase moves focus (groups, then parts), uppercase moves the tab.
+    expect(commandFor('editor', ['<leader>', 'w', 'h'])).toBe('workbench.action.navigateLeft')
     // Leader entries are not editor-only: a focused list moves the active tab too.
     expect(commandFor('list', ['<leader>', 'w', 'H'])).toBe(
       'workbench.action.moveEditorToLeftGroup',

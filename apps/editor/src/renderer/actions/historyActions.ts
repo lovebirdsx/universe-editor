@@ -107,6 +107,22 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
   }).then(() => history.settleNavigation(entry.resource))
 }
 
+/** Vim's `3<C-o>`: step `count` entries, then open only where the walk ended. */
+function stepHistory(
+  step: () => IHistoryEntry | undefined,
+  args: unknown,
+): IHistoryEntry | undefined {
+  const raw = (args as { count?: unknown } | undefined)?.count
+  const count = typeof raw === 'number' && raw > 1 ? Math.floor(raw) : 1
+  let entry: IHistoryEntry | undefined
+  for (let index = 0; index < count; index++) {
+    const next = step()
+    if (next === undefined) break
+    entry = next
+  }
+  return entry
+}
+
 export class GoBackAction extends Action2 {
   static readonly ID = 'workbench.action.goBack'
   constructor() {
@@ -119,9 +135,9 @@ export class GoBackAction extends Action2 {
       f1: true,
     })
   }
-  override async run(accessor: ServicesAccessor): Promise<void> {
+  override async run(accessor: ServicesAccessor, args?: unknown): Promise<void> {
     const history = accessor.get(IHistoryService)
-    const entry = history.goBack()
+    const entry = stepHistory(() => history.goBack(), args)
     if (!entry) return
     await navigateTo(accessor, entry)
   }
@@ -139,9 +155,9 @@ export class GoForwardAction extends Action2 {
       f1: true,
     })
   }
-  override async run(accessor: ServicesAccessor): Promise<void> {
+  override async run(accessor: ServicesAccessor, args?: unknown): Promise<void> {
     const history = accessor.get(IHistoryService)
-    const entry = history.goForward()
+    const entry = stepHistory(() => history.goForward(), args)
     if (!entry) return
     await navigateTo(accessor, entry)
   }

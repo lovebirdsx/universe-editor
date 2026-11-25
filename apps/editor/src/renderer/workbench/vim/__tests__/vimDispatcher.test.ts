@@ -987,6 +987,81 @@ describe('VimDispatcher editor strokes', () => {
   })
 })
 
+describe('VimDispatcher workbench-wide modifier chords', () => {
+  const navKeymap: readonly IVimKeymapEntry[] = [
+    {
+      id: 'nav.back',
+      keys: ['ctrl+o'],
+      command: 'workbench.action.goBack',
+      surfaces: ['editor', 'list'],
+    },
+    { id: 'bare', keys: ['Q'], command: 'never.run', surfaces: ['editor'] },
+  ]
+  const ctrlO = () => press('o', { ctrlKey: true })
+
+  it('runs a mapped chord on the editor through the keymap, not the core', () => {
+    const handleStroke = vi.fn(() => true)
+    editorSurface({ handleStroke })
+    const vim = createVim({ getEffectiveKeymap: () => navKeymap })
+    const { dispatcher, commands } = createDispatcher({ vim })
+
+    expect(dispatcher.handleKeyDown(doc, ctrlO())).toBe(true)
+    expect(commands).toHaveBeenCalledWith('workbench.action.goBack', { count: 1 })
+    expect(handleStroke).not.toHaveBeenCalled()
+  })
+
+  it('carries the count typed into the editor core', () => {
+    const takeCount = vi.fn(() => 3)
+    editorSurface({ handleStroke: () => true, takeCount })
+    const vim = createVim({ getEffectiveKeymap: () => navKeymap })
+    const { dispatcher, commands } = createDispatcher({ vim })
+
+    dispatcher.handleKeyDown(doc, ctrlO())
+    expect(takeCount).toHaveBeenCalledTimes(1)
+    expect(commands).toHaveBeenCalledWith('workbench.action.goBack', {
+      count: 3,
+      hasCount: true,
+    })
+  })
+
+  it('leaves the chord to the core while it is busy or waiting for a character', () => {
+    for (const actions of [
+      { takeCount: () => undefined },
+      { isAwaitingCharArg: () => true, takeCount: () => 0 },
+    ]) {
+      const handleStroke = vi.fn(() => true)
+      editorSurface({ handleStroke, ...actions })
+      const vim = createVim({ getEffectiveKeymap: () => navKeymap })
+      const { dispatcher, commands } = createDispatcher({ vim })
+      expect(dispatcher.handleKeyDown(doc, ctrlO())).toBe(true)
+      expect(handleStroke).toHaveBeenCalledTimes(1)
+      expect(commands).not.toHaveBeenCalled()
+      __resetVimSurfacesForTests()
+      doc.body.innerHTML = ''
+    }
+  })
+
+  it('never routes a bare key away from the editor core', () => {
+    const handleStroke = vi.fn(() => true)
+    editorSurface({ handleStroke })
+    const vim = createVim({ getEffectiveKeymap: () => navKeymap })
+    const { dispatcher, commands } = createDispatcher({ vim })
+    dispatcher.handleKeyDown(doc, press('Q', { shiftKey: true }))
+    expect(handleStroke).toHaveBeenCalledTimes(1)
+    expect(commands).not.toHaveBeenCalled()
+  })
+
+  it('runs the same chord on a list instead of passing it to the global Open File', () => {
+    const el = element()
+    registerVimSurface(surface('list', el), doc)
+    el.focus()
+    const vim = createVim({ getEffectiveKeymap: () => navKeymap })
+    const { dispatcher, commands } = createDispatcher({ vim })
+    expect(dispatcher.handleKeyDown(doc, ctrlO())).toBe(true)
+    expect(commands).toHaveBeenCalledWith('workbench.action.goBack', { count: 1 })
+  })
+})
+
 describe('VimDispatcher editor which-key', () => {
   function editorWithHint(hint: () => IVimPendingHint | undefined) {
     const handleStroke = vi.fn(() => true)

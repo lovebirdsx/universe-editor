@@ -30,7 +30,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 
 | 文件 | 职责 |
 | --- | --- |
-| `services/vim/vimAppKeymap.ts` | **应用键位表**：leader 链（含 `<leader>?` 速查表、`<leader>w` 的 `h/j/k/l` 组聚焦、`H/J/K/L` 标签迁移、`s/v` 拆分、`c` 关闭组）、编辑器 leader 别名（`surfaces: ['editor']`）、终端 Normal、Chat 时间线（`when: acpChatFocused`）、对比编辑器 `]c`/`[c`。键位的命令 id 一律写这里或 workbench-ui 通用表 |
+| `services/vim/vimAppKeymap.ts` | **应用键位表**：全局导航（`Ctrl+O/I` → `goBack/goForward`，`surfaces` 含 `editor` 在内的全部 Normal surface，菜单 / 浮层除外）、leader 链（含 `<leader>?` 速查表、`<leader>w` 的 `h/j/k/l` 走 `workbench.action.navigate*`：先组间、到边缘再跨 part、`H/J/K/L` 标签迁移、`s/v` 拆分、`c` 关闭组）、编辑器 leader 别名（`surfaces: ['editor']`）、终端 Normal、Chat 时间线（`when: acpChatFocused`）、对比编辑器 `]c`/`[c`。键位的命令 id 一律写这里或 workbench-ui 通用表 |
 | `services/vim/vimSurfaceKeymaps.ts` | 只有某个视图自己认的键（设置页 / 快捷键编辑器 / Git 与 Perforce 图谱的 `/`），配合 `useVimSurfaceKeymap`；同时是 `vim.keymap` 校验用的「已知内置 id」目录 |
 | `services/vim/vimKeymapMerge.ts` | 纯函数：`parseUserKeymap`（解析 + 校验 `vim.keymap`）、`mergeVimKeymap`（通用表 + 应用表 + surface 自带 + 用户覆盖 / 追加 / 解绑 → 某 kind 的有效键位） |
 | `services/vim/vimModeService.ts` | 配置读取、per-surface 模式记忆、编辑器 Visual 子模式、context key（`vim*`）、状态栏条目（模式文字 + pending / Unsupported 反馈）、有效 keymap 缓存、保留集、which-key 状态 |
@@ -57,7 +57,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | 文件 | 职责 |
 | --- | --- |
 | `vimTypes.ts` | `VimState` / `VimCommand`（判别联合）/ `VimMotion` / `VimOperator` / `VimTextObjectId` / `VimPending` / `VimVisualAction`、`VimEditor` 结构接口；文件头列出所有扩展点 |
-| `vimKeymap.ts` | reducer `reduceVimKey`：Normal / Visual / Insert 一击一状态。表驱动：`PREFIX_TABLES` / `PREFIX_STARTERS`（`g z [ ]` 第二键）、`SIMPLE_COMMANDS`（单键命令）、`CTRL_COMMANDS`（`Ctrl+R/O/I`）；motion / operator / 文本对象 / Visual 键各查自己的注册表。`formatPendingKeys` 给状态栏 |
+| `vimKeymap.ts` | reducer `reduceVimKey`：Normal / Visual / Insert 一击一状态。表驱动：`PREFIX_TABLES` / `PREFIX_STARTERS`（`g z [ ]` 第二键）、`SIMPLE_COMMANDS`（单键命令）、`CTRL_COMMANDS`（`Ctrl+R`；工作台级的 `Ctrl+O/I` 在应用键位表里）；motion / operator / 文本对象 / Visual 键各查自己的注册表。`formatPendingKeys` 给状态栏 |
 | `vimMotions.ts` | **`VIM_MOTIONS`**：每个 motion 一条 `{ id, keys, kind, resolve, resolveForOperator?, needsChar? }`；含 `f/F/t/T/;/,`、`%`、`N%`、`cw`=`ce` 特例 |
 | `vimWordMotions.ts` | 词类（keyword / 标点 / 空白 / CJK 成词）与 `w/b/e` 的行走 |
 | `vimOperators.ts` | **`VIM_OPERATORS`**：`d y c > < g~ gu gU`（`prefix: 'g'` 的经 `g` 前缀表到达）；范围推导（linewise / inclusive / exclusive、o_v 规则、EOF 删行）；`VimOperatorHost` 只描述效果，不碰 Monaco |
@@ -100,7 +100,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 10. 非 editor / terminal 的 surface：焦点在可编辑元素上 → 放行（搜索框、行内输入框保留按键）。
 11. `[data-renderer-dialog]` 存在 → 放行（这个查询每个 Normal 击键都跑，所以放在已确认要出手之后）。
 12. **User 让行**：非保留键、且**没有待定序列**时，`KeybindingsRegistry.hasBindingAtOrAbove(key, KeybindingWeight.User, ctx)` 为真 → 放行，并写 trace。待定序列中的第二击不让行，否则引擎会一直 pending。
-13. 编辑器：`token === leader` 或该 surface 已有待定序列 → 共享序列引擎（`dispatchEditorSequence`，引擎对未匹配的 token 返回 false 交回内核）；其余 Normal 键交给 `handleStroke`。
+13. 编辑器：`token === leader`、该 surface 已有待定序列、或 token 是编辑器可见的**修饰键条目**首键（`Ctrl+O`）→ 共享序列引擎（`dispatchEditorSequence`，引擎对未匹配的 token 返回 false 交回内核）；其余 Normal 键交给 `handleStroke`。修饰键条目先经 `actions.takeCount()` 取走内核已敲的计数（`3<C-o>`，喂成引擎计数）；返回 undefined（Visual / Insert / 无文本焦点）则仍交内核。`isAwaitingCharArg` 为真时三者都不截。
 14. 其它 surface：`setEntries(getEffectiveKeymap(kind, active.keymap))` 后喂 token → `cancel` / `pending` / `execute` / `none`。`pending` 时更新状态栏 pending 文字、安排 which-key；`execute` 时 `runMatches`，若 `replay` 则同一 token 再喂一次；`none` 时按 `vim.passThroughUnmappedKeys` 与 surface kind 决定吞键（并 `reportUnsupportedKey`）或放行。
 
 步骤 13 / 14 喂给序列引擎的条目先经 `entriesWithActiveWhen` 过滤掉 `when` 不成立的：它们既不会执行，也不会成为 pending 前缀（例如非对比编辑器里的 `]c` 不会让 `]` 进入 pending，`]` 直接交回编辑器内核）。
@@ -146,7 +146,7 @@ useVimSurface({
 
 `registerVimSurface` 是给非 React 调用方的同义入口（如终端实例、`attachVim`）；React 侧一律用 `useVimSurface`，它会通过 ref 读取最新注册，避免每次渲染重注册。
 
-`IVimSurfaceActions` 字段：`move(direction,count)`、`first(count)`、`last(count)`、`page(direction,count)`、`scrollViewport(direction,count)`、`expand/collapse/toggle(count)`、`activate(count,preview)`、`contextMenu/copy/remove(c)`、`next/previous(count)`、`escape(count)`、`find()`（`/` 打开宿主自己的筛选框；树通过 `onVimFind` 暴露，Outline 是范例），以及编辑器专用的 `handleStroke(event)`。
+`IVimSurfaceActions` 字段：`move(direction,count)`、`first(count)`、`last(count)`、`page(direction,count)`、`scrollViewport(direction,count)`、`expand/collapse/toggle(count)`、`activate(count,preview)`、`contextMenu/copy/remove(c)`、`next/previous(count)`、`escape(count)`（返回 `false` 表示没有可退出的状态：侧栏 / 底栏视图里的 `list`（`focusedView` 非空）随后执行 `workbench.action.focusActiveEditorGroup` 回编辑器，未实现 `escape` 同理；返回 void 视为已处理）、`find()`（`/` 打开宿主自己的筛选框；树通过 `onVimFind` 暴露，Outline 是范例），以及编辑器专用的 `handleStroke(event)` / `isAwaitingCharArg()` / `takeCount()` / `getPendingHint()`。
 
 **count 语义（全 surface 统一）**：`first(count)` / `last(count)` 的 `count` 为 0 表示没敲数字（`gg` = 首项、`G` = 末项），`n ≥ 1` 表示跳第 n 项（1 基、夹到范围内）：`3G` / `3gg` 都是第 3 项，`1G` 是首项。`vimSurfaceActions` 靠 dispatcher 额外传的 `hasCount` 区分「没敲」与「敲了 1」，直接调命令不带 `hasCount` 时只有 count > 1 才算敲了。新 surface 用 `createIndexListVimActions` / `createStripVimActions` 就自动遵守，不要手写。
 
@@ -173,7 +173,7 @@ useVimSurface({
 
 - `keys` 是 **Vim token**，由 `vimKeyToken()` 生成：可打印键保留大小写（`g` 与 `G`），特殊键转小写名（`escape` / `enter` / `space` / `up` / `pagedown`…），带修饰键时按 `ctrl+alt+meta+shift+key` 顺序拼，且 key 小写（`ctrl+d`，不是 `Ctrl+D` / `shift+g`）。不要用 keybindings.json 的写法。`describeInvalidVimToken` 会把写错的 token 报出来。
 - 多段 token 即序列：`['g','g']`、`['<leader>','e']`。`<leader>` 在 `mergeVimKeymap` 里替换为 `vim.leader`（默认 `space`）。`vim.leader` 先过 `normalizeLeader`：`Space` / `<space>` / 单个空格都归一为 `space`，多字符 token 转小写，不合法的值（空串、`<leader>` 自身、`describeInvalidVimToken` 不通过）回退默认并 `console.warn`。
-- `surfaces` 省略时：非编辑器 kind 全部可见；编辑器**只**可见以 `<leader>`（或已替换的 leader）开头的条目。`scope: 'surface'` 的条目无视 `surfaces`。
+- `surfaces` 省略时：非编辑器 kind 全部可见；编辑器**只**可见以 `<leader>`（或已替换的 leader）开头的条目。显式列出 `editor` 时，leader 或**修饰键**（`ctrl+`/`alt+`/`meta+`）开头的条目对编辑器可见，裸键条目不可见（裸键归内核，`entryAppliesTo` 过滤）。跨 surface 同义的键（`Ctrl+O/I`）就这样只写一份。`scope: 'surface'` 的条目无视 `surfaces`。
 - **有效键位 = 合并结果**（`vimModeService.getEffectiveKeymap(kind, surfaceKeymap)`，按 `(kind, leader, configVersion)` 缓存，surface 自带键位另按数组引用缓存）：
   1. surface 自带条目（`scope: 'surface'`，排最前；用户 `vim.keymap` 可按 `id` 覆盖或解绑它们，覆盖只在该 surface 活跃时生效——`mergeVimKeymap` 的 `surfaceCatalog` 参数让「全字段覆盖」不被误认成新增）；
   2. workbench-ui 通用表 + `vimAppKeymap`；
@@ -185,7 +185,7 @@ useVimSurface({
 - 序列引擎接受 `1`–`9` 起头的计数、`0` 续接计数；`Esc` 取消待定状态。`z` 等「既完整又是更长前缀」的键延迟到下一击或 `vim.sequenceTimeoutMs` 超时再执行。
 - **三段及以上的歧义序列**：`a` / `ab` / `abc` 同时存在时，引擎只保留**最近一层**的完整匹配作为超时回退。依次按 `a`、`b` 后停在 `ab`：此时超时（或下一个不延续前缀的键）执行 **`ab` 的命令**；若继续按 `c` 则执行 `abc`。更早的 `a` 不会在超时后补发——待定分支始终是当前最长前缀，回退目标是这条分支上最后一个既完整又是前缀的条目。
 - `runMatches` 先试 surface 自带条目，再试带 `when` 的，最后默认条目，取第一条 `when` 成立的；因此同一键的「视图专用含义」不会被注册顺序遮蔽。所有候选都不匹配时**消费但不执行**，并提示 `Unsupported`。
-- 编辑器内核的裸键（`g` / `[` / `]` / `z` 前缀、`d y c > <` 与 `g~ gu gU` operator、文本对象、`f/t/r/"`、`.`、`v V Ctrl+V`、`K` `%` `*` `#` `H/M/L` 等）由 `vimKeymap.ts` 的 reducer 直接产出，不进 keymap 表；因此 `vim.keymap` 对编辑器只能覆盖 / 追加 leader 序列。Monaco 动作走 `editor.trigger`，workbench 命令（`]c` / `[c` / `Ctrl+O` / `Ctrl+I` / 空闲 `Esc`）走 `createVimEditorController` 的 `executeCommand` 回调（`FileEditor` / `DiffEditor` 注入 `ICommandService`）。
+- 编辑器内核的裸键（`g` / `[` / `]` / `z` 前缀、`d y c > <` 与 `g~ gu gU` operator、文本对象、`f/t/r/"`、`.`、`v V Ctrl+V`、`K` `%` `*` `#` `H/M/L` 等）由 `vimKeymap.ts` 的 reducer 直接产出，不进 keymap 表；因此 `vim.keymap` 对编辑器只能覆盖 / 追加 leader 序列。Monaco 动作走 `editor.trigger`，workbench 命令（`]c` / `[c` / 空闲 `Esc`）走 `createVimEditorController` 的 `executeCommand` 回调（`FileEditor` / `DiffEditor` 注入 `ICommandService`）。
 - **`]c` / `[c` 在列表 surface 上也生效**：焦点在 Explorer / Commit Changes 等列表中、且活动编辑器是对比编辑器时，`vimAppKeymap.ts` 的 `list.nextChange` / `list.previousChange` 把序列路由到 `workbench.action.compareEditor.*Change`（`when: textCompareEditorVisible`）。命令只移动 diff 光标与视口、不抢焦点，所以可以从列表里连续预览上下一个改动。
 
 ## 编辑器 Vim 内核
@@ -412,7 +412,8 @@ e2e 通过 `window.__E2E__.runCommand('_workbench.updateConfiguration', 'vim.ena
 - **模式是内存态**：重启不保留；不要把它当用户设置持久化。
 - **编辑器内核命令分两路**：Monaco action（`editor.action.*`）用 `editor.trigger`；workbench 命令（`workbench.action.*`，如 `]c` / `[c`、`Ctrl+O`）必须走注入的 `executeCommand` 回调。把 workbench 命令塞给 `editor.trigger` 会静默 no-op。
 - **内核键位说明是派生的**：别在速查表里手抄键位；加 motion / operator / 文本对象 / 前缀项 / Visual 键时说明自动生成，漏的是 `vim.keyHelp.*` 翻译（测试会提示）。
-- **Normal 抢了 Ctrl 组合**：编辑器 Normal 下 `Ctrl+V`（块选择，不再粘贴）、`Ctrl+R`（重做）、`Ctrl+O` / `Ctrl+I`（导航后退 / 前进）、`Ctrl+E/Y/D/U/F/B` 都归 Vim；它们都不是 User 绑定，所以不会让行。想保留工作台含义的用户用 `vim.keymap` 无法覆盖（编辑器内核键位不进键位表），只能 `vim.surfaces.editor=false` 或回 Insert。
+- **Normal 抢了 Ctrl 组合**：编辑器 Normal 下 `Ctrl+V`（块选择，不再粘贴）、`Ctrl+R`（重做）、`Ctrl+E/Y/D/U/F/B` 都归内核，`vim.keymap` 无法覆盖，只能 `vim.surfaces.editor=false` 或回 Insert；但用户可以写 `surfaces: ['editor']` 的同键修饰键条目，它会先于内核被引擎截走。`Ctrl+O` / `Ctrl+I` 在键位表里（`nav.back` / `nav.forward`），所有 Normal surface 同义、可改绑；它们会遮住列表上的全局 `Ctrl+O`（打开文件），editable 控件里不受影响。
+- **新增「到处都该生效」的键写进键位表**，不要再写进编辑器内核：内核私有键在其它 surface 落空后会掉到全局默认键（`Ctrl+O` 曾在 Explorer 里弹出打开文件对话框）。
 - **多窗口**：provider 按 Document 隔离，`Workbench.tsx` 与 `AuxiliaryWindowHost.tsx` 各装一份 `useVimDispatcher`；新增窗口宿主也要装。
 
 ## 相关

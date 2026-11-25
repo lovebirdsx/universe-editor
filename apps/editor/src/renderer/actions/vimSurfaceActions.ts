@@ -9,12 +9,16 @@
 
 import {
   Action2,
+  ICommandService,
+  IContextKeyService,
   localize2,
   type IAction2Options,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { getActiveVimSurface, type IVimSurfaceActions } from '@universe-editor/workbench-ui'
 import { getActiveWorkbenchDocument } from '../services/windows/workbenchDocuments.js'
+
+const FOCUS_ACTIVE_EDITOR_GROUP = 'workbench.action.focusActiveEditorGroup'
 
 type Invoke = (actions: IVimSurfaceActions, count: number, hasCount: boolean) => void
 
@@ -240,12 +244,26 @@ export class SurfacePreviousAction extends VimSurfaceCommandAction {
   }
 }
 
-export class SurfaceEscapeAction extends VimSurfaceCommandAction {
+export class SurfaceEscapeAction extends Action2 {
   static readonly ID = 'surface.escape'
   constructor() {
-    super(options(SurfaceEscapeAction.ID, 'Escape Surface'), (actions, count) =>
-      actions.escape?.(count),
-    )
+    super(options(SurfaceEscapeAction.ID, 'Escape Surface'))
+  }
+
+  override run(accessor: ServicesAccessor, ...args: unknown[]): void {
+    const active = getActiveVimSurface(getActiveWorkbenchDocument())
+    if (active === undefined) {
+      console.debug(`[vim] ${SurfaceEscapeAction.ID}: no active surface`)
+      return
+    }
+    const { kind, actions } = active.surface
+    const escaped = actions.escape?.(readCount(args[0]))
+    // Vim's list Esc used to swallow the workbench's own "Esc leaves the view":
+    // once there is nothing left to escape, a side bar / panel list returns to
+    // the editor. Lists hosted in the editor area are not views and stay put.
+    if (kind !== 'list' || (actions.escape !== undefined && escaped !== false)) return
+    if (!accessor.get(IContextKeyService).get('focusedView')) return
+    void accessor.get(ICommandService).executeCommand(FOCUS_ACTIVE_EDITOR_GROUP)
   }
 }
 

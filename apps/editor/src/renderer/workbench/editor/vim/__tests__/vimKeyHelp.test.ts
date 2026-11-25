@@ -55,8 +55,8 @@ describe('getVimEditorKeyHelp', () => {
     expect(clashes).toEqual([])
   })
 
-  it('lists scrolling, jumps and gv exactly once, and the numbered registers', () => {
-    for (const keys of ['Ctrl+E', 'Ctrl+Y', 'Ctrl+O', 'Ctrl+I', 'gv']) {
+  it('lists scrolling and gv exactly once, and the numbered registers', () => {
+    for (const keys of ['Ctrl+E', 'Ctrl+Y', 'gv']) {
       expect(
         rows.filter((row) => row.keys === keys),
         keys,

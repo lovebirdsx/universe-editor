@@ -788,7 +788,7 @@ describe('TreeModel', () => {
       model.setSelection(['a'], 'a')
       model.navigate('down', true)
       model.navigate('down', true) // [a, b, c], focus c
-      model.collapseSelectionToFocus()
+      expect(model.collapseSelectionToFocus()).toBe(true)
       expect(model.selection).toEqual(['c'])
       expect(model.focused).toBe('c')
       model.extendSelectionTo('d')
@@ -806,7 +806,7 @@ describe('TreeModel', () => {
     it('collapseSelectionToFocus is a no-op for a single row', () => {
       const model = flat()
       model.setSelection(['b'], 'b')
-      model.collapseSelectionToFocus()
+      expect(model.collapseSelectionToFocus()).toBe(false)
       expect(model.selection).toEqual(['b'])
       expect(model.focused).toBe('b')
     })
