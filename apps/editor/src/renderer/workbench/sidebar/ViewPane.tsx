@@ -4,11 +4,13 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useViewScopedContextKey } from '../viewContainerHeader/useViewScopedContextKey.js'
 import { VIEW_DRAG_MIME, dragContainsView, viewDragData } from '../dnd/viewDragData.js'
+import { resolveIcon } from '../icons/icon-map.js'
 import styles from './ViewPane.module.css'
 
 interface ViewPaneProps {
   viewId: string
   title: string
+  icon?: string | undefined
   children: ReactNode
   open: boolean
   onToggle: () => void
@@ -20,6 +22,7 @@ interface ViewPaneProps {
 export function ViewPane({
   viewId,
   title,
+  icon,
   children,
   open,
   onToggle,
@@ -29,6 +32,7 @@ export function ViewPane({
 }: ViewPaneProps) {
   const ctx = useViewScopedContextKey(viewId)
   const Toolbar = toolbar
+  const Icon = resolveIcon(icon)
   const [dragging, setDragging] = useState(false)
   const [dropEdge, setDropEdge] = useState<'before' | 'after' | undefined>(undefined)
 
@@ -111,6 +115,9 @@ export function ViewPane({
               aria-hidden="true"
             />
           )}
+          {Icon ? (
+            <Icon size={16} strokeWidth={1.6} className={styles['viewIcon']} aria-hidden="true" />
+          ) : null}
           <span className={styles['title']}>{title}</span>
         </button>
         <div className={styles['headerActions']}>

@@ -19,7 +19,10 @@ export interface TimelineItem {
   readonly tooltip?: string
   /** Epoch milliseconds; rows sort newest-first across all providers. */
   readonly timestamp: number
-  /** Codicon id rendered before the label (e.g. `git-commit`). */
+  /**
+   * Any registered codicon id (`$(id)` or bare, optional `~modifier`) rendered
+   * before the label (e.g. `git-commit`); unknown ids render nothing.
+   */
   readonly themeIcon?: string
   /** Run when the row is clicked (typically opens a comparison). */
   readonly command?: Command

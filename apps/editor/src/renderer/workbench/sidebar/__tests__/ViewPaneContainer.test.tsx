@@ -32,14 +32,16 @@ vi.mock('../../paneComposite/PaneCompositeHeader.js', () => ({
 vi.mock('../ViewPane.js', () => ({
   ViewPane: ({
     title,
+    icon,
     children,
     open,
   }: {
     title: string
+    icon?: string | undefined
     children: React.ReactNode
     open: boolean
   }) => (
-    <div data-testid={`view-pane-${title}`} data-open={open}>
+    <div data-testid={`view-pane-${title}`} data-open={open} data-icon={icon}>
       {children}
     </div>
   ),
@@ -136,6 +138,7 @@ describe('ViewPaneContainer', () => {
           containerId: CONTAINER_ID,
           componentKey: `test.component.${id}`,
           order: index,
+          ...(id === 'test.view.a' ? { icon: 'folder' } : {}),
         }),
       )
       disposables.push(
@@ -147,6 +150,12 @@ describe('ViewPaneContainer', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     while (disposables.length) disposables.pop()?.dispose()
+  })
+
+  it('passes each view icon to its pane header', () => {
+    renderSideBar()
+    expect(screen.getByTestId('view-pane-test.view.a').getAttribute('data-icon')).toBe('folder')
+    expect(screen.getByTestId('view-pane-test.view.b').getAttribute('data-icon')).toBeNull()
   })
 
   it('collapses to the header and hands freed space to the open pane, keeping the collapsed pane’s stored size', () => {

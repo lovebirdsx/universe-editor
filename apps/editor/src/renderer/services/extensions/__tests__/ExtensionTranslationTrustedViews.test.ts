@@ -133,6 +133,22 @@ describe('ExtensionPointTranslator — trusted views', () => {
     })
   })
 
+  it('keeps a modifier when normalizing a trusted view icon', () => {
+    registerExplorerContainer()
+    const { translator } = makeTranslator()
+    disposables.push(translator)
+
+    translator.translate([
+      dto({
+        contributes: {
+          trustedViews: [viewTrustedView({ icon: '$(folder~spin)' })],
+        },
+      }),
+    ])
+
+    expect(ViewRegistry.getView('acme.status')?.icon).toBe('folder~spin')
+  })
+
   it('registers an editor trusted view without a view descriptor', () => {
     const { translator, registrations } = makeTranslator()
     disposables.push(translator)

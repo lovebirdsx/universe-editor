@@ -1,13 +1,15 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Single source of truth for ViewContainer icons. Both the ActivityBar (SideBar
- *  container icons) and the PaneCompositeHeader tabs (Panel / Secondary Side Bar)
- *  resolve container icons here, so a container keeps the same glyph wherever it
- *  is dragged. The string keys are the `icon` identifiers carried by
+ *  Curated ViewContainer icons. Both the ActivityBar (SideBar container icons)
+ *  and the PaneCompositeHeader tabs (Panel / Secondary Side Bar) resolve
+ *  container icons here first, so a container keeps the same glyph wherever it
+ *  is dragged; ids outside this table fall back to the codicon font via
+ *  `resolveIcon`. The string keys are the `icon` identifiers carried by
  *  IViewContainerDescriptor and IViewDescriptor.
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  Activity,
   AppWindow,
   Bug,
   Cloud,
@@ -44,4 +46,9 @@ export const CONTAINER_ICON_MAP: Record<string, LucideIcon> = {
   sparkle: Sparkles,
   window: AppWindow,
   remote: Cloud,
+  // Extension-owned status/health containers; documented in
+  // docs/extension-dev/zh-CN/contribution-points.md as the trusted-view example.
+  // A curated entry keeps `pulse` on Lucide; other codicon ids render from the
+  // codicon font instead.
+  pulse: Activity,
 }

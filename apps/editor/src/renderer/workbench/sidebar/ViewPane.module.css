@@ -66,6 +66,12 @@
   opacity: 0.7;
 }
 
+.viewIcon {
+  flex-shrink: 0;
+  margin-right: 4px;
+  opacity: 0.85;
+}
+
 .body {
   flex: 1;
   overflow: hidden;

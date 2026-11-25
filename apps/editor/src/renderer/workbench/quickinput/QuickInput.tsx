@@ -16,7 +16,7 @@ import {
 } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { getActiveWorkbenchDocument } from '../../services/windows/workbenchDocuments.js'
-import { resolveAgentIcon } from '../agents/agentIcon.js'
+import { resolveAgentIcon, resolveKnownAgentIcon } from '../agents/agentIcon.js'
 import { resolveSessionStatusIcon } from '../agents/sessionStatusIcon.js'
 import { resolveIcon } from '../icons/icon-map.js'
 import { FileIcon } from '../files/fileIconTheme.js'
@@ -29,7 +29,8 @@ import {
 import styles from './QuickInput.module.css'
 
 function resolveFallbackIcon(iconId: string) {
-  return resolveIcon(iconId) ?? resolveAgentIcon(iconId)
+  // Agent marks win over codicon: `claude` / `openai` are real codicon ids too.
+  return resolveKnownAgentIcon(iconId) ?? resolveIcon(iconId) ?? resolveAgentIcon(iconId)
 }
 
 /** Portal that renders Quick Pick / Input Box over the entire workbench. */

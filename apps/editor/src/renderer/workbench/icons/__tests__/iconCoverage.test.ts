@@ -11,7 +11,8 @@
  * into a failure:
  *
  * 1. Every `icon: '<id>'` literal in renderer source resolves — through the
- *    workbench table or the agent-logo table that `renderMenuIcon` chains in.
+ *    workbench resolver (curated Lucide table + codicon font fallback) or the
+ *    agent-logo table that `renderMenuIcon` chains in.
  * 2. Every extension manifest's `contributes.menus[].icon` / `submenus[].icon` /
  *    `commands[].icon` resolves. Command icons count because a menu item without
  *    its own icon inherits the one its command declared
@@ -24,12 +25,14 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { MenuId, MenuRegistry } from '@universe-editor/platform'
+import { codiconLibrary, MenuId, MenuRegistry } from '@universe-editor/platform'
 import { isKnownAgentIcon } from '../../agents/agentIcon.js'
-import { isKnownIcon } from '../icon-map.js'
+import { isKnownCodicon, isKnownIcon } from '../icon-map.js'
+import { parseIconReference } from '../iconReference.js'
 import { EditMenuContribution } from '../../../contributions/EditMenuContribution.js'
 // Side-effect import: registers every Action2, which is what fans `desc.icon`
 // out into the menu slots this file asserts on.
@@ -38,11 +41,20 @@ import '../../../actions/index.js'
 const here = dirname(fileURLToPath(import.meta.url))
 const rendererRoot = join(here, '..', '..', '..')
 const repoRoot = join(rendererRoot, '..', '..', '..', '..')
-const extensionsRoot = join(repoRoot, 'extensions')
+const manifestRoots = [join(repoRoot, 'extensions'), join(repoRoot, 'extensions-external')]
+const e2eSpecsRoot = join(repoRoot, 'apps', 'editor', 'e2e', 'specs')
 
-/** Both tables are chained by `renderMenuIcon`, so either one satisfies an id. */
-function resolves(id: string): boolean {
-  return isKnownIcon(id) || isKnownAgentIcon(id)
+/**
+ * An id is covered when it is a curated Lucide id, an agent logo, or a real
+ * codicon (`$(id)` and `~modifier` are normalized first). Codicon ids count
+ * because `resolveIcon` renders them from the font.
+ */
+function resolves(rawId: string): boolean {
+  const reference = parseIconReference(rawId)
+  if (reference === undefined) return false
+  if (reference.modifier === undefined && isKnownIcon(reference.id)) return true
+  if (reference.modifier === undefined && isKnownAgentIcon(reference.id)) return true
+  return isKnownCodicon(reference.id)
 }
 
 function* walk(dir: string, ext: readonly string[]): Generator<string> {
@@ -72,29 +84,69 @@ describe('icon coverage', () => {
     expect(unknown).toEqual([])
   })
 
-  it('resolves every icon id declared by a built-in extension manifest', () => {
+  it('resolves every icon id declared by an extension manifest', () => {
     const unknown: string[] = []
-    for (const name of readdirSync(extensionsRoot)) {
-      const manifestPath = join(extensionsRoot, name, 'package.json')
-      let raw: string
+    for (const root of manifestRoots) {
+      let names: string[]
       try {
-        raw = readFileSync(manifestPath, 'utf8')
+        names = readdirSync(root)
       } catch {
         continue
       }
-      const contributes = (JSON.parse(raw) as ExtensionManifest).contributes
-      if (!contributes) continue
-      const check = (id: unknown, where: string): void => {
-        if (typeof id === 'string' && !resolves(id)) unknown.push(`${name} ${where}: '${id}'`)
+      for (const name of names) {
+        const manifestPath = join(root, name, 'package.json')
+        let raw: string
+        try {
+          raw = readFileSync(manifestPath, 'utf8')
+        } catch {
+          continue
+        }
+        const contributes = (JSON.parse(raw) as ExtensionManifest).contributes
+        if (!contributes) continue
+        const check = (id: unknown, where: string): void => {
+          if (typeof id === 'string' && !resolves(id)) unknown.push(`${name} ${where}: '${id}'`)
+        }
+        for (const [menuId, items] of Object.entries(contributes.menus ?? {})) {
+          for (const item of items) check(item.icon, `menus.${menuId}`)
+        }
+        for (const submenu of contributes.submenus ?? []) check(submenu.icon, 'submenus')
+        // Inherited by any menu placement of the command that omits its own icon.
+        for (const command of contributes.commands ?? []) check(command.icon, 'commands')
+        for (const container of contributes.viewsContainers?.activitybar ?? []) {
+          check(container.icon, 'viewsContainers.activitybar')
+        }
+        for (const [containerId, views] of Object.entries(contributes.views ?? {})) {
+          for (const view of views) check(view.icon, `views.${containerId}`)
+        }
+        for (const view of contributes.trustedViews ?? []) check(view.icon, 'trustedViews')
       }
-      for (const [menuId, items] of Object.entries(contributes.menus ?? {})) {
-        for (const item of items) check(item.icon, `menus.${menuId}`)
-      }
-      for (const submenu of contributes.submenus ?? []) check(submenu.icon, 'submenus')
-      // Inherited by any menu placement of the command that omits its own icon.
-      for (const command of contributes.commands ?? []) check(command.icon, 'commands')
     }
     expect(unknown).toEqual([])
+  })
+
+  it('resolves every icon id used in e2e fixtures', () => {
+    const unknown: string[] = []
+    for (const file of walk(e2eSpecsRoot, ['.ts'])) {
+      const text = readFileSync(file, 'utf8')
+      for (const m of text.matchAll(/\bicon:\s*(?:'([^']+)'|"([^"]+)")/g)) {
+        const id = m[1] ?? m[2]
+        if (id !== undefined && !resolves(id)) {
+          unknown.push(`e2e/${relative(e2eSpecsRoot, file)}: '${id}'`)
+        }
+      }
+    }
+    expect(unknown).toEqual([])
+  })
+
+  it('keeps codiconLibrary in sync with the installed codicon.css', () => {
+    const require = createRequire(import.meta.url)
+    const css = readFileSync(require.resolve('@vscode/codicons/dist/codicon.css'), 'utf8')
+    const ids = new Set(
+      [...css.matchAll(/\.codicon-([a-zA-Z0-9-]+)(?=::?before|,|\s*\{)/g)]
+        .map((m) => m[1])
+        .filter((id): id is string => id !== undefined && !id.startsWith('modifier-')),
+    )
+    expect(ids).toEqual(new Set(Object.keys(codiconLibrary)))
   })
 
   it('keeps the menubar menus icon-free', () => {
@@ -133,5 +185,10 @@ interface ExtensionManifest {
     readonly menus?: Record<string, readonly { readonly icon?: string }[]>
     readonly submenus?: readonly { readonly icon?: string }[]
     readonly commands?: readonly { readonly icon?: string }[]
+    readonly viewsContainers?: {
+      readonly activitybar?: readonly { readonly icon?: string }[]
+    }
+    readonly views?: Record<string, readonly { readonly icon?: string }[]>
+    readonly trustedViews?: readonly { readonly icon?: string }[]
   }
 }

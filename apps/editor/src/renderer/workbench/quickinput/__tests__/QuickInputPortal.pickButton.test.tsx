@@ -23,6 +23,28 @@ import { QuickInputPortal } from '../QuickInput.js'
 import { ServicesContext } from '../../useService.js'
 import { QuickInputService } from '../../../services/quickInput/QuickInputService.js'
 
+// happy-dom has no layout engine, so @tanstack/react-virtual would render zero
+// rows and the icon-precedence assertions below would find no slots.
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: (opts: { count: number; estimateSize: (index: number) => number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: opts.count }, (_, i) => ({
+        index: i,
+        key: i,
+        start: i * opts.estimateSize(i),
+        size: opts.estimateSize(i),
+        lane: 0,
+        end: (i + 1) * opts.estimateSize(i),
+      })),
+    getTotalSize: () =>
+      Array.from({ length: opts.count }, (_, i) => opts.estimateSize(i)).reduce(
+        (total, height) => total + height,
+        0,
+      ),
+    scrollToIndex: vi.fn(),
+  }),
+}))
+
 class FakeStorage implements IStorageServiceType {
   declare readonly _serviceBrand: undefined
   private readonly _map = new Map<string, unknown>()
@@ -74,6 +96,27 @@ describe('QuickInputService.pick toolbar button', () => {
     expect(onDidTriggerButton).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('quick-input-field')).toBeNull()
     await expect(picked).resolves.toBeUndefined()
+  })
+})
+
+describe('QuickInputPortal icon precedence', () => {
+  it('renders the agent mark for an agent icon id', async () => {
+    const svc = renderPortal()
+    await act(async () => {
+      void svc.pick([{ id: 'a', label: 'Alpha', iconId: 'claude' }])
+    })
+    const slot = screen.getAllByTestId('quick-input-item-icon-slot')[0]
+    expect(slot?.querySelector('svg')).not.toBeNull()
+    expect(slot?.querySelector('.codicon-claude')).toBeNull()
+  })
+
+  it('renders any registered codicon outside the curated table', async () => {
+    const svc = renderPortal()
+    await act(async () => {
+      void svc.pick([{ id: 'a', label: 'Alpha', iconId: 'bracket' }])
+    })
+    const slot = screen.getAllByTestId('quick-input-item-icon-slot')[0]
+    expect(slot?.querySelector('.codicon-bracket')).not.toBeNull()
   })
 })
 

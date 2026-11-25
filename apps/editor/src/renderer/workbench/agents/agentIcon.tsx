@@ -65,7 +65,7 @@ const ICON_MAP: Record<string, AgentIconComponent> = {
 
 /** Resolve a string icon id (`'claude'` / `'openai'` / …) to a logo component. */
 export function resolveAgentIcon(iconId: string): AgentIconComponent {
-  return ICON_MAP[iconId] ?? BotLogo
+  return Object.hasOwn(ICON_MAP, iconId) ? ICON_MAP[iconId]! : BotLogo
 }
 
 /**
@@ -75,12 +75,12 @@ export function resolveAgentIcon(iconId: string): AgentIconComponent {
  */
 export function resolveKnownAgentIcon(iconId: string | undefined): AgentIconComponent | undefined {
   if (iconId === undefined) return undefined
-  return ICON_MAP[iconId]
+  return Object.hasOwn(ICON_MAP, iconId) ? ICON_MAP[iconId] : undefined
 }
 
 /** The agent logo ids, for the icon coverage test. */
 export function isKnownAgentIcon(iconId: string): boolean {
-  return iconId in ICON_MAP
+  return Object.hasOwn(ICON_MAP, iconId)
 }
 
 export interface AgentIconByIdProps extends AgentIconProps {

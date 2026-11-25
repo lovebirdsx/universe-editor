@@ -170,9 +170,9 @@ entry.dispose()
 
 要点：**生命周期自己管**：React `useRef`+cleanup、Contribution 字段 / `_hide()` 里 dispose。
 
-## 右键菜单图标：新增菜单项一律写 `icon`
+## 菜单图标
 
-图标 id 经 `workbench/icons/icon-map.ts` 查表——**没有 → 静默不渲染**；`<ContextMenu>`/`<ListMenu>` **必须传 `renderIcon={renderMenuIcon}`**（`menuIcon.tsx`）。⚠️ `registerAction2` 会把 `desc.icon` 撒到其声明的**每一个** menu 槽位——Menubar 命令加图标会整组开启图标列。
+图标解析（优先级/modifier/兜底）见 [workbench/icons](src/renderer/workbench/icons/CLAUDE.md)。`<ContextMenu>`/`<ListMenu>` **必须传 `renderIcon={renderMenuIcon}`**（`menuIcon.tsx`）。⚠️ `registerAction2` 会把 `desc.icon` 撒到其声明的**每一个** menu 槽位——Menubar 命令加图标会整组开启图标列。
 
 ## 套路 F：加一个 E2E 冒烟场景
 

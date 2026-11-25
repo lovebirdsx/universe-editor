@@ -44,7 +44,12 @@ export interface IViewDescriptor {
   /** React component factory; renderer resolves this at render time. */
   readonly componentKey: string
   readonly order: number
-  /** Codicon identifier; a container derives its icon from its first view's icon. */
+  /**
+   * Codicon identifier shown as the view's title icon (multi-view containers).
+   * A container also uses its first view's icon when every visible view was
+   * dragged in from another container; a container holding its own default
+   * views keeps its own icon instead (VSCode `useDefaultContainerInfo`).
+   */
   readonly icon?: string
   /** False ⇒ this view cannot be moved out of its container. Defaults to true. */
   readonly canMoveView?: boolean

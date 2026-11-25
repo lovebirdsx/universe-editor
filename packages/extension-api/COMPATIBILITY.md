@@ -426,6 +426,19 @@ preflight 守护。扩展在自己的 `package.json` 里用 `engines.universe` �
     `context.trustedViews` 后归属由宿主按 manifest 校验。0.x 下按破坏性变更流程
     记录于此。
 
+- `0.26.0`（未发布）— 图标引用补全（向后兼容的新增）：
+  - **新增 `contributes.views[*][].icon`**：视图标题图标。多视图容器的标题栏显示；
+    单视图容器没有标题栏，请改用 `contributes.viewsContainers[].icon`。
+  - **所有扩展可写的 `icon` / `iconPath` / `iconId` 统一接受任意已注册 codicon**：
+    `contributes.commands/menus/submenus/viewsContainers/views/trustedViews`、
+    `TreeItem.iconPath`、Timeline `themeIcon`、QuickPick `iconId`、Chat 上下文
+    `iconId`、SCM 命令 `icon`。`$(id)` 与裸 id 等价，可带 `~modifier`
+    （如 `sync~spin`）。未知 id 按各表面原有兜底（不渲染 / 回退默认字形 / 文件图标）；
+    文件路径图标仍未支持。
+  - **`SourceControlResourceDecorations.iconPath` 生效**：命中已注册 codicon 时替换
+    SCM 资源行的文件类型图标，未命中回退文件图标。
+  - 工作台内置的 Lucide 图标保持不变；产品图标主题只覆盖 codicon 字体渲染的图标。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则

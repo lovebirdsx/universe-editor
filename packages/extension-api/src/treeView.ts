@@ -12,8 +12,9 @@
  *
  * First-cut differences from VSCode: no drag & drop, no checkboxes, no badges,
  * no `TreeView.reveal` (`getParent` is accepted but not consumed), no
- * `TreeView.title`/`description`/`message`, and `TreeItem.iconPath` is a plain
- * codicon id (no file-path or `{ light, dark }` theme icons).
+ * `TreeView.title`/`description`/`message`, and `TreeItem.iconPath` is a
+ * codicon id (`$(id)` or bare, optional `~modifier`) — no file-path or
+ * `{ light, dark }` theme icons.
  */
 import type { Disposable, Event, ProviderResult } from './index.js'
 import type { Command } from './scm.js'
@@ -57,7 +58,10 @@ export class TreeItem {
   command?: Command
   /** Surfaced to `view/item/context` menu `when` clauses as `viewItem`. */
   contextValue?: string
-  /** Codicon id rendered before the label (e.g. `git-commit`). */
+  /**
+   * Any registered codicon id (`$(id)` or bare, optional `~modifier`) rendered
+   * before the label (e.g. `git-commit`); unknown ids render nothing.
+   */
   iconPath?: string
   resourceUri?: Uri
 

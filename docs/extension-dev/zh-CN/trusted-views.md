@@ -52,7 +52,7 @@
 | `location` | 是 | `"view"`（侧栏视图）或 `"editor"`（编辑器标签） |
 | `container` | `view` 必填 | `explorer` / `search` / `scm` / `outline`，或本扩展/其他扩展在 `viewsContainers.activitybar` 声明的容器 id；`editor` 禁止填写 |
 | `entry` | 是 | 相对扩展根、不得逃逸（`..`、绝对路径、盘符均拒），后缀 `.js` / `.mjs`，必须是浏览器目标 ESM |
-| `icon` | 否 | 图标标识 |
+| `icon` | 否 | 视图标题图标：任意已注册 codicon（`$(id)` 或裸 id，可带 `~modifier`）。仅 `location: "view"` 显示为该视图的标题图标；不会替换所在容器/活动栏的图标 |
 | `when` | 否 | 可见性条件，仅 `view` 可用；`editor` 禁止填写 |
 
 字段速查也见 [贡献点参考 · trustedViews](./contribution-points.md#trustedviews)。

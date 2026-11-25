@@ -7,12 +7,15 @@
  *  come from the shared {@link CONTAINER_ICON_MAP}; everything else is defined
  *  below.
  *
- *  Ids follow codicon naming (VSCode parity) even though the glyphs are Lucide.
- *  An unknown id resolves to `undefined` and the caller silently renders nothing,
- *  so a typo is a no-op rather than an error — `__tests__/iconCoverage.test.ts`
- *  is what turns that back into a failure.
+ *  Ids follow codicon naming (VSCode parity). Curated ids below keep their
+ *  Lucide glyphs; any other id registered in `codiconLibrary` falls back to the
+ *  real codicon font, so extensions can use the full codicon vocabulary without
+ *  this table growing to match it. An id in neither place resolves to
+ *  `undefined` and the caller applies its own fallback —
+ *  `__tests__/iconCoverage.test.ts` turns silent typos back into failures.
  *--------------------------------------------------------------------------------------------*/
 
+import { codiconLibrary } from '@universe-editor/platform'
 import {
   Archive,
   ArchiveRestore,
@@ -96,6 +99,9 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { CONTAINER_ICON_MAP } from './containerIcons.js'
+import { getCodiconIcon } from './codiconIcon.js'
+import type { WorkbenchIcon } from './iconComponent.js'
+import { parseIconReference } from './iconReference.js'
 import { VimInsertIcon, VimNormalIcon } from './vimModeIcons.js'
 
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -217,12 +223,26 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'vim-insert': VimInsertIcon,
 }
 
-export function resolveIcon(name: string | undefined): LucideIcon | undefined {
+const CODICON_IDS = new Set(Object.keys(codiconLibrary))
+
+export function resolveIcon(name: string | undefined): WorkbenchIcon | undefined {
   if (!name) return undefined
-  return ICON_MAP[name]
+  const reference = parseIconReference(name)
+  if (reference === undefined) return undefined
+  if (reference.modifier === undefined && Object.hasOwn(ICON_MAP, reference.id)) {
+    return ICON_MAP[reference.id]
+  }
+  if (!CODICON_IDS.has(reference.id)) return undefined
+  return getCodiconIcon(reference.id, reference.modifier)
 }
 
-/** The registered ids, for the coverage test that guards against typos. */
+/** The registered Lucide ids, for the coverage test that guards against typos. */
 export function isKnownIcon(name: string): boolean {
-  return name in ICON_MAP
+  return Object.hasOwn(ICON_MAP, name)
+}
+
+/** True when the id is a real codicon glyph (ignores `$(…)` / `~modifier`). */
+export function isKnownCodicon(name: string): boolean {
+  const reference = parseIconReference(name)
+  return reference !== undefined && CODICON_IDS.has(reference.id)
 }

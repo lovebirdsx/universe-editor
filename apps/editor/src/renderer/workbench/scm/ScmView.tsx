@@ -549,6 +549,7 @@ const ScmFileRow = memo(function ScmFileRow({
         pinned: true,
       })
   }
+  const DecorationIcon = resolveIcon(resource.decorations?.iconPath)
 
   return (
     <li
@@ -565,7 +566,13 @@ const ScmFileRow = memo(function ScmFileRow({
       onContextMenu={onContextMenu}
       {...resourceDragProps(() => selectionDragUris(uri.toString(), getSelectedUris()))}
     >
-      <FileIcon resource={uri} className={styles['fileIcon']} isDirectory={false} size={16} />
+      {DecorationIcon ? (
+        <span className={styles['fileIcon']} style={decorationStyle(resource)}>
+          <DecorationIcon size={16} strokeWidth={1.6} aria-hidden="true" />
+        </span>
+      ) : (
+        <FileIcon resource={uri} className={styles['fileIcon']} isDirectory={false} size={16} />
+      )}
       <span className={styles['resourceLabel']} style={decorationStyle(resource)}>
         {basename(resource.resourceUri)}
       </span>

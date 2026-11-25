@@ -152,7 +152,9 @@ describe('parseManifest', () => {
             activitybar: [{ id: 'myExt.explorer', title: 'My Explorer', icon: '$(files)' }],
           },
           views: {
-            'myExt.explorer': [{ id: 'myExt.nodeDeps', name: 'Node Dependencies' }],
+            'myExt.explorer': [
+              { id: 'myExt.nodeDeps', name: 'Node Dependencies', icon: '$(pulse)' },
+            ],
             explorer: [{ id: 'myExt.extra', name: 'Extra', when: 'resourceExtname == .ts' }],
           },
         },
@@ -161,6 +163,7 @@ describe('parseManifest', () => {
       expect(m.contributes?.views?.['myExt.explorer']?.[0]).toMatchObject({
         id: 'myExt.nodeDeps',
         name: 'Node Dependencies',
+        icon: '$(pulse)',
       })
       expect(m.contributes?.views?.['explorer']?.[0]?.when).toBe('resourceExtname == .ts')
     })

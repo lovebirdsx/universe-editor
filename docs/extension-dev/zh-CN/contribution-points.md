@@ -24,6 +24,8 @@
 | `mcpServers` | 声明式注入 MCP server（stdio），供 AI agent 会话使用 |
 | `trustedViews` | 受信扩展提供的原生 UI 组件（侧栏视图 / 编辑器标签） |
 
+> **图标标识**：扩展可写的 `icon` / `iconPath` / `iconId` 接受任意已注册 codicon——`$(id)` 与裸 id 等价，可带 `~modifier`（如 `sync~spin`）。宿主先查工作台精选 Lucide 表，未命中再用 codicon 字体渲染；未知 id 按各表面原有兜底处理（不渲染 / 默认字形 / 文件图标）。`~modifier` 仅对真实 codicon id 生效，工作台内部精选名（如 `changelist`）加 modifier 可能不渲染。文件路径图标未支持。
+
 **前向兼容**：`contributes` 对象本身是透传（passthrough）校验的——写了宿主不认识的贡献点不会报错，会被静默忽略。这是为了旧宿主能加载新扩展，不是给你试验幻想贡献点的许可证：**只写本文列出的分支**。
 
 ## commands
@@ -35,7 +37,7 @@
 | `command` | string | 是 | 命令 id，如 `my-extension.helloWorld` |
 | `title` | string | 是 | 命令面板/菜单里显示的标题 |
 | `category` | string | 否 | 命令面板里的分类前缀（显示为 `Category: Title`） |
-| `icon` | string | 否 | 图标标识，由宿主解析为具体图标 |
+| `icon` | string | 否 | 图标标识：任意已注册 codicon（`$(id)` 或裸 id，可带 `~modifier`）；未知 id 不渲染 |
 
 ```jsonc
 {
@@ -65,7 +67,7 @@
 | `submenu` | string | 二选一 | 嵌套子菜单的 id（须在 `submenus` 里声明） |
 | `when` | string | 否 | ContextKey 表达式，决定条目何时可见（可用 key 见 [Context Key 清单](./context-keys.md)） |
 | `group` | string | 否 | 分组与排序，支持 `group@order` 形式（如 `navigation@1`） |
-| `icon` | string | 否 | 图标标识 |
+| `icon` | string | 否 | 图标标识：任意已注册 codicon（`$(id)` 或裸 id，可带 `~modifier`）；未知 id 不渲染 |
 
 每个菜单项必须有 `command` 或 `submenu` 之一——都没有则 manifest 校验失败，整个扩展被拒载。
 
@@ -142,7 +144,7 @@
 |---|---|---|---|
 | `id` | string | 是 | 子菜单 id（建议带扩展前缀，如 `my-extension.exportSubmenu`） |
 | `label` | string | 是 | 显示文本 |
-| `icon` | string | 否 | 图标标识 |
+| `icon` | string | 否 | 图标标识：任意已注册 codicon（`$(id)` 或裸 id，可带 `~modifier`）；未知 id 不渲染 |
 
 ```jsonc
 {
@@ -299,7 +301,7 @@
 |---|---|---|---|
 | `id` | string | 是 | 容器 id（建议带扩展前缀，如 `my-extension.explorer`）；`contributes.views` 的 key 引用它 |
 | `title` | string | 是 | 活动栏 hover 与侧栏标题栏显示的名称 |
-| `icon` | string | 是 | codicon 名——`$(files)` 写法自动剥壳，也可直接写 `files`；未知名回退默认字形。文件路径图标未支持 |
+| `icon` | string | 是 | 任意已注册 codicon（`$(id)` 或裸 id，可带 `~modifier`）；未知 id 回退默认字形。文件路径图标未支持（会记 warning） |
 
 ```jsonc
 {
@@ -316,6 +318,7 @@
 行为：
 
 - 扩展容器在活动栏排在全部内置容器之后。
+- 容器图标默认取 `viewsContainers.icon`；当容器里的可见视图全部是从其他容器移入的（宿主生成的临时容器即属此类）时，改用第一个视图的 `icon`。
 - 容器只是壳——里面有哪些视图由 `contributes.views` 声明。
 
 ## views
@@ -334,6 +337,7 @@
 |---|---|---|---|
 | `id` | string | 是 | 视图 id——激活事件锚点 `onView:<id>` 与 API 注册的 `viewId` 都用它 |
 | `name` | string | 是 | 视图标题栏显示的名称 |
+| `icon` | string | 否 | 视图标题图标：任意已注册 codicon（`$(id)` 或裸 id，可带 `~modifier`）。多视图容器的标题栏显示；单视图容器没有标题栏，不显示 |
 | `when` | string | 否 | ContextKey 表达式。求值为 **false** 时视图从容器中消失（若容器因此无任何可见视图，活动栏图标一并隐藏），引用的 context key 变化时实时重算；未填写恒为可见 |
 
 ```jsonc
@@ -408,7 +412,7 @@
 
 ## productIconThemes
 
-贡献产品图标主题（替换 workbench 界面的内置图标）。
+贡献产品图标主题（替换 workbench 界面的内置图标）。只覆盖由 codicon 字体渲染的图标（例如状态栏 `$(icon)`、未命中精选 Lucide 表的扩展图标）；工作台内置的 Lucide 轮廓图标不随产品图标主题变化。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -583,7 +587,7 @@
 | `location` | `"view"` \| `"editor"` | 是 | 挂到侧栏容器，还是作为编辑器标签打开 |
 | `container` | string | `view` 必填 | 归属容器：`explorer` / `search` / `scm` / `outline`，或 `viewsContainers.activitybar` 里声明的容器 id；`editor` 禁止填写 |
 | `entry` | string | 是 | 组件入口，相对扩展根、必须落在扩展目录内、后缀 `.js` / `.mjs` 的浏览器目标 ESM |
-| `icon` | string | 否 | 图标标识 |
+| `icon` | string | 否 | 视图标题图标：任意已注册 codicon（`$(id)` 或裸 id，可带 `~modifier`）；仅 `location: "view"` 显示，不会替换活动栏/容器图标 |
 | `when` | string | 否 | 可见性条件；仅 `view` 可用，`editor` 禁止填写 |
 
 ```jsonc

@@ -438,6 +438,7 @@ export function ViewPaneContainer({
               <ViewPane
                 viewId={v.id}
                 title={v.name}
+                icon={v.icon}
                 open={!isCollapsed}
                 onToggle={() => toggle(v.id)}
                 toolbar={ViewToolbarRegistry.get(v.id)}

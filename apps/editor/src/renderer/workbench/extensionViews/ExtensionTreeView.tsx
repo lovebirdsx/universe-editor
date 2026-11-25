@@ -41,12 +41,13 @@ import {
   type ITreeDataSource,
   type ITreeFocusSource,
 } from '@universe-editor/workbench-ui'
-import { ChevronDown, ChevronRight, type LucideIcon } from 'lucide-react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useOptionalService, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { IExtensionHostClientService } from '../../services/extensions/ExtensionHostClientService.js'
 import { ITreeViewsService } from '../../services/extensions/TreeViewsService.js'
 import { resolveIcon } from '../icons/icon-map.js'
+import type { WorkbenchIcon } from '../icons/iconComponent.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import type { IViewComponentProps } from '../../services/views/ViewComponentRegistry.js'
@@ -252,7 +253,7 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
         ariaLabel={ariaLabel}
         renderRow={(ctx) => {
           const item = ctx.node.element
-          const RowIcon: LucideIcon | undefined = resolveIcon(item.iconId)
+          const RowIcon: WorkbenchIcon | undefined = resolveIcon(item.iconId)
           const className = [
             styles['row'],
             ctx.isSelected && styles['selected'],

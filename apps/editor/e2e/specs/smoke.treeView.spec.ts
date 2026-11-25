@@ -149,6 +149,10 @@ test.describe('@p1 extension tree view', () => {
     // which fires the onView: activation for the extension.
     const containerItem = workbench.page.locator(`[data-testid="activitybar-item-${CONTAINER_ID}"]`)
     await expect(containerItem).toHaveCount(1, { timeout: 15000 })
+    // The manifest names a codicon (`$(folder)`) that is not in the curated
+    // Lucide container table; it must render from the codicon font rather than
+    // falling back to the Explorer glyph.
+    await expect(containerItem.locator('.codicon-folder')).toHaveCount(1)
     await containerItem.click()
 
     // The view mounts and pulls the roots over extHostTreeViews.$getChildren.

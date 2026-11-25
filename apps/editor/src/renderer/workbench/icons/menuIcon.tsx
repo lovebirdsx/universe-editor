@@ -7,9 +7,9 @@
  *  each write its own) is what keeps glyph, size and stroke identical across
  *  the Explorer, editor, SCM, graph and agent menus.
  *
- *  Agent logos are chained in so a row carrying an agent's id (the ids the ACP
- *  registry hands out) resolves too — via the *strict* resolver, so an unrelated
- *  id falls through to "no icon" instead of picking up the generic bot fallback.
+ *  Agent logos are checked first: `claude` / `openai` are also registered
+ *  codicons, and the official marks must win over the generic font glyphs. The
+ *  strict agent resolver keeps an unrelated id from picking up the bot fallback.
  *--------------------------------------------------------------------------------------------*/
 
 import { resolveKnownAgentIcon } from '../agents/agentIcon.js'
@@ -20,8 +20,8 @@ const SIZE = 16
 const STROKE = 1.6
 
 export function renderMenuIcon(icon: string | undefined) {
-  const Glyph = resolveIcon(icon)
-  if (Glyph) return <Glyph size={SIZE} strokeWidth={STROKE} />
   const AgentGlyph = resolveKnownAgentIcon(icon)
-  return AgentGlyph ? <AgentGlyph size={SIZE} /> : null
+  if (AgentGlyph) return <AgentGlyph size={SIZE} />
+  const Glyph = resolveIcon(icon)
+  return Glyph ? <Glyph size={SIZE} strokeWidth={STROKE} /> : null
 }

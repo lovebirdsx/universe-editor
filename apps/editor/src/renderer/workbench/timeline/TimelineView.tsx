@@ -57,6 +57,7 @@ import { resolveIcon } from '../icons/icon-map.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import { FileDiff, GitCommitHorizontal, Waypoints, type LucideIcon } from 'lucide-react'
+import type { WorkbenchIcon } from '../icons/iconComponent.js'
 import { timelineViewState } from './timelineViewState.js'
 import styles from './TimelineView.module.css'
 
@@ -69,9 +70,10 @@ const ROW_ICON_MAP: Record<string, LucideIcon> = {
   'git-commit': GitCommitHorizontal,
 }
 
-function resolveRowIcon(themeIcon: string | undefined): LucideIcon | undefined {
+function resolveRowIcon(themeIcon: string | undefined): WorkbenchIcon | undefined {
   if (!themeIcon) return undefined
-  return ROW_ICON_MAP[themeIcon] ?? resolveIcon(themeIcon)
+  const override = Object.hasOwn(ROW_ICON_MAP, themeIcon) ? ROW_ICON_MAP[themeIcon] : undefined
+  return override ?? resolveIcon(themeIcon)
 }
 
 // Inline row actions, keyed by the owning provider's (source, contextValue)

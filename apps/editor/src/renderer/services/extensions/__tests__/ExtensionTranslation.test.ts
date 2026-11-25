@@ -463,6 +463,27 @@ describe('ExtensionPointTranslator', () => {
         order: 0,
       })
       expect(ViewRegistry.getView('test.view.b')).toMatchObject({ order: 1, when: 'false' })
+      expect(ViewRegistry.getView('test.view.a')).not.toHaveProperty('icon')
+    })
+
+    it('normalizes $-wrapped icons and keeps modifiers for containers and views', () => {
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      disposables.push(t)
+      t.translate([
+        dto({
+          contributes: {
+            viewsContainers: {
+              activitybar: [{ id: 'test.icons', title: 'Icons', icon: '$(folder~spin)' }],
+            },
+            views: {
+              'test.icons': [{ id: 'test.view.icon', name: 'Icon', icon: '$(pulse)' }],
+            },
+          },
+        }),
+      ])
+
+      expect(ViewContainerRegistry.getViewContainer('test.icons')?.icon).toBe('folder~spin')
+      expect(ViewRegistry.getView('test.view.icon')?.icon).toBe('pulse')
     })
 
     it('carries the view-level when clause into the registered descriptor', () => {

@@ -152,6 +152,7 @@ const viewContributionSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   when: z.string().optional(),
+  icon: z.string().min(1).optional(),
 })
 
 const viewsContainersSchema = z.object({

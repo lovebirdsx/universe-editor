@@ -44,9 +44,10 @@ export interface ChatContextProvider {
   /** Optional secondary text on the entry item. */
   readonly description?: string
   /**
-   * Optional icon id for the entry item, resolved against the workbench icon
-   * table (names like `history` / `changelist` / `git-pull-request`); an
-   * unknown id falls back to a generic glyph.
+   * Optional icon id for the entry item. Accepts any registered codicon
+   * (`$(id)` or bare, optional `~modifier`) plus workbench names like
+   * `history` / `changelist` / `git-pull-request`; an unknown id falls back to
+   * a generic glyph.
    */
   readonly iconId?: string
   /**

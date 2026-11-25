@@ -26,7 +26,9 @@ export interface SourceControlResourceDecorations {
   tooltip?: string
   /** Foreground color (any CSS color), e.g. for added / deleted resources. */
   color?: string
-  /** Codicon id rendered before the resource label, e.g. `diff-modified`. */
+  /** Codicon id rendered before the resource label, e.g. `diff-modified`.
+   *  Any registered codicon works, bare or as `$(id)`; an unknown id (or a file
+   *  path) falls back to the resource's file-type icon. */
   iconPath?: string
 }
 

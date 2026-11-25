@@ -58,6 +58,7 @@ import { registerCommandSource } from './contributedCommandSources.js'
 import { EXTENSION_TREE_VIEW_COMPONENT_KEY } from '../views/extensionViews.js'
 import { EXTENSION_TRUSTED_VIEW_COMPONENT_KEY } from '../views/trustedViews.js'
 import type { ITrustedViewRegistration } from '../trustedViews/TrustedViewService.js'
+import { normalizeIconReference, parseIconReference } from '../../workbench/icons/iconReference.js'
 
 /** Maps VSCode-style manifest menu keys to our internal MenuId. */
 const MENU_ID_BY_KEY: Readonly<Record<string, MenuId>> = {
@@ -104,12 +105,6 @@ const BUILTIN_CONTAINER_ID_BY_VIEWS_KEY: Readonly<Record<string, string>> = {
  * layering invariant — it just spaces out per-extension slots.
  */
 const EXTENSION_CONTAINER_ORDER_BASE = 100
-
-/** Strips the `$(name)` codicon-reference wrapper VSCode manifests use. */
-function normalizeContainerIcon(icon: string): string {
-  const match = /^\$\(([\w-]+)\)$/.exec(icon)
-  return match?.[1] ?? icon
-}
 
 /** Context the translator passes to the theme-registration callback. */
 export interface IThemeRegistrationContext {
@@ -339,6 +334,20 @@ export class ExtensionPointTranslator extends Disposable {
   }
 
   /**
+   * Normalizes a manifest icon reference (`$(id)` / bare id / `id~modifier`)
+   * and warns for values the workbench cannot render (notably file paths).
+   */
+  private _normalizeIcon(extensionId: string, where: string, icon: string): string {
+    if (parseIconReference(icon) === undefined) {
+      this._logger.warn(
+        `${extensionId}: ${where} icon "${icon}" is not a codicon reference; file-path icons are not supported`,
+      )
+      return icon
+    }
+    return normalizeIconReference(icon)
+  }
+
+  /**
    * Register every extension's `contributes.viewsContainers` in one pass ordered
    * by extension id, allocating activity-bar order slots from a single counter:
    * each container gets a distinct slot and the slots are stable across
@@ -359,7 +368,7 @@ export class ExtensionPointTranslator extends Disposable {
           ViewContainerRegistry.registerViewContainer({
             id: container.id,
             label: container.title,
-            icon: normalizeContainerIcon(container.icon),
+            icon: this._normalizeIcon(ext.id, `viewsContainer "${container.id}"`, container.icon),
             order: EXTENSION_CONTAINER_ORDER_BASE + orderIndex,
             location: ViewContainerLocation.SideBar,
             contributed: true,
@@ -403,6 +412,9 @@ export class ExtensionPointTranslator extends Disposable {
             containerId,
             componentKey: EXTENSION_TREE_VIEW_COMPONENT_KEY,
             order: index,
+            ...(view.icon !== undefined
+              ? { icon: this._normalizeIcon(ext.id, `view "${view.id}"`, view.icon) }
+              : {}),
             ...(view.when !== undefined ? { when: view.when } : {}),
           }),
         )
@@ -470,7 +482,11 @@ export class ExtensionPointTranslator extends Disposable {
               containerId,
               componentKey: EXTENSION_TRUSTED_VIEW_COMPONENT_KEY,
               order: index,
-              ...(view.icon !== undefined ? { icon: normalizeContainerIcon(view.icon) } : {}),
+              ...(view.icon !== undefined
+                ? {
+                    icon: this._normalizeIcon(ext.id, `trusted view "${view.id}"`, view.icon),
+                  }
+                : {}),
               ...(view.when !== undefined ? { when: view.when } : {}),
             }),
         })

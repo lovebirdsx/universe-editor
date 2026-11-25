@@ -237,9 +237,9 @@ export interface IMcpServerContribution {
 
 /**
  * A single `contributes.viewsContainers.activitybar[]` entry — an extension-owned
- * ViewContainer shown in the activity bar (VSCode shape). `icon` accepts a
- * `$(codicon)`-style name or a plain icon name (resolved against the workbench's
- * icon map, falling back to a default glyph); file-path icons are a later phase.
+ * ViewContainer shown in the activity bar (VSCode shape). `icon` accepts any
+ * registered codicon id, written bare or as `$(id)` (with an optional
+ * `~modifier`); file-path icons are a later phase and are ignored with a warning.
  */
 export interface IViewContainerContribution {
   id: string
@@ -259,6 +259,13 @@ export interface IViewContribution {
   id: string
   name: string
   when?: string
+  /**
+   * View-title icon: any registered codicon id, bare or as `$(id)` (optional
+   * `~modifier`). Rendered in the view pane header of multi-view containers;
+   * file-path icons are not supported. A single-view container has no view
+   * title bar, so use the container's own `viewsContainers[].icon` there.
+   */
+  icon?: string
 }
 
 /** The `contributes.viewsContainers` block (VSCode shape; `panel` is a later phase). */
@@ -286,6 +293,10 @@ export interface ITrustedViewContribution {
   container?: string
   /** Relative path to the component's browser ESM entry (`.js` / `.mjs`). */
   entry: string
+  /**
+   * View-title icon for `location: "view"` (any registered codicon id, bare or
+   * `$(id)`); ignored for `location: "editor"`.
+   */
   icon?: string
   /** Visibility clause; only meaningful for `view` (forbidden for `editor`). */
   when?: string
