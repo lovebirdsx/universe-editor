@@ -11,7 +11,6 @@
 import {
   Action2,
   GroupDirection,
-  ICommandService,
   IContextKeyService,
   IEditorGroupsService,
   IFocusStackService,
@@ -20,13 +19,26 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { activateGroupAndFocus } from '../services/editor/activateGroupAndFocus.js'
+import {
+  activateGroupAndFocus,
+  type ActivateGroupFocusContext,
+} from '../services/editor/activateGroupAndFocus.js'
+import { focusGroupBody } from '../services/editor/editorFocus.js'
 import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
 import {
   findPartInDirection,
   type NavigateDirection,
   type PartRect,
 } from '../services/focus/partDirection.js'
+import {
+  findWindowInDirection,
+  offsetRectToScreen,
+  windowScreenRect,
+} from '../services/focus/windowDirection.js'
+import {
+  IWorkbenchWindowService,
+  type IWorkbenchWindow,
+} from '../services/windows/workbenchWindowService.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 
 export class FocusNextPartAction extends Action2 {
@@ -86,6 +98,13 @@ function partRect(layout: ILayoutService, id: PartId): PartRect | undefined {
   return rect
 }
 
+/** Reveal a window's last-active editor group; an empty group still takes keyboard focus. */
+function focusWindowGroup(win: IWorkbenchWindow, ctx: ActivateGroupFocusContext): void {
+  const group = win.part.activeGroup
+  activateGroupAndFocus(group, ctx)
+  if (!group.activeEditor) focusGroupBody(ctx.contextKeyService, group.id)
+}
+
 /**
  * VSCode's `workbench.action.navigate*`: move between editor groups first, then
  * across the side bar / editor / panel / secondary side bar by their on-screen
@@ -109,38 +128,75 @@ abstract class NavigateAction extends Action2 {
     // Every service up front: focusing is synchronous here, but keep the rule.
     const layout = accessor.get(ILayoutService)
     const groups = accessor.get(IEditorGroupsService)
-    const commands = accessor.get(ICommandService)
-    const focusContext = {
+    const workbenchWindows = accessor.get(IWorkbenchWindowService)
+    const focusContext: ActivateGroupFocusContext = {
       groups,
       contextKeyService: accessor.get(IContextKeyService),
       windowFocus: accessor.get(IWindowFocusService),
       focusStack: accessor.get(IFocusStackService),
     }
-    const from =
-      NAVIGABLE_PARTS.find((id) => isPartFocusedInActiveDocument(layout, id)) ?? PartId.EditorArea
+    const activeWindow = workbenchWindows.activeWindow
+    const direction = this._direction
+
+    // An auxiliary window is all editor area; the main window keeps the
+    // focused-part detection.
+    const from = activeWindow.isMain
+      ? (NAVIGABLE_PARTS.find((id) => isPartFocusedInActiveDocument(layout, id)) ??
+        PartId.EditorArea)
+      : PartId.EditorArea
     if (from === PartId.EditorArea) {
-      const group = groups.findGroup({ direction: GROUP_DIRECTION[this._direction] })
+      // Explicit source: the window is authoritative even while the active part
+      // is still catching up with a window switch.
+      const group = groups.findGroup(
+        { direction: GROUP_DIRECTION[direction] },
+        activeWindow.part.activeGroup,
+      )
       if (group !== undefined) {
         activateGroupAndFocus(group, focusContext)
         return
       }
     }
-    const fromRect = partRect(layout, from)
-    if (fromRect === undefined) return
-    const candidates = NAVIGABLE_PARTS.filter((id) => id !== from).flatMap((id) => {
-      const rect = partRect(layout, id)
-      return rect === undefined ? [] : [{ id, rect }]
-    })
-    const target = findPartInDirection(fromRect, candidates, this._direction)
-    if (target === undefined) {
-      console.debug(`[focus] ${this.desc.id}: no part ${this._direction} of ${from}`)
+
+    let origin: PartRect | undefined
+    if (activeWindow.isMain) {
+      const fromRect = partRect(layout, from)
+      if (fromRect !== undefined) {
+        const candidates = NAVIGABLE_PARTS.filter((id) => id !== from).flatMap((id) => {
+          const rect = partRect(layout, id)
+          return rect === undefined ? [] : [{ id, rect }]
+        })
+        const target = findPartInDirection(fromRect, candidates, direction)
+        if (target === PartId.EditorArea) {
+          focusWindowGroup(activeWindow, focusContext)
+          return
+        }
+        if (target !== undefined) {
+          void layout.focusPart(target, { source: 'command' })
+          return
+        }
+      }
+      // A collapsed part has no rect; fall back to the whole window so a window
+      // in that direction is still reachable.
+      origin =
+        fromRect !== undefined
+          ? offsetRectToScreen(fromRect, activeWindow)
+          : windowScreenRect(activeWindow)
+    } else {
+      origin = windowScreenRect(activeWindow)
+    }
+
+    if (origin === undefined) return
+    const targetWindow = findWindowInDirection(
+      activeWindow.id,
+      origin,
+      workbenchWindows.windows,
+      direction,
+    )
+    if (targetWindow === undefined) {
+      console.debug(`[focus] ${this.desc.id}: no group, part or window ${direction}`)
       return
     }
-    if (target === PartId.EditorArea) {
-      void commands.executeCommand('workbench.action.focusActiveEditorGroup')
-      return
-    }
-    void layout.focusPart(target, { source: 'command' })
+    focusWindowGroup(targetWindow, focusContext)
   }
 }
 

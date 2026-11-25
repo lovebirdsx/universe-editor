@@ -370,7 +370,7 @@ Panel / 辅助侧边栏的**标签式**容器标题聚焦时：`h` / `l` 切换�
 | `<leader> o` | 聚焦大纲 |
 | `<leader> q` | 关闭当前编辑器 |
 | `<leader> n` / `<leader> N` | 下一个 / 上一个编辑器 |
-| `<leader> w h/j/k/l` | 向左 / 下 / 上 / 右移动焦点：先在编辑器组之间移动，到边缘后进入该方向的侧栏 / 底栏 / 辅助侧栏（命令 `workbench.action.navigateLeft/Down/Up/Right`）；在 Explorer 里 `<leader> w l` 回到编辑器 |
+| `<leader> w h/j/k/l` | 向左 / 下 / 上 / 右移动焦点：先在编辑器组之间移动，到边缘后进入该方向的侧栏 / 底栏 / 辅助侧栏，再到窗口边缘时按屏幕方位进入该方向的辅助编辑器窗口（命令 `workbench.action.navigateLeft/Down/Up/Right`）；在 Explorer 里 `<leader> w l` 回到编辑器 |
 | `<leader> w H/J/K/L` | 把当前编辑器标签移到左 / 下 / 上 / 右相邻编辑器组 |
 | `<leader> w w` | 聚焦下一个编辑器组 |
 | `<leader> w s` | 向下拆分编辑器 |
