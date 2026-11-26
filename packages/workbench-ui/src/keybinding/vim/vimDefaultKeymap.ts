@@ -73,6 +73,8 @@ export const VIM_DEFAULT_KEYMAP: readonly IVimKeymapEntry[] = [
   { id: 'list.contextMenu', keys: ['m'], command: 'list.contextMenu', surfaces: LIST_LIKE },
   // Only trees that own a filter box implement `find`; elsewhere it is a no-op.
   { id: 'list.find', keys: ['/'], command: 'list.find', surfaces: ['list'] },
+  // `K` mirrors the editor's show-hover on row lists; no other kind maps it.
+  { id: 'list.showHover', keys: ['K'], command: 'list.showHover', surfaces: ['list'] },
   { id: 'list.copy', keys: ['y', 'y'], command: 'list.copy', surfaces: LIST_LIKE },
   { id: 'list.delete', keys: ['d', 'd'], command: 'list.delete', surfaces: LIST_LIKE },
   { id: 'surface.escape', keys: ['escape'], command: 'surface.escape', surfaces: LIST_LIKE },

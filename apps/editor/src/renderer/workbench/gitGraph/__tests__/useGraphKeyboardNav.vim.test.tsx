@@ -10,7 +10,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useCallback, useRef, useState } from 'react'
 import { act, cleanup, render, screen } from '@testing-library/react'
-import { __resetVimSurfacesForTests, getActiveVimSurface } from '@universe-editor/workbench-ui'
+import {
+  __resetVimSurfacesForTests,
+  getActiveVimSurface,
+  TooltipProvider,
+} from '@universe-editor/workbench-ui'
 import { useGraphKeyboardNav } from '../useGraphKeyboardNav.js'
 
 afterEach(() => {
@@ -25,11 +29,13 @@ function Harness({
   openMenu,
   openCommitChanges,
   vimSurfaceId,
+  onShowHover,
 }: {
   readonly onSelect: (key: string) => void
   readonly openMenu: (key: string) => void
   readonly openCommitChanges: () => void
   readonly vimSurfaceId?: string | undefined
+  readonly onShowHover?: ((row: HTMLElement, key: string) => void) | undefined
 }) {
   const [selection, setSelection] = useState<string[]>([])
   const selectionRef = useRef<string[]>([])
@@ -53,12 +59,16 @@ function Harness({
     rowAttribute: 'data-hash',
     rowHeight: 20,
     ...(vimSurfaceId !== undefined ? { vimSurfaceId } : {}),
+    ...(onShowHover !== undefined ? { onShowHover } : {}),
   })
   return (
     <div ref={scrollRef} tabIndex={0} data-testid="graph" onKeyDown={nav}>
       {ROWS.map((row) => (
-        <div key={row} data-hash={row}>
-          {row}
+        <div key={row} data-hash={row} aria-selected={selection.includes(row)}>
+          <span data-tooltip={`badge-${row}`}>badge</span>
+          <span data-tooltip-primary="" data-tooltip={`body-${row}`}>
+            {row}
+          </span>
         </div>
       ))}
       <output data-testid="selected">{selection.join(',')}</output>
@@ -150,5 +160,46 @@ describe('useGraphKeyboardNav as a Vim list surface', () => {
 
     act(() => actions.contextMenu?.(1))
     expect(openMenu).toHaveBeenCalledWith('a')
+  })
+
+  it('shows the selected row message tooltip and notifies the host', () => {
+    const onShowHover = vi.fn()
+    render(
+      <TooltipProvider delay={0}>
+        <Harness
+          onSelect={() => {}}
+          openMenu={() => {}}
+          openCommitChanges={() => {}}
+          onShowHover={onShowHover}
+        />
+      </TooltipProvider>,
+    )
+    act(() => screen.getByTestId('graph').focus())
+    const actions = surfaceActions()
+    act(() => actions.first?.(0))
+    act(() => actions.showHover?.())
+
+    expect(onShowHover).toHaveBeenCalledWith(expect.any(HTMLElement), 'a')
+    // The message span wins over the badge tooltip earlier in the row.
+    expect(screen.getByRole('tooltip').textContent).toBe('body-a')
+  })
+
+  it('does nothing for K without a selected row', () => {
+    const onShowHover = vi.fn()
+    render(
+      <TooltipProvider delay={0}>
+        <Harness
+          onSelect={() => {}}
+          openMenu={() => {}}
+          openCommitChanges={() => {}}
+          onShowHover={onShowHover}
+        />
+      </TooltipProvider>,
+    )
+    act(() => screen.getByTestId('graph').focus())
+
+    act(() => surfaceActions().showHover?.())
+    expect(onShowHover).not.toHaveBeenCalled()
+    expect(screen.queryByRole('tooltip')).toBeNull()
   })
 })

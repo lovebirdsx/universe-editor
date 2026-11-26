@@ -16,7 +16,9 @@
 import { useCallback, type KeyboardEvent, type RefObject } from 'react'
 import {
   createIndexListVimActions,
+  findRowElement,
   isContextMenuKey,
+  showKeyboardTooltipForRow,
   useVimSurface,
   useVimSurfaceKey,
 } from '@universe-editor/workbench-ui'
@@ -42,6 +44,11 @@ export interface GraphKeyboardNavOptions {
   readonly scrollToRow?: ((index: number) => void) | undefined
   /** Stable identity for Vim mode memory (`list:<vimSurfaceId>`). */
   readonly vimSurfaceId?: string | undefined
+  /**
+   * Called after `K` shows the focused row's tooltip. The commit graph uses it
+   * to lazy-fetch the full message body and refresh the visible tooltip.
+   */
+  readonly onShowHover?: ((row: HTMLElement, key: string) => void) | undefined
 }
 
 export function useGraphKeyboardNav({
@@ -55,6 +62,7 @@ export function useGraphKeyboardNav({
   rowHeight,
   scrollToRow,
   vimSurfaceId,
+  onShowHover,
 }: GraphKeyboardNavOptions): (e: KeyboardEvent<HTMLDivElement>) => void {
   const vimSurfaceKey = useVimSurfaceKey('list', vimSurfaceId)
   const moveTo = useCallback(
@@ -114,6 +122,15 @@ export function useGraphKeyboardNav({
       contextMenu: () => {
         const key = selectionRef.current[0]
         if (key !== undefined) openMenu(key)
+      },
+      showHover: () => {
+        const key = selectionRef.current[0]
+        const root = scrollRef.current
+        if (key === undefined || root === null) return
+        const row = findRowElement(root, rowAttribute, key)
+        if (row === null) return
+        showKeyboardTooltipForRow(row)
+        onShowHover?.(row, key)
       },
     },
   })

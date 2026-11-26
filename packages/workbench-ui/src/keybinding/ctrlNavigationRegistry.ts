@@ -36,6 +36,7 @@
 
 import { useContext, useEffect, useRef } from 'react'
 import { OwnerDocumentContext } from '../overlay/ownerDocumentContext.js'
+import { hideKeyboardTooltip } from '../tooltip/keyboardTooltip.js'
 import { ctrlNavigationDirection, type CtrlNavigationDirection } from './ctrlNavigation.js'
 import { isKeybindingChordPending } from './keybindingChordState.js'
 import { isNavigationLayerActive, navigationLayerOutranks } from './vim/navigationLayers.js'
@@ -170,6 +171,11 @@ function consume(event: KeyboardEvent): void {
 }
 
 function handleKeyDown(state: DocumentState, doc: Document, event: KeyboardEvent): void {
+  // Any stroke dismisses a keyboard-triggered tooltip. This must run before the
+  // early returns below: Vim claims strokes with stopPropagation (the provider's
+  // own document listener never sees them), and Ctrl aliases / pending chords
+  // return before the provider runs. Mouse/focus tooltips are unaffected.
+  hideKeyboardTooltip(doc)
   // An earlier listener already acted on the stroke.
   if (event.defaultPrevented) return
   // Mid-composition strokes are the IME's.

@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Window } from 'happy-dom'
 import { StrictMode, useRef } from 'react'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   __getCtrlNavigationLayerCountForTests,
   __resetCtrlNavigationForTests,
@@ -17,6 +17,8 @@ import {
   type ICtrlNavigationLayerOptions,
 } from '../keybinding/ctrlNavigationRegistry.js'
 import type { CtrlNavigationDirection } from '../keybinding/ctrlNavigation.js'
+import { TooltipProvider } from '../tooltip/TooltipProvider.js'
+import { showKeyboardTooltipForRow } from '../tooltip/keyboardTooltip.js'
 
 afterEach(() => {
   cleanup()
@@ -76,6 +78,26 @@ function press(
 }
 
 describe('useCtrlNavigationLayer — routing', () => {
+  it('dismisses a keyboard tooltip before any surface claims the stroke', () => {
+    render(
+      <TooltipProvider delay={0}>
+        <div data-testid="row" aria-selected="true" data-tooltip="row tip">
+          row
+        </div>
+      </TooltipProvider>,
+    )
+    act(() => {
+      showKeyboardTooltipForRow(screen.getByTestId('row'))
+    })
+    expect(screen.getByRole('tooltip')).toBeDefined()
+
+    // A layer pins the window-capture listener. Dispatching on window means the
+    // provider's document listener never runs — only the registry can close it.
+    render(<Layer kind="list" onMove={() => {}} />)
+    fireEvent.keyDown(window, { key: 'x' })
+    expect(screen.queryByRole('tooltip')).toBeNull()
+  })
+
   it('routes Ctrl+J to down and Ctrl+K to up on an active list', () => {
     const onMove = vi.fn()
     render(<Layer kind="list" onMove={onMove} />)

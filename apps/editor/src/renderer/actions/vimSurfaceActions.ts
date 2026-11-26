@@ -213,6 +213,13 @@ export class ListFindAction extends VimSurfaceCommandAction {
   }
 }
 
+export class ListShowHoverAction extends VimSurfaceCommandAction {
+  static readonly ID = 'list.showHover'
+  constructor() {
+    super(options(ListShowHoverAction.ID, 'Show Item Hover'), (actions) => actions.showHover?.())
+  }
+}
+
 export class ListCopyAction extends VimSurfaceCommandAction {
   static readonly ID = 'list.copy'
   constructor() {
@@ -297,6 +304,7 @@ export const VIM_SURFACE_ACTIONS = [
   ListActivatePreviewAction,
   ListContextMenuAction,
   ListFindAction,
+  ListShowHoverAction,
   ListCopyAction,
   ListDeleteAction,
   SurfaceNextAction,

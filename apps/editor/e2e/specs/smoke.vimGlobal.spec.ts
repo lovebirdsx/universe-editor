@@ -67,6 +67,31 @@ test.describe('@p0 vim global', () => {
     await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
   })
 
+  test('K shows the focused Explorer row tooltip and the next stroke dismisses it', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await setVimEnabled(page, true)
+    const dir = mkTempDir('universe-editor-e2e-vim-hover-')
+    seedTreeFiles(dir)
+    await workbench.openWorkspace(dir)
+    await focusExplorerTree(page)
+
+    const tooltip = page.locator('[role="tooltip"]')
+    await page.keyboard.press('K')
+    await expect(tooltip).toContainText('alpha.txt')
+
+    await page.keyboard.press('j')
+    await expect(tooltip).toHaveCount(0)
+    await expect.poll(() => selectedTreeRow(page).textContent()).toContain('beta.txt')
+
+    await page.keyboard.press('K')
+    await expect(page.locator('[role="tooltip"]')).toContainText('beta.txt')
+  })
+
   test('<leader>p opens the command palette and the quick input keeps typing', async ({
     page,
     workbench,

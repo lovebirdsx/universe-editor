@@ -109,6 +109,11 @@ export interface IVimSurfaceActions {
   /** `/`: open the host's own filter / find box (type-to-filter trees). */
   readonly find?: () => void
   /**
+   * `K`: show the same tooltip a pointer hovering the focused row would show,
+   * anchored on that row. Dismissed by the next stroke / focus move.
+   */
+  readonly showHover?: () => void
+  /**
    * Editor surfaces only. Receives the raw keydown while the surface owns the
    * keyboard; returning true means Vim consumed the stroke. The editor's Vim
    * core owns counts/operators/search, so it bypasses the sequence engine.

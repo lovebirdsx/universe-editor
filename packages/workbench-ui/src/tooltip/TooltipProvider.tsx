@@ -17,31 +17,35 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useFloating, autoUpdate, offset, flip, shift, FloatingPortal } from '@floating-ui/react'
 import { isElementLike, isNodeLike } from '../dom/domRealm.js'
 import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
+import {
+  TOOLTIP_ATTRIBUTE,
+  TOOLTIP_COMMAND_ATTRIBUTE,
+  TOOLTIP_HOST_SELECTOR,
+  claimNativeTitle,
+  restoreNativeTitle,
+  tooltipTextFrom,
+} from './tooltipAttributes.js'
+import {
+  registerKeyboardTooltipController,
+  type KeyboardTooltipRequest,
+} from './keyboardTooltip.js'
 import styles from './tooltipSurface.module.css'
 
-export const TOOLTIP_ATTRIBUTE = 'data-tooltip'
-
-/**
- * Optional companion to {@link TOOLTIP_ATTRIBUTE}: when the hovered element also
- * carries `data-tooltip-command="<commandId>"` and the host injected
- * {@link TooltipProviderProps.resolveShortcut}, the command's effective
- * keybinding is appended to the text ("Label (Ctrl+Shift+E)"). Resolution
- * happens at hover time, so user rebinding is reflected without re-render.
- */
-export const TOOLTIP_COMMAND_ATTRIBUTE = 'data-tooltip-command'
-
-/** Where a native `title` is stashed while the themed tooltip stands in for it. */
-const NATIVE_TITLE_STASH = 'data-tooltip-native-title'
+export { TOOLTIP_ATTRIBUTE, TOOLTIP_COMMAND_ATTRIBUTE }
 
 const REOPEN_WINDOW_MS = 200
 const FOCUS_SUPPRESS_AFTER_MOUSEDOWN_MS = 350
 const DETACHED_CHECK_INTERVAL_MS = 500
 
+type PointerTooltipSource = 'mouse' | 'focus'
+
 interface TooltipState {
   target: Element
   text: string
   /** How the tooltip was requested; mouseouts only dismiss pointer-driven ones. */
-  source: 'mouse' | 'focus'
+  source: PointerTooltipSource | 'keyboard'
+  /** Row anchoring a keyboard tooltip; polled for selection loss. */
+  row?: Element | undefined
 }
 
 export interface TooltipProviderProps {
@@ -58,47 +62,17 @@ export interface TooltipProviderProps {
   children?: ReactNode
 }
 
-/** Elements whose `title` carries semantics the tooltip must not stand in for
- *  (an iframe's title names the frame for assistive tech). */
-const NATIVE_TITLE_EXCLUDED_TAGS = new Set(['IFRAME', 'WEBVIEW'])
-
-/** Suppress the OS-native tooltip by moving `title` aside; the stash attribute
- *  keeps the element matching future `closest` lookups for the same hover. */
-function claimNativeTitle(el: Element): void {
-  if (NATIVE_TITLE_EXCLUDED_TAGS.has(el.tagName)) return
-  const title = el.getAttribute('title')
-  if (title === null || el.hasAttribute(NATIVE_TITLE_STASH)) return
-  el.setAttribute(NATIVE_TITLE_STASH, title)
-  el.removeAttribute('title')
-}
-
-function restoreNativeTitle(el: Element): void {
-  const stashed = el.getAttribute(NATIVE_TITLE_STASH)
-  if (stashed === null) return
-  el.removeAttribute(NATIVE_TITLE_STASH)
-  el.setAttribute('title', stashed)
-}
-
 function tooltipTargetFrom(
   node: EventTarget | null,
   resolveShortcut?: (commandId: string) => string | undefined,
 ): { target: Element; text: string } | null {
   if (!isElementLike(node)) return null
-  const el = node.closest(`[${TOOLTIP_ATTRIBUTE}],[${NATIVE_TITLE_STASH}],[title]`)
+  const el = node.closest(TOOLTIP_HOST_SELECTOR)
   if (!el) return null
   // A native `title` on the resolved element would pop the OS bubble alongside
   // ours — claim it even when `data-tooltip` wins the text.
   claimNativeTitle(el)
-  let text = (
-    el.getAttribute(TOOLTIP_ATTRIBUTE) ??
-    el.getAttribute(NATIVE_TITLE_STASH) ??
-    ''
-  ).trim()
-  if (text && resolveShortcut) {
-    const commandId = el.getAttribute(TOOLTIP_COMMAND_ATTRIBUTE)
-    const shortcut = commandId ? resolveShortcut(commandId) : undefined
-    if (shortcut) text = `${text} (${shortcut})`
-  }
+  const text = tooltipTextFrom(el, resolveShortcut)
   return text ? { target: el, text } : null
 }
 
@@ -112,9 +86,16 @@ export function TooltipProvider({
   const [tip, setTip] = useState<TooltipState | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const tipRef = useRef<TooltipState | null>(null)
-  const pendingRef = useRef<{ target: Element; source: TooltipState['source'] } | null>(null)
+  const pendingRef = useRef<{ target: Element; source: PointerTooltipSource } | null>(null)
   const lastHideAtRef = useRef(0)
   const lastMouseDownAtRef = useRef(0)
+  /** Reaches the effect-scoped hide() from the selection-polling effect. */
+  const hideTooltipRef = useRef<() => void>(() => undefined)
+  /**
+   * A keyboard stroke that opens a tooltip may also reach this provider's own
+   * keydown listener when Vim did not claim it; skip exactly that stroke.
+   */
+  const skipNextKeyDownRef = useRef(false)
 
   tipRef.current = tip
 
@@ -135,7 +116,8 @@ export function TooltipProvider({
       }
       setTip(null)
     }
-    const show = (next: { target: Element; text: string }, source: TooltipState['source']) => {
+    hideTooltipRef.current = hide
+    const show = (next: { target: Element; text: string }, source: PointerTooltipSource) => {
       clear()
       // Chain behavior: while a tooltip is visible (or just dismissed), moving to
       // another tooltip host shows it instantly instead of waiting out the delay.
@@ -160,6 +142,52 @@ export function TooltipProvider({
       }
     }
 
+    // -- keyboard-triggered tooltips (Vim K on a list row) --------------------
+    const hideKeyboard = () => {
+      if (tipRef.current?.source === 'keyboard') hide()
+    }
+    const showKeyboard = (request: KeyboardTooltipRequest) => {
+      if (request.target.isConnected === false) return
+      const text = tooltipTextFrom(request.target, resolveShortcut)
+      if (text === '') return
+      claimNativeTitle(request.target)
+      clear()
+      if (tipRef.current !== null && tipRef.current.target !== request.target) {
+        restoreNativeTitle(tipRef.current.target)
+      }
+      // This runs from the command dispatched by the stroke; do not let the
+      // provider's own keydown listener dismiss the tip we just opened.
+      skipNextKeyDownRef.current = true
+      queueMicrotask(() => {
+        skipNextKeyDownRef.current = false
+      })
+      setTip({
+        target: request.target,
+        text,
+        source: 'keyboard',
+        ...(request.row !== undefined ? { row: request.row } : {}),
+      })
+    }
+    const refreshKeyboard = () => {
+      const current = tipRef.current
+      if (current === null || current.source !== 'keyboard') return
+      if (current.target.isConnected === false) {
+        hide()
+        return
+      }
+      const text = tooltipTextFrom(current.target, resolveShortcut)
+      if (text === '') {
+        hide()
+        return
+      }
+      if (text !== current.text) setTip({ ...current, text })
+    }
+    const keyboardController = registerKeyboardTooltipController(doc, {
+      show: showKeyboard,
+      hide: hideKeyboard,
+      refresh: refreshKeyboard,
+    })
+
     const onMouseOver = (e: MouseEvent) => {
       const next = tooltipTargetFrom(e.target, resolveShortcut)
       if (!next) return
@@ -179,9 +207,9 @@ export function TooltipProvider({
         }
         return
       }
-      // Keyboard-driven tooltips are dismissed by focusout/Escape/mousedown, not
-      // by the pointer moving somewhere else.
-      if (current.source === 'focus') return
+      // Keyboard-driven tooltips are dismissed by the next stroke / focusout /
+      // Escape / mousedown, not by the pointer moving somewhere else.
+      if (current.source !== 'mouse') return
       const movingTo = e.relatedTarget
       if (isNodeLike(movingTo) && current.target.contains(movingTo)) return
       hide()
@@ -198,7 +226,18 @@ export function TooltipProvider({
       hide()
     }
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') hide()
+      if (e.key === 'Escape') {
+        hide()
+        return
+      }
+      const current = tipRef.current
+      if (current?.source !== 'keyboard') return
+      if (skipNextKeyDownRef.current) {
+        skipNextKeyDownRef.current = false
+        return
+      }
+      // Any later stroke means the user is moving on; drop the keyboard tip.
+      hide()
     }
 
     doc.addEventListener('mouseover', onMouseOver)
@@ -211,6 +250,10 @@ export function TooltipProvider({
     doc.addEventListener('wheel', hide, true)
     return () => {
       clear()
+      // Drop the current tip with the document it was anchored to; a doc change
+      // must not leave the old portal content behind.
+      hide()
+      keyboardController.dispose()
       doc.removeEventListener('mouseover', onMouseOver)
       doc.removeEventListener('mouseout', onMouseOut)
       doc.removeEventListener('focusin', onFocusIn)
@@ -223,11 +266,21 @@ export function TooltipProvider({
   }, [delay, resolveShortcut, doc])
 
   // The host element can be unmounted by React while its tooltip is visible
-  // (list re-render, tree collapse, …) — no mouseout fires in that case.
+  // (list re-render, tree collapse, …) — no mouseout fires in that case. A
+  // keyboard tooltip additionally follows a virtual cursor: close it when its
+  // row loses the selection, so programmatic focus moves do not leave it behind.
   useEffect(() => {
     if (!tip) return
     const id = setInterval(() => {
-      if (!tip.target.isConnected) setTip(null)
+      if (!tip.target.isConnected) {
+        hideTooltipRef.current()
+        return
+      }
+      if (tip.source !== 'keyboard') return
+      const row = tip.row
+      if (row !== undefined && row.isConnected && row.getAttribute('aria-selected') === 'false') {
+        hideTooltipRef.current()
+      }
     }, DETACHED_CHECK_INTERVAL_MS)
     return () => clearInterval(id)
   }, [tip])

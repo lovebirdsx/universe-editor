@@ -62,6 +62,7 @@ import {
   copyText,
   createKeyboardContextMenuEvent,
   isKeyboardContextMenu,
+  refreshKeyboardTooltip,
   writeClipboardText,
   useVimSurfaceKeymap,
   vimSurfaceKeyFor,
@@ -471,6 +472,7 @@ const CommitRow = memo(function CommitRow({
         <span
           className={styles['message']}
           data-testid="gitGraph-message"
+          data-tooltip-primary=""
           data-tooltip={fullMessage ?? commit.message}
           onMouseEnter={() => onMessageHover(commit.hash)}
         >
@@ -796,6 +798,21 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     (hash: string) => {
       if (hash === UNCOMMITTED_HASH) return
       void fullMessages.load(hash)
+    },
+    [fullMessages],
+  )
+
+  // Keyboard K shows the subject immediately (what the data-tooltip carries);
+  // fetch the body like a mouse hover and re-read the attribute after React
+  // commits, so the visible tooltip upgrades to the full message.
+  const onKeyboardHover = useCallback(
+    (row: HTMLElement, hash: string) => {
+      if (hash === UNCOMMITTED_HASH) return
+      void fullMessages.load(hash).then(() => {
+        row.ownerDocument.defaultView?.requestAnimationFrame(() => {
+          refreshKeyboardTooltip(row.ownerDocument)
+        })
+      })
     },
     [fullMessages],
   )
@@ -2449,6 +2466,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     rowAttribute: 'data-hash',
     rowHeight: ROW_HEIGHT,
     vimSurfaceId: 'git-graph',
+    onShowHover: onKeyboardHover,
     ...(virtualize
       ? { scrollToRow: (index: number) => rowVirtualizer.scrollToIndex(index, { align: 'auto' }) }
       : {}),

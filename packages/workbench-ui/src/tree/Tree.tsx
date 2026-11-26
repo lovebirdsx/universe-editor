@@ -38,6 +38,7 @@ import { createIndexListVimActions } from '../keybinding/vimIndexActions.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
+import { showKeyboardTooltipForRow } from '../tooltip/keyboardTooltip.js'
 import { useStableCallback } from '../hooks/useStableCallback.js'
 import { isOpenTargetEnter, markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
@@ -825,6 +826,13 @@ export function Tree<T>(props: ITreeProps<T>) {
         openKeyboardContextMenu(current ?? null)
       },
       escape: () => model.collapseSelectionToFocus(),
+      showHover: () => {
+        const focusedId = model.focused
+        const root = containerRef.current
+        if (!focusedId || root === null) return
+        const row = findRow(root, focusedId)
+        if (row !== null) showKeyboardTooltipForRow(row)
+      },
       ...(onVimFind === undefined ? {} : { find: onVimFind }),
     },
   })

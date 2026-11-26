@@ -68,6 +68,21 @@ describe('VIM_DEFAULT_KEYMAP', () => {
     }
   })
 
+  it('K shows the focused row tooltip on lists only', () => {
+    expect(commandFor('list', ['K'])).toBe('list.showHover')
+    for (const kind of [
+      'menu',
+      'overlay',
+      'tabs',
+      'activityBar',
+      'viewContainerTabs',
+      'reader',
+      'terminal',
+    ] as const) {
+      expect(commandFor(kind, ['K'])).toBeUndefined()
+    }
+  })
+
   it('scrolls list/overlay viewports with Ctrl+e/y but leaves menus alone', () => {
     for (const kind of ['list', 'overlay'] as const) {
       expect(commandFor(kind, ['ctrl+e'])).toBe('list.scrollViewportDown')

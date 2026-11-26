@@ -148,13 +148,15 @@ useVimSurface({
 
 `registerVimSurface` 是给非 React 调用方的同义入口（如终端实例、`attachVim`）；React 侧一律用 `useVimSurface`，它会通过 ref 读取最新注册，避免每次渲染重注册。
 
-`IVimSurfaceActions` 字段：`move(direction,count)`、`first(count)`、`last(count)`、`page(direction,count)`、`scrollViewport(direction,count)`、`expand/collapse/toggle(count)`、`activate(count,preview)`、`contextMenu/copy/remove(c)`、`next/previous(count)`、`escape(count)`（返回 `false` 表示没有可退出的状态：侧栏 / 底栏视图里的 `list`（`focusedView` 非空）随后执行 `workbench.action.focusActiveEditorGroup` 回编辑器；编辑器区里的 `list`（`editorAreaFocus` 为真）执行 `workbench.action.focusEditorTabs` 回标签栏；未实现 `escape` 同理；返回 void 视为已处理）、`find()`（`/` 打开宿主自己的筛选框；树通过 `onVimFind` 暴露，Outline 是范例），以及编辑器专用的 `handleStroke(event)` / `isAwaitingCharArg()` / `takeCount()` / `getPendingHint()` / `dismissHover()`（共享引擎执行 leader / 映射和弦前关闭可见 hover）。
+`IVimSurfaceActions` 字段：`move(direction,count)`、`first(count)`、`last(count)`、`page(direction,count)`、`scrollViewport(direction,count)`、`expand/collapse/toggle(count)`、`activate(count,preview)`、`contextMenu/copy/remove(c)`、`next/previous(count)`、`escape(count)`（返回 `false` 表示没有可退出的状态：侧栏 / 底栏视图里的 `list`（`focusedView` 非空）随后执行 `workbench.action.focusActiveEditorGroup` 回编辑器；编辑器区里的 `list`（`editorAreaFocus` 为真）执行 `workbench.action.focusEditorTabs` 回标签栏；未实现 `escape` 同理；返回 void 视为已处理）、`find()`（`/` 打开宿主自己的筛选框；树通过 `onVimFind` 暴露，Outline 是范例）、`showHover()`（`K` 显示聚焦行与鼠标悬停相同的 tooltip；行没有提示时 no-op），以及编辑器专用的 `handleStroke(event)` / `isAwaitingCharArg()` / `takeCount()` / `getPendingHint()` / `dismissHover()`（共享引擎执行 leader / 映射和弦前关闭可见 hover）。
 
 **count 语义（全 surface 统一）**：`first(count)` / `last(count)` 的 `count` 为 0 表示没敲数字（`gg` = 首项、`G` = 末项），`n ≥ 1` 表示跳第 n 项（1 基、夹到范围内）：`3G` / `3gg` 都是第 3 项，`1G` 是首项。`vimSurfaceActions` 靠 dispatcher 额外传的 `hasCount` 区分「没敲」与「敲了 1」，直接调命令不带 `hasCount` 时只有 count > 1 才算敲了。新 surface 用 `createIndexListVimActions` / `createStripVimActions` 就自动遵守，不要手写。
 
 各 surface 的落点：列表 / 树 / 标签栏 = 第 N 项；**菜单**的 `Ctrl+D/U` 没有页的概念，直接跳末 / 首项；**终端 Normal** 的 `NG` / `Ngg` 跳到第 N 行 buffer 行（`scrollToBufferLine`，1 基）；**Markdown 预览**的 `NG` / `Ngg` 跳到第 N 行源码（按渲染块的 `data-line` 找，无 `data-line` 的预览回退首 / 末）；**例外**：Chat 时间线（`ChatBody`）与通知中心的 `G` / `gg` 忽略 count，始终首 / 末项。
 
 `scrollViewport` 只移动视口，不移动焦点 / 选中项（`Ctrl+E/Y`）。列表 / 树 / 浮层 / 图谱的适配器各自提供 scroller 与行高；共享实现是 workbench-ui 的 `list/scrollViewport.ts`（`findScrollableElement` 从容器向上找真正滚动的祖先，`scrollViewportByRows` 按行高改 `scrollTop`，只夹下界）。焦点容器包着 `VirtualList` 的宿主（设置页、快捷键编辑器）必须显式传 `getScrollElement`，因为 VirtualList 的 scroller 是**子孙**而不是祖先。菜单没有纵向视口，不映射 `Ctrl+E/Y`。
+
+**`K` 显示行提示**：`vimDefaultKeymap.ts` 的 `list.showHover` 只对 `list` kind 生效，宿主实现 `actions.showHover()`——`Tree` / `useFlatListNavigation` 用 `findRowElement` 找到聚焦行，Git / Perforce 图谱的 `useGraphKeyboardNav` 还额外回调 `onShowHover(row, key)`（Git 用它异步补全提交正文）。行 tooltip 由 `TooltipProvider` 的命令式 controller 打开（`tooltip/keyboardTooltip.ts` 按 `Document` 注册，`showKeyboardTooltipForRow(row)` 取 `row.ownerDocument`）：解析顺序是 `[data-tooltip-primary]` → 行根自身 → 行内第一个有 tooltip 的后代，`data-tooltip` / 暂存的原生 `title` 都认；挂多个徽章的行用 `data-tooltip-primary` 指定主提示。关闭是**任意击键**：总闸在 `ctrlNavigationRegistry.handleKeyDown` 最前面（Vim 会 `stopPropagation`，document 监听收不到），另加 500ms 轮询在目标行卸载或 `aria-selected="false"` 时兜底——宿主行若由虚拟光标选中却不写 `aria-selected`，程序化焦点移动后提示不会自动消失。
 
 ### 新增 surface 的步骤
 

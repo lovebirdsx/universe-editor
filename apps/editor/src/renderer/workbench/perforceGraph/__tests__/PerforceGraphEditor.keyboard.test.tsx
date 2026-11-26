@@ -229,6 +229,16 @@ describe('PerforceGraphEditor keyboard navigation', () => {
     expect(getActiveVimSurface(document)?.surfaceKey).toBe('list:perforce-graph')
   })
 
+  it('marks the selected row with role/aria-selected for the keyboard tooltip poller', async () => {
+    const { container } = renderEditor()
+    await flush()
+
+    const selectedRow = container.querySelector('[data-id="4521"]')!
+    expect(selectedRow.getAttribute('role')).toBe('option')
+    expect(selectedRow.getAttribute('aria-selected')).toBe('true')
+    expect(container.querySelector('[data-id="4519"]')!.getAttribute('aria-selected')).toBe('false')
+  })
+
   it('ArrowDown/ArrowUp move the selection and drive the Commit Changes bridge', async () => {
     const { container, executeCommand } = renderEditor()
     await flush()

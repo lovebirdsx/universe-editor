@@ -313,6 +313,8 @@ const ChangeRow = memo(function ChangeRow({
     <div
       className={`${styles['row']} ${selected ? styles['rowSelected'] : ''}`}
       style={{ height: ROW_HEIGHT }}
+      role="option"
+      aria-selected={selected}
       data-id={change.id}
       onClick={(e) => onRowClick(change.id, e)}
       onContextMenu={(e) => onChangeMenu(change, e)}
@@ -329,7 +331,11 @@ const ChangeRow = memo(function ChangeRow({
             </span>
           </span>
         )}
-        <span className={styles['message']} data-tooltip={change.body || change.message}>
+        <span
+          className={styles['message']}
+          data-tooltip-primary=""
+          data-tooltip={change.body || change.message}
+        >
           {change.message}
         </span>
       </span>

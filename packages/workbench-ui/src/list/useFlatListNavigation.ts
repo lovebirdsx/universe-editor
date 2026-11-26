@@ -37,6 +37,7 @@ import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { LIST_PAGE_STEP, resolveIndexNavigation } from './listKeyboard.js'
 import { findScrollableElement, measureRowHeight } from './scrollViewport.js'
 import { createIndexListVimActions } from '../keybinding/vimIndexActions.js'
+import { showKeyboardTooltipForRow } from '../tooltip/keyboardTooltip.js'
 import {
   dispatchKeyboardContextMenu,
   findRowElement,
@@ -273,6 +274,18 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
         onActivate(focusedIndex, { preview })
       },
       contextMenu: () => openContextMenu(),
+      showHover: () => {
+        const { count, focusedIndex, getItemKey, getContainer, rowDataAttr } = optionsRef.current
+        if (focusedIndex < 0 || focusedIndex >= count) return
+        const container = getContainer()
+        if (container === null) return
+        const row = findRowElement(
+          container,
+          rowDataAttr ?? DEFAULT_ROW_ATTR,
+          getItemKey(focusedIndex),
+        )
+        if (row !== null) showKeyboardTooltipForRow(row)
+      },
     },
   })
 
