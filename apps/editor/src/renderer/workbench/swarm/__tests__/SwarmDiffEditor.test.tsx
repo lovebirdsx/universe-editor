@@ -363,6 +363,40 @@ describe('SwarmDiffEditor', () => {
     expect(secondModel.modified).toBe(firstModel.modified)
   })
 
+  it('gives two live mounts of the same input distinct model URIs', async () => {
+    // Side-open / new-window mounts the same input id a second time while the
+    // first is still mounted. Model URIs must be per-mount unique — otherwise
+    // the second createModel throws "Cannot add model because it already exists!".
+    const first = createInput()
+    const second = createInput()
+    expect(second.id).toBe(first.id)
+
+    render(
+      <ServicesContext.Provider value={createInstantiationService()}>
+        <EditorGroupContext.Provider value={{ id: 20 } as never}>
+          <SwarmDiffEditor input={first} />
+        </EditorGroupContext.Provider>
+        <EditorGroupContext.Provider value={{ id: 21 } as never}>
+          <SwarmDiffEditor input={second} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+
+    await vi.waitFor(() => {
+      expect(monacoTestState.diffEditors).toHaveLength(2)
+      expect(monacoTestState.diffEditors[1]?.model).toBeTruthy()
+    })
+    const modelUris = monacoTestState.diffEditors.map((editor) => {
+      const model = editor.model as {
+        original: { uri: { toString(): string } }
+        modified: { uri: { toString(): string } }
+      }
+      return [model.original.uri.toString(), model.modified.uri.toString()]
+    })
+    expect(modelUris[0]?.[0]).not.toBe(modelUris[1]?.[0])
+    expect(modelUris[0]?.[1]).not.toBe(modelUris[1]?.[1])
+  })
+
   it('does not attach Vim without the optional Vim services', async () => {
     render(
       <ServicesContext.Provider value={createInstantiationService()}>

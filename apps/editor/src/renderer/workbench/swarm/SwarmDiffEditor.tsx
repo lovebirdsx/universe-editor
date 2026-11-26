@@ -49,6 +49,12 @@ import styles from './SwarmDiffEditor.module.css'
 /** When off (default) the diff shows code only — no inline comment threads / affordance. */
 const INLINE_COMMENTS_CONFIG_KEY = 'perforce.swarm.inlineComments.enabled'
 
+// Per-mount monotonically increasing id, used to qualify this instance's diff
+// model URIs so the same input mounted in two groups never collides on one URI.
+// `diffInput.id` alone is NOT enough: side-open / new-window clones the tab, and
+// the second live mount's createModel would throw "already exists".
+let nextSwarmDiffEditorInstanceId = 0
+
 export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
   const diffInput = input as SwarmDiffEditorInput
   const commands = useService(ICommandService)
@@ -65,6 +71,7 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
   const originalModelRef = useRef<monaco.editor.ITextModel | null>(null)
   const modifiedModelRef = useRef<monaco.editor.ITextModel | null>(null)
   const controllerRef = useRef<SwarmInlineCommentController | null>(null)
+  const instanceQualifierRef = useRef(`s${nextSwarmDiffEditorInstanceId++}`)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
   const [inlineCommentsEnabled, setInlineCommentsEnabled] = useState(
     () => configService.get<boolean>(INLINE_COMMENTS_CONFIG_KEY) ?? false,
@@ -192,9 +199,9 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
       modified = cached.modified
     } else {
       const language = languageForResource(diffInput.fileUri)
-      // The qualifier carries this comparison's identity so two diffs of the
-      // same file at different versions never collide on a model URI.
-      const qualifier = encodeURIComponent(diffInput.id)
+      // Per-mount qualifier: two live mounts of the same input (side-open, new
+      // window) must not create two models under one URI.
+      const qualifier = instanceQualifierRef.current
       const built = recordPerfPhase('swarmDiffEditor.createModels', () => ({
         original: monacoNs.editor.createModel(
           diffInput.originalContent,
