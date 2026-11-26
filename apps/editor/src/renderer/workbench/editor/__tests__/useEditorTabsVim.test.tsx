@@ -170,6 +170,25 @@ describe('EditorGroupView vim tabs surface', () => {
     expect((document.activeElement as HTMLElement | null)?.getAttribute('role')).not.toBe('tab')
   })
 
+  // Escape leaves the strip through the same activation path as Enter, so
+  // editors that self-focus on activation (image, settings, keybindings) get a
+  // fresh activationId and land their own focus target.
+  it('escape re-activates the editor and leaves the tab strip', () => {
+    const svc = new EditorGroupsService()
+    const a = new FakeEditor('a')
+    svc.activeGroup.openEditor(a)
+    renderGroup(svc.activeGroup, svc)
+
+    tabFor(a.id).focus()
+    svc.activeGroup.preserveFocusOnActivation?.(true)
+    const before = svc.activeGroup.activationId
+    act(() => surfaceActions().escape?.(1))
+    expect(svc.activeGroup.activeEditor).toBe(a)
+    expect(svc.activeGroup.activationId).toBe(before + 1)
+    expect(svc.activeGroup.lastActivationPreservedFocus).toBe(false)
+    expect((document.activeElement as HTMLElement | null)?.getAttribute('role')).not.toBe('tab')
+  })
+
   it('remove closes the focused tab', async () => {
     const svc = new EditorGroupsService()
     const a = new FakeEditor('a')

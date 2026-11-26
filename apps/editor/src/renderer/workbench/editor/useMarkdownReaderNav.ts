@@ -27,6 +27,7 @@ import { useFindInContainer, type FindInContainerState } from './useFindInContai
 import { useMarkdownKeyboardNav } from './useMarkdownKeyboardNav.js'
 import { useMarkdownLinkHints, type MarkdownLinkHintsState } from './useMarkdownLinkHints.js'
 import { useEditorGroup } from './EditorGroupContext.js'
+import { isEditorActivationPreservingFocus } from './editorTabsFocus.js'
 import { useService } from '../useService.js'
 
 // How long to keep retrying an anchor reveal while late content (mermaid, code
@@ -120,10 +121,15 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
 
   // Focus the scroll container whenever this surface becomes the active editor,
   // so arrow / vim keys scroll it immediately (the surface is a plain div, not a
-  // Monaco instance focusEditorInput() knows how to reach).
+  // Monaco instance focusEditorInput() knows how to reach). While the Vim tab
+  // strip holds the keyboard (h/l between tabs) it must keep it; Enter or Escape
+  // re-activates the editor and lands focus here.
+  const activationId = group?.activationId
   useEffect(() => {
-    if (isActiveEditor) rootRef.current?.focus()
-  }, [isActiveEditor, rootRef])
+    if (!isActiveEditor) return
+    if (isEditorActivationPreservingFocus(group)) return
+    rootRef.current?.focus()
+  }, [isActiveEditor, rootRef, group, activationId])
 
   // Register the controller so the find / link-hint / help commands (routed via
   // MarkdownPreviewRegistry.getActive()) reach whichever surface holds focus.

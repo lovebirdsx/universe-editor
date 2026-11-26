@@ -640,9 +640,14 @@ function focusedSurface(): 'prompt' | 'timeline' | 'none' {
   return 'none'
 }
 
-function renderEditorChat(session: IAcpSession, autoFocus = true) {
+function renderEditorChat(
+  session: IAcpSession,
+  autoFocus = true,
+  prepare?: (groups: EditorGroupsService) => void,
+) {
   const widgetRef: { current?: AcpChatWidget } = {}
   const groups = new EditorGroupsService()
+  prepare?.(groups)
   const inst = makeInstantiation(
     (w) => {
       widgetRef.current = w
@@ -877,6 +882,26 @@ describe('ChatBody — focus surface survives an editor tab round trip', () => {
     } finally {
       outside.remove()
     }
+  })
+
+  // Vim tab-strip h/l activates the session tab while keeping DOM focus on the
+  // tab. Pulling the keyboard into the prompt there would turn the next h/l into
+  // an editor motion; Enter/Escape from the strip focuses the prompt explicitly.
+  it('leaves focus alone while the activation preserves focus', () => {
+    const { container } = renderEditorChat(makeSession('s1', items), true, (groups) => {
+      groups.activeGroup.preserveFocusOnActivation?.(true)
+    })
+    expect(focusedSurface()).toBe('none')
+    expect(AcpChatViewStateCache.loadFocusSurface('s1')).toBeUndefined()
+    expect(container.ownerDocument.activeElement).not.toBe(scrollEl(container))
+  })
+
+  it('does not restore the timeline while the activation preserves focus', () => {
+    AcpChatViewStateCache.setFocusSurface('s1', 'timeline')
+    renderEditorChat(makeSession('s1', items), true, (groups) => {
+      groups.activeGroup.preserveFocusOnActivation?.(true)
+    })
+    expect(focusedSurface()).toBe('none')
   })
 })
 

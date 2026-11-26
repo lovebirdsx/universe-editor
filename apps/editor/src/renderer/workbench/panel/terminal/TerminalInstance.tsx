@@ -7,6 +7,8 @@ import {
   type ITerminalXtermHolder,
 } from '../../../services/terminal/TerminalXtermService.js'
 import { useOptionalService, useService } from '../../useService.js'
+import { useEditorGroup } from '../../editor/EditorGroupContext.js'
+import { isEditorActivationPreservingFocus } from '../../editor/editorTabsFocus.js'
 import { IVimModeService } from '../../../services/vim/vimModeService.js'
 import { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
 import { registerTerminalNormalModeController } from '../../../services/terminal/terminalNormalModeRegistry.js'
@@ -51,6 +53,8 @@ export function TerminalInstance({
   openFile,
 }: TerminalInstanceProps) {
   const isFocused = focused ?? active
+  const group = useEditorGroup()
+  const activationId = group?.activationId
   const manager = useService(ITerminalManagerService)
   const xtermService = useService(ITerminalXtermService)
   // Soft: unit tests render this component without the workbench Vim services.
@@ -258,14 +262,17 @@ export function TerminalInstance({
     const holder = holderRef.current
     if (!holder) return
     holder.fit()
-    // A container-tab keyboard switch (Vim viewContainerTabs h/l) keeps focus on
-    // the strip; the terminal must not steal it. Mouse clicks focus the view
-    // through focusView, so they still land here.
+    // A container-tab keyboard switch (Vim viewContainerTabs h/l) or an editor
+    // tab-strip move keeps focus on the strip; the terminal must not steal it.
+    // Mouse clicks focus the view through focusView, so they still land here.
     const stripFocused =
+      isEditorActivationPreservingFocus(group) ||
       holder.wrapper.ownerDocument.activeElement?.closest('[data-testid^="view-container-tab-"]') !=
-      null
+        null
     if (isFocused && !stripFocused) holder.focus()
-  }, [active, isFocused])
+    // activationId re-runs this pass when Enter/Escape re-activates the editor
+    // without changing `active`.
+  }, [active, isFocused, group, activationId])
 
   // Respond to programmatic focus requests (e.g. FocusTerminalPanelAction).
   useEffect(() => {

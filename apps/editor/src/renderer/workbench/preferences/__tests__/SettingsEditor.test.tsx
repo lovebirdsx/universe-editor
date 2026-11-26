@@ -12,8 +12,10 @@ import {
   InstantiationService,
   ServiceCollection,
   type IDisposable,
+  type IEditorGroup,
 } from '@universe-editor/platform'
 import { ServicesContext } from '../../useService.js'
+import { EditorGroupContext } from '../../editor/EditorGroupContext.js'
 import { SettingsEditor } from '../SettingsEditor.js'
 import { SettingsEditorInput } from '../../../services/editor/SettingsEditorInput.js'
 import { SETTINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../preferencesFocus.js'
@@ -127,7 +129,13 @@ function makeNotificationStub() {
   }
 }
 
-function mount(opts: { workspaceOpen?: boolean; storage?: FakeStorage } = {}) {
+function mount(
+  opts: {
+    workspaceOpen?: boolean
+    storage?: FakeStorage
+    group?: IEditorGroup | null
+  } = {},
+) {
   const config = new ConfigurationService()
   const workspace = makeWorkspaceStub(opts.workspaceOpen ?? false)
   const notif = makeNotificationStub()
@@ -140,13 +148,16 @@ function mount(opts: { workspaceOpen?: boolean; storage?: FakeStorage } = {}) {
   const instantiation = new InstantiationService(services)
   const input = new SettingsEditorInput()
 
-  const utils = render(
+  const element = (group: IEditorGroup | null) => (
     <ServicesContext.Provider value={instantiation}>
-      <SettingsEditor input={input} />
-    </ServicesContext.Provider>,
+      <EditorGroupContext.Provider value={group}>
+        <SettingsEditor input={input} />
+      </EditorGroupContext.Provider>
+    </ServicesContext.Provider>
   )
+  const utils = render(element(opts.group ?? null))
 
-  return { ...utils, config, workspace, notif, input, storage }
+  return { ...utils, element, config, workspace, notif, input, storage }
 }
 
 afterEach(() => {
@@ -348,6 +359,31 @@ describe('SettingsEditor', () => {
     const { container } = mount()
     const search = container.querySelector('input[type=search]') as HTMLInputElement
     await waitFor(() => expect(document.activeElement).toBe(search))
+  })
+
+  // Vim tab-strip h/l activates this tab while keeping DOM focus on the tab; the
+  // search box must not grab it back or the next h/l becomes a text input.
+  it('does not focus the search input while the tab strip preserves focus', () => {
+    registerSeedSchema()
+    const group = { id: 1, activationId: 1, lastActivationPreservedFocus: true }
+    const { container } = mount({ group: group as unknown as IEditorGroup })
+    const search = container.querySelector('input[type=search]') as HTMLInputElement
+    expect(document.activeElement).not.toBe(search)
+  })
+
+  it('focuses the search input when the editor is re-activated from the tab strip', () => {
+    registerSeedSchema()
+    const group = { id: 1, activationId: 1, lastActivationPreservedFocus: true }
+    const view = mount({ group: group as unknown as IEditorGroup })
+    const search = view.container.querySelector('input[type=search]') as HTMLInputElement
+    expect(document.activeElement).not.toBe(search)
+
+    group.lastActivationPreservedFocus = false
+    group.activationId = 2
+    act(() => {
+      view.rerender(view.element(group as unknown as IEditorGroup))
+    })
+    expect(document.activeElement).toBe(search)
   })
 
   it('re-focuses the search input when the focus event fires', async () => {

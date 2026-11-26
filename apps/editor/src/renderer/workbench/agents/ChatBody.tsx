@@ -150,6 +150,7 @@ import { SubagentNavBar } from './SubagentNavBar.js'
 import { ChatFindWidget } from './ChatFindWidget.js'
 import { useChatFind } from './useChatFind.js'
 import { useEditorGroup } from '../editor/EditorGroupContext.js'
+import { isEditorActivationPreservingFocus } from '../editor/editorTabsFocus.js'
 import styles from './agents.module.css'
 
 // The keyboard-selected slot is session-level state: every mounted chat
@@ -355,6 +356,11 @@ function ChatSessionBody({
       // (tabbing to the send button, which sits inside the prompt form).
       promptAutoFocus:
         autoFocus === true &&
+        // Vim tab-strip h/l activates the session while keeping DOM focus on the
+        // tab; pulling it into the prompt here would turn the next h/l into an
+        // editor motion. Enter/Escape from the strip focuses the prompt via the
+        // editor input's own focus().
+        !isEditorActivationPreservingFocus(group) &&
         (AcpChatViewStateCache.loadFocusSurface(session.id) ?? 'prompt') !== 'timeline',
       restored: false,
     }
@@ -541,6 +547,10 @@ function ChatSessionBody({
     // deliberate focus move the user makes afterwards.
     if (!state || state.restored) return
     state.restored = true
+    // The tab strip still owns the keyboard (Vim h/l just activated this tab):
+    // restoring the timeline here would steal it back and break the next h/l.
+    // Enter/Escape from the strip reaches focusSession() once the widget exists.
+    if (isEditorActivationPreservingFocus(group)) return
     // Only a host that owns keyboard focus for this chat restores it: the
     // session editor (autoFocus / readOnly) does, a read-only foreign one does
     // not.

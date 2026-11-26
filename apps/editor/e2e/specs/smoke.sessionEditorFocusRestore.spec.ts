@@ -17,6 +17,7 @@
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { setVimEnabled } from '../pages/vimHelpers.js'
 import type { Page } from '@playwright/test'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -100,6 +101,61 @@ test.describe('session editor focus — message card focus survives a tab round 
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), POLL)
       .toBe('acp.session')
+    await expect.poll(() => workbench.getFocusedChatSurface()).toBe('prompt')
+  })
+})
+
+test.describe('session editor focus — Vim tab strip keeps the keyboard', () => {
+  test('h/l keeps focus on the tab strip and Escape enters the prompt @regression', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await setVimEnabled(page, true)
+
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+    })
+    await expect.poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), POLL).toBe(1)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
+      .toBe('acp.session')
+
+    // Give the chat a renderable timeline, then add a second tab so the session
+    // is not the only target for h/l.
+    await page.evaluate((t) => window.__E2E__!.sendAcpPrompt(t), 'alpha')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages().length), POLL)
+      .toBe(2)
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), POLL)
+      .not.toBe('acp.session')
+
+    await workbench.runCommand('workbench.action.focusEditorTabs')
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.getAttribute('role')))
+      .toBe('tab')
+
+    // h moves onto the session tab (opened first, so it sits left of the
+    // untitled tab). The chat must not pull the keyboard into its prompt here —
+    // that was the bug (the next h/l became a Monaco motion).
+    await page.keyboard.press('h')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), POLL)
+      .toBe('acp.session')
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.getAttribute('role')))
+      .toBe('tab')
+    expect(await workbench.getFocusedChatSurface()).toBe('none')
+
+    // Escape hands the keyboard to the session's remembered surface.
+    await page.keyboard.press('Escape')
     await expect.poll(() => workbench.getFocusedChatSurface()).toBe('prompt')
   })
 })

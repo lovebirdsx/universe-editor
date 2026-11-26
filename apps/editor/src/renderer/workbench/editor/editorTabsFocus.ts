@@ -70,6 +70,17 @@ export function focusActiveEditorTabs(): boolean {
   return false
 }
 
+/**
+ * True when the last activation asked to preserve focus — Vim tab-strip h/l,
+ * closing a tab from the strip, preview opens and window restore all set it.
+ * Content that auto-focuses on mount or re-activation must skip; Enter/Escape
+ * from the strip re-activates with preserveFocus=false, which clears the flag
+ * and bumps `activationId` so their focus effect runs again.
+ */
+export function isEditorActivationPreservingFocus(group: IEditorGroup | null | undefined): boolean {
+  return group?.lastActivationPreservedFocus === true
+}
+
 /** Strips that already hold the intent, so repeated h/l does not stack listeners. */
 const heldTabStrips = new WeakMap<HTMLElement, () => void>()
 

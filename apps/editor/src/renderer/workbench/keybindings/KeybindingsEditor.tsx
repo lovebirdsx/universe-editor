@@ -27,6 +27,8 @@ import {
 } from '@universe-editor/workbench-ui'
 import { ArrowDownWideNarrow, CircleDot, X } from 'lucide-react'
 import { useService } from '../useService.js'
+import { useEditorGroup } from '../editor/EditorGroupContext.js'
+import { isEditorActivationPreservingFocus } from '../editor/editorTabsFocus.js'
 import {
   consumePendingKeybindingsSearchQuery,
   KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT,
@@ -100,6 +102,8 @@ export function KeybindingsEditor(): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const tableContainerRef = useRef<HTMLDivElement | null>(null)
   const doc = useOwnerDocument()
+  const group = useEditorGroup()
+  const activationId = group?.activationId
 
   // Immediate echo in the input; the expensive re-filter trails by 300ms.
   useEffect(() => {
@@ -180,18 +184,27 @@ export function KeybindingsEditor(): JSX.Element {
     searchInputRef.current?.focus()
     searchInputRef.current?.select()
   }, [])
+  const applyFocusSearch = useCallback(() => {
+    focusSearch()
+    const pending = consumePendingKeybindingsSearchQuery()
+    if (pending !== undefined) setQuery(pending)
+  }, [focusSearch])
+
+  // The listener must register unconditionally; only the automatic focus honors
+  // the tab strip. Vim h/l activates this tab while keeping the keyboard on the
+  // strip — Enter or Escape re-activates (activationId bumps) and lands focus in
+  // the search box.
   useEffect(() => {
-    const applyFocusSearch = (): void => {
-      focusSearch()
-      const pending = consumePendingKeybindingsSearchQuery()
-      if (pending !== undefined) setQuery(pending)
-    }
+    doc?.addEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, applyFocusSearch)
+    return () => doc?.removeEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, applyFocusSearch)
+  }, [applyFocusSearch, doc])
+
+  useEffect(() => {
+    if (isEditorActivationPreservingFocus(group)) return
     // Mount covers the freshly-opened editor (the microtask event fired before
     // the listener existed); the event covers the reused-tab path.
     applyFocusSearch()
-    doc?.addEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, applyFocusSearch)
-    return () => doc?.removeEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, applyFocusSearch)
-  }, [focusSearch, doc])
+  }, [applyFocusSearch, group, activationId])
 
   // -- record keys mode ---------------------------------------------------------
   // While active, every keystroke (capture phase, stopPropagation — nothing

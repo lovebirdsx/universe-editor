@@ -11,8 +11,10 @@ import {
   KeybindingsRegistry,
   ServiceCollection,
   type IDisposable,
+  type IEditorGroup,
 } from '@universe-editor/platform'
 import { ServicesContext } from '../../useService.js'
+import { EditorGroupContext } from '../../editor/EditorGroupContext.js'
 import { KeybindingsEditor } from '../KeybindingsEditor.js'
 import {
   IUserKeybindingsService,
@@ -62,6 +64,7 @@ vi.mock('@tanstack/react-virtual', async (importOriginal) => {
 function mount(
   userEntries: readonly IUserKeybindingEntry[] = [],
   overrides: Partial<IUserKeybindingsServiceType> = {},
+  group: IEditorGroup | null = null,
 ) {
   const onDidChangeEmitter = new Emitter<void>()
   const userKeybindingsService: IUserKeybindingsServiceType = {
@@ -90,13 +93,16 @@ function mount(
   services.set(IContextKeyService, contextKeyService)
   const instantiation = new InstantiationService(services)
 
-  const utils = render(
+  const element = (editorGroup: IEditorGroup | null) => (
     <ServicesContext.Provider value={instantiation}>
-      <KeybindingsEditor />
-    </ServicesContext.Provider>,
+      <EditorGroupContext.Provider value={editorGroup}>
+        <KeybindingsEditor />
+      </EditorGroupContext.Provider>
+    </ServicesContext.Provider>
   )
+  const utils = render(element(group))
 
-  return { ...utils, onDidChangeEmitter, userKeybindingsService, contextKeyService }
+  return { ...utils, element, onDidChangeEmitter, userKeybindingsService, contextKeyService }
 }
 
 /** Data rows only (the header row carries no parity marker). */
@@ -146,6 +152,31 @@ describe('KeybindingsEditor', () => {
     const { container } = mount()
     const search = container.querySelector('input[type=search]') as HTMLInputElement
     await waitFor(() => expect(document.activeElement).toBe(search))
+  })
+
+  // Vim tab-strip h/l activates this tab while keeping DOM focus on the tab; the
+  // search box must not grab it back or the next h/l becomes a text input.
+  it('does not focus the search input while the tab strip preserves focus', () => {
+    registerTestCommands()
+    const group = { id: 1, activationId: 1, lastActivationPreservedFocus: true }
+    const { container } = mount([], {}, group as unknown as IEditorGroup)
+    const search = container.querySelector('input[type=search]') as HTMLInputElement
+    expect(document.activeElement).not.toBe(search)
+  })
+
+  it('focuses the search input when the editor is re-activated from the tab strip', () => {
+    registerTestCommands()
+    const group = { id: 1, activationId: 1, lastActivationPreservedFocus: true }
+    const view = mount([], {}, group as unknown as IEditorGroup)
+    const search = view.container.querySelector('input[type=search]') as HTMLInputElement
+    expect(document.activeElement).not.toBe(search)
+
+    group.lastActivationPreservedFocus = false
+    group.activationId = 2
+    act(() => {
+      view.rerender(view.element(group as unknown as IEditorGroup))
+    })
+    expect(document.activeElement).toBe(search)
   })
 
   it('re-focuses the search input when the focus event fires', async () => {

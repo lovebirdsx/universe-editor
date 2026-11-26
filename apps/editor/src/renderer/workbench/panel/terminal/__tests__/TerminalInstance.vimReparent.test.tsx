@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { Emitter, IConfigurationService } from '@universe-editor/platform'
+import type { IEditorGroup } from '@universe-editor/platform'
 import type { VimSurfaceMode } from '@universe-editor/workbench-ui'
 import { __resetVimSurfacesForTests } from '@universe-editor/workbench-ui'
 import { IVimInputMethodService } from '../../../../../shared/ipc/vimInputMethodService.js'
@@ -17,6 +18,7 @@ import { ITerminalManagerService } from '../../../../services/terminal/TerminalM
 import { ITerminalXtermService } from '../../../../services/terminal/TerminalXtermService.js'
 import { IVimModeService } from '../../../../services/vim/vimModeService.js'
 import { releaseInputMethod, requestInputMethod } from '../../../editor/vim/vimInputMethod.js'
+import { EditorGroupContext } from '../../../editor/EditorGroupContext.js'
 import { ServicesContext } from '../../../useService.js'
 import { TerminalInstance } from '../TerminalInstance.js'
 
@@ -98,21 +100,33 @@ function setup() {
     invokeFunction: (fn: (accessor: { get: (id: unknown) => unknown }) => unknown) =>
       fn({ get: (id: unknown) => map.get(id) }),
   }
-  const mount = () =>
-    render(
-      <ServicesContext.Provider value={container as never}>
+  const element = (group: IEditorGroup | null, focused: boolean) => (
+    <ServicesContext.Provider value={container as never}>
+      <EditorGroupContext.Provider value={group}>
         <TerminalInstance
           id="t1"
           active
-          focused={false}
+          focused={focused}
           cwd="/tmp"
           home={undefined}
           resolveFile={async () => null}
           openFile={() => {}}
         />
-      </ServicesContext.Provider>,
-    )
-  return { mount, modes, vim, inputMethod, textarea, removeEmitter }
+      </EditorGroupContext.Provider>
+    </ServicesContext.Provider>
+  )
+  const mount = (options: { group?: IEditorGroup | null; focused?: boolean } = {}) =>
+    render(element(options.group ?? null, options.focused ?? false))
+  return {
+    mount,
+    element,
+    services: container,
+    modes,
+    vim,
+    inputMethod,
+    textarea,
+    removeEmitter,
+  }
 }
 
 describe('TerminalInstance Normal mode across reparent', () => {
@@ -182,5 +196,20 @@ describe('TerminalInstance Normal mode across reparent', () => {
     removeEmitter.fire({ id: 't1' })
 
     expect(modes.has('terminal:t1')).toBe(false)
+  })
+
+  // Vim editor-tab h/l activates the terminal tab while keeping focus on the tab.
+  // The active effect must not grab the xterm; Enter/Escape re-activates the
+  // editor (activationId bumps) and lands focus in the terminal.
+  it('keeps the editor tab strip focus when the group activation preserves it', () => {
+    const { mount, element, textarea } = setup()
+    const group = { id: 7, activationId: 1, lastActivationPreservedFocus: true }
+    const view = mount({ group: group as unknown as IEditorGroup, focused: true })
+    expect(document.activeElement).not.toBe(textarea)
+
+    group.lastActivationPreservedFocus = false
+    group.activationId = 2
+    view.rerender(element(group as unknown as IEditorGroup, true))
+    expect(document.activeElement).toBe(textarea)
   })
 })

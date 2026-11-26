@@ -25,6 +25,7 @@ import { WebviewPanelInput } from '../../services/editor/WebviewPanelInput.js'
 import { WebviewFocusRegistry } from '../../services/editor/WebviewFocusRegistry.js'
 import { WebviewElement } from '../webview/WebviewElement.js'
 import { useEditorGroup } from './EditorGroupContext.js'
+import { isEditorActivationPreservingFocus } from './editorTabsFocus.js'
 
 export function WebviewPanelHost({ input }: { input: IEditorInput }) {
   const webviewService = useService(IWebviewService)
@@ -32,11 +33,16 @@ export function WebviewPanelHost({ input }: { input: IEditorInput }) {
   const panel = webviewService.getPanel(panelInput.panelHandle)
   const group = useEditorGroup()
 
+  const activationId = group?.activationId
   useEffect(() => {
+    // Vim tab-strip h/l activates this panel while keeping focus on the tab; an
+    // iframe focus grab here would break the next h/l. Enter/Escape re-activates
+    // (activationId bumps) or WebviewPanelInput.focus() requests it explicitly.
+    if (isEditorActivationPreservingFocus(group)) return
     // Move keyboard focus into the iframe once its controller registers (it does
     // so on the WebviewElement mount below; the registry queues this if late).
     WebviewFocusRegistry.requestFocus(panelInput.viewType, panelInput.focusResource, group?.id)
-  }, [panelInput, group?.id])
+  }, [panelInput, group?.id, group, activationId])
 
   return panel ? <WebviewElement key={panel.panelHandle} panel={panel} /> : null
 }

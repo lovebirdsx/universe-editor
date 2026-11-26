@@ -30,6 +30,7 @@ import {
 import { fileUriToImageUrl } from '../../../shared/imageResource.js'
 import { ImageEditorInput } from '../../services/editor/ImageEditorInput.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
+import { isEditorActivationPreservingFocus } from './editorTabsFocus.js'
 import { useService } from '../useService.js'
 import styles from './ImageEditor.module.css'
 
@@ -189,9 +190,14 @@ export function ImageEditor({ input }: { input: IEditorInput }) {
   }, [isActive, statusBarService, natural, byteSize, scale])
 
   // Focus the container on activation so keyboard zoom works without a click.
+  // The Vim tab strip keeps the keyboard while h/l moves between tabs; Enter or
+  // Escape re-activates the editor (activationId bumps) and focus lands here.
+  const activationId = group?.activationId
   useLayoutEffect(() => {
-    if (isActive) containerRef.current?.focus()
-  }, [isActive])
+    if (!isActive) return
+    if (isEditorActivationPreservingFocus(group)) return
+    containerRef.current?.focus()
+  }, [isActive, group, activationId])
 
   const imgStyle =
     scale === null

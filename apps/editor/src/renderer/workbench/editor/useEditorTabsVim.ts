@@ -212,13 +212,16 @@ export function useEditorTabsVim(options: UseEditorTabsVimOptions): void {
         if (tab !== null) dispatchKeyboardContextMenu(tab, true)
       },
       escape: () => {
-        focusRetryGeneration++
         const state = stateRef.current
         const editor = state.group.activeEditor
         if (editor !== undefined) {
-          focusEditorInput(editor, state.contextKeyService, state.group.id)
+          // Same activation path as Enter: it clears the preserve-focus hold and
+          // bumps activationId, so editors that self-focus on activation (image,
+          // settings, keybindings, …) get their focus effect re-run.
+          activateIndex(state, state.group.editors.indexOf(editor), false)
           return
         }
+        focusRetryGeneration++
         focusGroupBody(state.contextKeyService, state.group.id)
       },
     },

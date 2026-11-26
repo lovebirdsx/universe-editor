@@ -39,6 +39,8 @@ import {
 } from '@universe-editor/workbench-ui'
 import { SETTINGS_SURFACE_KEYMAP } from '../../services/vim/vimSurfaceKeymaps.js'
 import { useOptionalService, useService } from '../useService.js'
+import { useEditorGroup } from '../editor/EditorGroupContext.js'
+import { isEditorActivationPreservingFocus } from '../editor/editorTabsFocus.js'
 import {
   SETTINGS_EDITOR_FOCUS_LIST_EVENT,
   SETTINGS_EDITOR_FOCUS_SEARCH_EVENT,
@@ -129,6 +131,8 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
   const [focusedKey, setFocusedKey] = useState<string | undefined>(undefined)
   const pendingControlKey = useRef<string | null>(null)
   const doc = useOwnerDocument()
+  const group = useEditorGroup()
+  const activationId = group?.activationId
 
   const scrollPersister = useMemo(() => new SettingsScrollPersister(storage), [storage])
   useEffect(() => {
@@ -143,16 +147,24 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
     scrollPersister,
   )
 
-  useEffect(() => {
-    const focusSearch = () => {
-      searchInputRef.current?.focus()
-      searchInputRef.current?.select()
-    }
+  const focusSearch = useCallback(() => {
+    searchInputRef.current?.focus()
+    searchInputRef.current?.select()
+  }, [])
 
-    focusSearch()
+  useEffect(() => {
     doc?.addEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
     return () => doc?.removeEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
-  }, [doc])
+  }, [doc, focusSearch])
+
+  // The listener above must register unconditionally; only the automatic focus
+  // honors the tab strip. Vim h/l activates this tab while keeping the keyboard
+  // on the strip — Enter or Escape re-activates (activationId bumps) and lands
+  // focus in the search box.
+  useEffect(() => {
+    if (isEditorActivationPreservingFocus(group)) return
+    focusSearch()
+  }, [focusSearch, group, activationId])
 
   // Escape inside a row control must return to the list before the global
   // "focus editor group" Escape binding claims it. The binding is gated on this
