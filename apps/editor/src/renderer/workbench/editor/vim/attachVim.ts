@@ -14,6 +14,7 @@ import {
   type IVimEditorController,
   type IVimEditorControllerOptions,
 } from './vimEditorController.js'
+import { dismissContentHover } from './vimEditorHover.js'
 
 export interface VimAttachment {
   readonly controller: IVimEditorController
@@ -51,6 +52,9 @@ export function attachVim(options: AttachVimOptions): VimAttachment {
       isAwaitingCharArg: () => controller.isAwaitingCharArg(),
       takeCount: () => controller.takeCount(),
       getPendingHint: () => controller.getPendingHint(),
+      dismissHover: () => {
+        dismissContentHover(options.editor)
+      },
     },
   })
   let disposed = false

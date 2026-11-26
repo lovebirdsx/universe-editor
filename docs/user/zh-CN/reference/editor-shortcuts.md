@@ -273,13 +273,15 @@
 | 下一个 / 上一个问题（跨文件） | `]d` / `[d` |
 | 下一处 / 上一处更改 | `]c` / `[c`，或单和弦 `Alt+J` / `Alt+K`（j 向下 = 下一处，k 向上 = 上一处）；焦点在列表 / 树中时，只要活动编辑器是对比编辑器也同样生效 |
 
+`K` / `gh` 打开的 hover 是临时浮层：之后任意移动、操作符或 leader 命令都会关闭它；再按一次 `K` 会把焦点移进 hover，可用方向键滚动内容。
+
 `g`、`[`、`]`、`>`、`<`、`z`、`f` `t` `r`、`"` 等是待定前缀，无限等待下一键（同 Vim 内置命令，不受 `vim.sequenceTimeoutMs` 影响）。待定期间按功能键（`F1`–`F12`）会取消前缀并照常交给工作台；按 `Backspace` / `Delete` / `Enter` / `Tab` / 方向键等编辑或移动类按键则取消前缀并**吞掉这一击**（不会误删字符或换行）。`r<Space>`（替换成空格）、`r<Enter>`（换行）、`f<Tab>` 这类「把该键当字符参数」的用法照常可用；等待字符参数期间 `Space` 也是参数，不会触发 leader。`AltGr` / macOS `Option` 组合出来的字符（如 `@`、`€`）作为普通字符键处理。这些原生前缀键由编辑器内核处理，其中 `]c` / `[c` / `]d` / `[d` 四个条目可以按 id（`editor.nextChange` / `editor.previousChange` / `editor.nextDiagnostic` / `editor.previousDiagnostic`）用 `vim.keymap` 覆盖或解绑；其余原生前缀键不能用 `vim.keymap` 覆盖，需要自定义时使用下文的 leader 别名（折叠父级也可用 `<leader>z`）。`dz*`、`dH` 这类「操作符 + 视口 / 折叠命令」组合不支持，会取消操作符。`d}` / `d{` 遵循 Vim 规则：终点落在下一段空行行首时收到上一行行尾，起点在缩进里则按整行删除。
 
 Normal 模式下**未实现的字符键会被吞掉**，不会输入到缓冲区；`F1`–`F12`、媒体键、输入法组合键等非文本功能键不拦截，仍交给工作台和编辑器处理。
 
 **Ctrl 组合键的归属**：`Ctrl+H` / `Ctrl+J` / `Ctrl+K` / `Ctrl+L` 仍归工作台（替换 / 切换底栏 / 和弦 / 扩选），Ctrl+K 和弦照常可用。编辑器 Normal 下 Vim 接管 `Ctrl+F` / `Ctrl+B` / `Ctrl+D` / `Ctrl+U` / `Ctrl+E` / `Ctrl+Y`（滚动，`Ctrl+Y` 不再重做）、`Ctrl+R`（重做）、`Ctrl+V`（块选择，不再粘贴）；`Ctrl+O` / `Ctrl+I`（导航后退 / 前进，可带计数如 `3<C-o>`）在所有 Normal surface 上同义，走 Vim 键位表，可用 `vim.keymap` 改绑（id `nav.back` / `nav.forward`）；视图焦点只在 Vim 开启时才记进导航历史。这些组合若你有自己的同键绑定，用户键位优先（见下文优先级）。
 
-**光标与 `Esc`**：Normal / Visual 下光标是块状，Insert 下恢复为你设置的光标样式。`j` / `k` 会记住期望列：经过短行后回到原来的列；`$` 之后上下移动都贴着行尾。`gj` / `gk` 单独记住视觉行内的横向位置，跨过较短的行后同样会回到原来的位置。从 Insert 按 `Esc` 光标左移一格（同 Vim），并且一次 `u` 撤销整段 Insert 输入。Normal 下**没有任何待定状态时**按 `Esc`：先清除搜索高亮，没有高亮可清时把焦点交给编辑器标签栏（Chat 输入框中改为交回 Chat 时间线；可用 `h` / `l` 切换标签，`Enter` 回正文）；取消前缀 / 计数的那一次 `Esc` 不会跳到标签栏。`Ctrl+[` 在 Normal / Visual / Insert 下都等同 `Esc`。
+**光标与 `Esc`**：Normal / Visual 下光标是块状，Insert 下恢复为你设置的光标样式。`j` / `k` 会记住期望列：经过短行后回到原来的列；`$` 之后上下移动都贴着行尾。`gj` / `gk` 单独记住视觉行内的横向位置，跨过较短的行后同样会回到原来的位置。从 Insert 按 `Esc` 光标左移一格（同 Vim），并且一次 `u` 撤销整段 Insert 输入。Normal 下**没有任何待定状态时**按 `Esc`：先关闭正在显示的 hover，再清除搜索高亮，都没有时才把焦点交给编辑器标签栏（Chat 输入框中改为交回 Chat 时间线；可用 `h` / `l` 切换标签，`Enter` 回正文）；取消前缀 / 计数的那一次 `Esc` 不会跳到标签栏。`Ctrl+[` 在 Normal / Visual / Insert 下都等同 `Esc`。
 
 `/`、`?` 搜索为**字面量子串**（不支持正则或多行查询），`*`、`#` 只匹配完整单词（词字符为 `[A-Za-z0-9_$]`，`foo` 不会命中 `fooBar`），`n` / `N` 沿用上一次搜索的模式。默认 smartcase：查询全小写时忽略大小写，含大写字母时区分。可在查询后加 `\c` 忽略大小写、`\C` 强制区分（对本次搜索生效），也可点击搜索框右侧的 `Aa` 切换本次策略；默认策略由 `vim.searchCaseSensitivity` 控制（`smart` / `sensitive` / `insensitive`，默认 `smart`）。区分大小写且无匹配时会提示可加 `\c`。连续两个反斜杠 `\\` 表示字面反斜杠（如 `C:\\config` 搜索 `C:\config`）。没有更多匹配时会环绕整个文件（wrapscan）。
 

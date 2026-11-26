@@ -133,6 +133,12 @@ export interface IVimSurfaceActions {
    * such as `f` / `r` / `"`, a bare count). Read after every stroke, so keep it cheap.
    */
   readonly getPendingHint?: () => IVimPendingHint | undefined
+  /**
+   * Editor surfaces only. Called when the shared engine takes a stroke the core
+   * will not see (leader sequence, mapped chord): a visible Monaco hover must be
+   * dismissed explicitly. No-op when nothing is visible.
+   */
+  readonly dismissHover?: () => void
 }
 
 export interface IVimSurfaceRegistration {

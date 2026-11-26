@@ -304,6 +304,8 @@ export interface VimPrefixTable {
   readonly allowedWithOperator: boolean
 }
 
+export const SHOW_HOVER_COMMAND_ID = 'editor.action.showHover'
+
 const editorCommand = (commandId: string, description: string): VimPrefixEntry => ({
   command: () => ({ type: 'editor-command', commandId }),
   description,
@@ -376,7 +378,7 @@ const DEFAULT_PREFIX_TABLES: Record<VimPendingKind, VimPrefixTable> = {
       ['i', editorCommand('editor.action.goToImplementation', 'Go to implementation')],
       ['r', editorCommand('editor.action.goToReferences', 'Go to references')],
       ['R', editorCommand('editor.action.referenceSearch.trigger', 'Find references')],
-      ['h', editorCommand('editor.action.showHover', 'Show hover')],
+      ['h', editorCommand(SHOW_HOVER_COMMAND_ID, 'Show hover')],
       [
         'J',
         {
@@ -566,7 +568,7 @@ export const SIMPLE_COMMANDS: ReadonlyMap<string, VimSimpleCommandDef> = new Map
   [
     'K',
     {
-      create: () => ({ type: 'editor-command', commandId: 'editor.action.showHover' }),
+      create: () => ({ type: 'editor-command', commandId: SHOW_HOVER_COMMAND_ID }),
       description: 'Show hover',
       visual: true,
     },

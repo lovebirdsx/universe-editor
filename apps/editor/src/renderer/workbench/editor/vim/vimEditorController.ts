@@ -36,6 +36,7 @@ import { VIM_CORE_IDS } from '../../../services/vim/vimCoreKeymap.js'
 import { LEADER_TOKEN, isModifierChord } from '../../../services/vim/vimKeymapMerge.js'
 import type { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
 import { affectsBridgedEditorOption } from '../monaco/editorOptionsFromConfig.js'
+import { dismissContentHover, isShowHoverCommand } from './vimEditorHover.js'
 import { createVimEdits, visualStartPosition } from './vimEdits.js'
 import { releaseInputMethod, requestInputMethod } from './vimInputMethod.js'
 import { consumeEvent, isImeKeyEvent, toVimKeyInput } from './vimKeyUtils.js'
@@ -782,6 +783,9 @@ export function createVimEditorController(
     'search-repeat': (command) => search.repeat(command.reverse, command.count),
     'search-word': (command) => search.searchWord(command.direction, command.count),
     'search-highlight-clear'() {
+      // Check the hover before clearHighlights(): that call mutates suppression
+      // state and cancels timers even when it returns false.
+      if (dismissContentHover(editor)) return
       if (search.clearHighlights()) return
       console.debug(`[vim] Escape with nothing to clear; running ${idleEscapeCommand}`)
       void runPlatformCommand?.(idleEscapeCommand)
@@ -1031,7 +1035,13 @@ export function createVimEditorController(
     }
     consumeEvent(event)
     if (result.unsupported !== undefined) onUnsupportedKey?.(result.unsupported)
-    if (result.command !== null) runCommand(result.command, result.register)
+    const command = result.command
+    // Vim consumes the keydown before Monaco sees it, so the hover controller's
+    // own dismiss never runs. K / gh own the hover; idle Esc decides below.
+    if (!isShowHoverCommand(command) && command?.type !== 'search-highlight-clear') {
+      dismissContentHover(editor)
+    }
+    if (command !== null) runCommand(command, result.register)
     syncContextKeys()
     reportPending()
     return true

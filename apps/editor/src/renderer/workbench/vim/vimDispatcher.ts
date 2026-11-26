@@ -471,6 +471,10 @@ export class VimDispatcher {
     editor = false,
   ): boolean {
     const vim = this._options.vimModeService
+    // Editor leader sequences and mapped chords run here, not in the controller:
+    // dismiss a visible hover before the stroke takes effect (show-hover commands
+    // hide the old one first and then show the new one, as Monaco would).
+    if (active.surface.kind === 'editor') active.surface.actions.dismissHover?.()
     // What the user typed for the current attempt, for the unsupported-key notice.
     let typed: readonly string[] = [...active.sequence.prefix, token]
     let step = active.sequence.feed(token)

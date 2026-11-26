@@ -159,6 +159,7 @@ function createFakeEditor(lines: string[], doc: Document = document) {
       id: string,
       contribution: monaco.editor.IEditorContribution & {
         stickyScrollWidgetHeight?: number
+        isHoverVisible?: boolean
         foldingModel?: {
           getAllRegionsAtLine(lineNumber: number): readonly FakeFoldRegion[]
         } | null
@@ -167,6 +168,15 @@ function createFakeEditor(lines: string[], doc: Document = document) {
       contributions.set(id, contribution)
     },
   }
+}
+
+const CONTENT_HOVER_CONTRIBUTION_ID = 'editor.contrib.contentHover'
+
+function setContentHover(fake: ReturnType<typeof createFakeEditor>, visible: boolean): void {
+  fake.setContribution(CONTENT_HOVER_CONTRIBUTION_ID, {
+    dispose: () => undefined,
+    isHoverVisible: visible,
+  })
 }
 
 function key(key: string, modifiers: Partial<KeyboardEventInit> = {}): KeyboardEvent {
@@ -2137,6 +2147,40 @@ describe('createVimEditorController', () => {
       expect(executeCommand).toHaveBeenCalledWith('workbench.action.focusEditorTabs')
       controller.dispose()
     })
+
+    it('closes a visible hover before clearing hlsearch and handing focus away', async () => {
+      const executeCommand = vi.fn()
+      const config = createFakeConfig({ 'vim.enabled': true, 'vim.highlightSearch': true })
+      const fake = createFakeEditor(['foo foo'])
+      const controller = createVimEditorController({
+        editor: fake.editor,
+        surfaceKey: 'editor:test',
+        configService: config as never,
+        contextKeyService: createContext() as never,
+        vimModeService: createVimModeService() as never,
+        inputMethodService: createInputMethodService() as never,
+        executeCommand,
+      })
+      fake.focus()
+      controller.handleKeyDown(key('*'))
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(fake.decorationSets().length).toBeGreaterThan(0)
+      setContentHover(fake, true)
+
+      controller.handleKeyDown(key('Escape'))
+      expect(fake.editor.trigger).toHaveBeenCalledWith('vim', 'editor.action.hideHover', null)
+      expect(fake.decorationClears()).toBe(0)
+      expect(executeCommand).not.toHaveBeenCalled()
+
+      setContentHover(fake, false)
+      controller.handleKeyDown(key('Escape'))
+      expect(fake.decorationClears()).toBeGreaterThan(0)
+      expect(executeCommand).not.toHaveBeenCalled()
+
+      controller.handleKeyDown(key('Escape'))
+      expect(executeCommand).toHaveBeenCalledWith('workbench.action.focusEditorTabs')
+      controller.dispose()
+    })
   })
 
   describe('counts and word operators through the controller', () => {
@@ -2213,6 +2257,85 @@ describe('createVimEditorController', () => {
         },
       ])
       expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 2 })
+      controller.dispose()
+    })
+  })
+
+  describe('hover dismissal', () => {
+    it('dismisses a visible content hover on a Normal-mode motion', () => {
+      const { fake, controller } = createNormalHarness(['abc'])
+      setContentHover(fake, true)
+      controller.handleKeyDown(key('l'))
+      expect(fake.editor.trigger).toHaveBeenCalledWith('vim', 'editor.action.hideHover', null)
+      controller.dispose()
+    })
+
+    it('does not touch the command pipeline when no hover is visible', () => {
+      const { fake, controller } = createNormalHarness(['abc'])
+      controller.handleKeyDown(key('l'))
+      setContentHover(fake, false)
+      controller.handleKeyDown(key('l'))
+      expect(fake.editor.trigger).not.toHaveBeenCalled()
+      controller.dispose()
+    })
+
+    it('leaves K in charge of the hover', () => {
+      const { fake, controller } = createNormalHarness(['abc'])
+      setContentHover(fake, true)
+      controller.handleKeyDown(key('K'))
+      expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'editor.action.showHover', null)
+      expect(fake.editor.trigger).not.toHaveBeenCalledWith('vim', 'editor.action.hideHover', null)
+      controller.dispose()
+    })
+
+    it('runs gh without dismissing the hover it is about to show', () => {
+      const { fake, controller } = createNormalHarness(['abc'])
+      controller.handleKeyDown(key('g'))
+      controller.handleKeyDown(key('h'))
+      expect(fake.editor.trigger).toHaveBeenLastCalledWith('vim', 'editor.action.showHover', null)
+      expect(fake.editor.trigger).not.toHaveBeenCalledWith('vim', 'editor.action.hideHover', null)
+      controller.dispose()
+    })
+
+    it('dismisses the hover and swallows an Escape that cancels a pending operator', () => {
+      const executeCommand = vi.fn()
+      const { fake, controller } = createNormalHarness(['abc'], { executeCommand })
+      controller.handleKeyDown(key('d'))
+      setContentHover(fake, true)
+      controller.handleKeyDown(key('Escape'))
+      expect(fake.editor.trigger).toHaveBeenCalledWith('vim', 'editor.action.hideHover', null)
+      expect(executeCommand).not.toHaveBeenCalled()
+      controller.dispose()
+    })
+
+    it('dismisses the hover when Escape leaves Visual', () => {
+      const executeCommand = vi.fn()
+      const { fake, vim, controller } = createNormalHarness(['abc'], { executeCommand })
+      controller.handleKeyDown(key('v'))
+      setContentHover(fake, true)
+      controller.handleKeyDown(key('Escape'))
+      expect(fake.editor.trigger).toHaveBeenCalledWith('vim', 'editor.action.hideHover', null)
+      expect(executeCommand).not.toHaveBeenCalled()
+      expect(vim.modes.get('editor:test')).toBe('normal')
+      controller.dispose()
+    })
+
+    it('dismisses the hover and the suggest widget when Escape leaves Insert', () => {
+      const { fake, controller } = createNormalHarness(['abc'])
+      controller.handleKeyDown(key('i'))
+      setContentHover(fake, true)
+      controller.handleKeyDown(key('Escape'))
+      expect(fake.editor.trigger).toHaveBeenCalledWith('vim', 'hideSuggestWidget', null)
+      expect(fake.editor.trigger).toHaveBeenCalledWith('vim', 'editor.action.hideHover', null)
+      controller.dispose()
+    })
+
+    it('leaves the hover to Monaco when the text area does not have focus', () => {
+      const { fake, controller } = createNormalHarness(['abc'])
+      setContentHover(fake, true)
+      fake.blur()
+      expect(controller.handleKeyDown(key('j'))).toBe(false)
+      expect(fake.editor.trigger).not.toHaveBeenCalled()
       controller.dispose()
     })
   })

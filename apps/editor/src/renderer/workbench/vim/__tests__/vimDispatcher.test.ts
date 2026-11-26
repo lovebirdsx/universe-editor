@@ -598,6 +598,32 @@ describe('VimDispatcher', () => {
     expect(handleStroke).not.toHaveBeenCalled()
   })
 
+  it('dismisses a visible editor hover before running a leader command', () => {
+    const container = element()
+    const textarea = doc.createElement('textarea')
+    container.appendChild(textarea)
+    textarea.focus()
+    const dismissHover = vi.fn()
+    const handleStroke = vi.fn(() => true)
+    registerVimSurface(
+      surface('editor', container, { actions: { handleStroke, dismissHover } }),
+      doc,
+    )
+    const leaderKeymap: readonly IVimKeymapEntry[] = [
+      { id: 'leader.hover', keys: ['space', 'k'], command: 'editor.action.showHover' },
+    ]
+    const vim = createVim({ getEffectiveKeymap: () => leaderKeymap, getLeader: () => 'space' })
+    const { dispatcher, commands } = createDispatcher({ vim })
+
+    expect(dispatcher.handleKeyDown(doc, press(' '))).toBe(true)
+    expect(dismissHover).toHaveBeenCalledTimes(1)
+
+    expect(dispatcher.handleKeyDown(doc, press('k'))).toBe(true)
+    expect(dismissHover).toHaveBeenCalledTimes(2)
+    expect(commands).toHaveBeenCalledWith('editor.action.showHover', { count: 1 })
+    expect(handleStroke).not.toHaveBeenCalled()
+  })
+
   it('falls back to the editor controller when a leader prefix matches nothing', () => {
     const container = element()
     const textarea = doc.createElement('textarea')
