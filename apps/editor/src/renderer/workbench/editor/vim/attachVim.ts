@@ -2,9 +2,10 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  One call wires a Monaco instance into Vim mode: the controller (state + commands)
- *  and its surface registration (the window-capture stroke routing). FileEditor and
- *  DiffEditor both go through here so the two never differ in how a surface is
- *  declared — only in which editor they hand over and where `surfaceKey` points.
+ *  and its surface registration (the window-capture stroke routing). FileEditor,
+ *  DiffEditor and SwarmDiffEditor all go through here so they never differ in how
+ *  a surface is declared — only in which editor they hand over and where
+ *  `surfaceKey` points.
  *--------------------------------------------------------------------------------------------*/
 
 import { registerVimSurface } from '@universe-editor/workbench-ui'

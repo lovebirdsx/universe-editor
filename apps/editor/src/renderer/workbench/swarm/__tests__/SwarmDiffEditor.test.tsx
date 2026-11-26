@@ -9,6 +9,8 @@ interface DiffEditorStub {
   readonly restoreViewStateCalls: unknown[]
   setModel(model: unknown): void
   fireUpdateDiff(): void
+  getOriginalEditor(): unknown
+  getModifiedEditor(): unknown
 }
 
 const monacoTestState = vi.hoisted(() => ({
@@ -17,6 +19,8 @@ const monacoTestState = vi.hoisted(() => ({
 }))
 
 vi.mock('../../editor/monaco/MonacoLoader.js', () => {
+  const EDITOR_OPTION = { lineHeight: 5, readOnly: 4 }
+
   function disposable(dispose: () => void = () => {}) {
     return { dispose }
   }
@@ -47,6 +51,7 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => {
       getPosition: () => ({ lineNumber: 1, column: 1 }),
       setPosition: () => {},
       revealLineInCenter: () => {},
+      getOption: (option: number) => (option === EDITOR_OPTION.lineHeight ? 23 : true),
     }
   }
 
@@ -88,6 +93,7 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => {
   const monacoStub = {
     Uri: { parse: (value: string) => ({ toString: () => value }) },
     editor: {
+      EditorOption: EDITOR_OPTION,
       createModel: (text: string, _language: string, uri: unknown) => {
         monacoTestState.createModelCalls++
         return makeModel(text, uri)
@@ -113,6 +119,10 @@ vi.mock('../SwarmInlineCommentController.js', () => ({
   },
 }))
 
+vi.mock('../../editor/vim/attachVim.js', () => ({
+  attachVim: vi.fn(() => ({ controller: {}, dispose: vi.fn() })),
+}))
+
 import {
   ICommandService,
   IConfigurationService,
@@ -126,11 +136,28 @@ import { SwarmDiffEditorInput } from '../../../services/editor/SwarmDiffEditorIn
 import { DiffEditorRegistry } from '../../../services/editor/DiffEditorRegistry.js'
 import { EditorViewStateCache } from '../../../services/editor/EditorViewStateCache.js'
 import { _resetDiffModelCacheForTests } from '../../../services/editor/diffModelCache.js'
+import { IVimModeService } from '../../../services/vim/vimModeService.js'
+import { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
 import { ServicesContext } from '../../useService.js'
 import { EditorGroupContext } from '../../editor/EditorGroupContext.js'
+import { attachVim } from '../../editor/vim/attachVim.js'
+import { editorVimSurfaceKey } from '../../editor/vim/vimSurfaceKeys.js'
 import { SwarmDiffEditor } from '../SwarmDiffEditor.js'
 
-function createInstantiationService(): InstantiationService {
+function createVimServices() {
+  return {
+    vimModeService: { _serviceBrand: undefined, forgetSurface: vi.fn() },
+    vimInputMethodService: { _serviceBrand: undefined },
+  }
+}
+
+function createInstantiationService(
+  options: {
+    vim?: ReturnType<typeof createVimServices>
+    commandService?: ICommandService
+    groups?: unknown[]
+  } = {},
+): InstantiationService {
   const services = new ServiceCollection()
   services.set(IConfigurationService, {
     _serviceBrand: undefined,
@@ -138,10 +165,13 @@ function createInstantiationService(): InstantiationService {
     getMerged: () => ({}),
     onDidChangeConfiguration: () => ({ dispose() {} }),
   } as never)
-  services.set(ICommandService, {
-    _serviceBrand: undefined,
-    executeCommand: async () => [],
-  } as never)
+  services.set(
+    ICommandService,
+    (options.commandService ?? {
+      _serviceBrand: undefined,
+      executeCommand: async () => [],
+    }) as never,
+  )
   services.set(IContextKeyService, {
     _serviceBrand: undefined,
     set: () => {},
@@ -149,8 +179,33 @@ function createInstantiationService(): InstantiationService {
   services.set(IEditorGroupsService, {
     _serviceBrand: undefined,
     activeGroup: { activeEditor: undefined, lastActivationPreservedFocus: false },
+    ...(options.groups !== undefined ? { groups: options.groups } : {}),
   } as never)
+  if (options.vim !== undefined) {
+    services.set(IVimModeService, options.vim.vimModeService as never)
+    services.set(IVimInputMethodService, options.vim.vimInputMethodService as never)
+  }
   return new InstantiationService(services)
+}
+
+interface ModelChangeEvent {
+  readonly kind: string
+  readonly editor?: unknown
+  readonly replacedEditor?: unknown
+}
+
+function createGroup(id: number) {
+  const listeners = new Set<(event: ModelChangeEvent) => void>()
+  return {
+    id,
+    onDidChangeModel(listener: (event: ModelChangeEvent) => void) {
+      listeners.add(listener)
+      return { dispose: () => listeners.delete(listener) }
+    },
+    emitModelChange(event: ModelChangeEvent) {
+      for (const listener of [...listeners]) listener(event)
+    },
+  }
 }
 
 function createInput() {
@@ -178,6 +233,7 @@ async function waitForDiffEditor(): Promise<DiffEditorStub> {
 
 afterEach(() => {
   cleanup()
+  vi.mocked(attachVim).mockClear()
   DiffEditorRegistry._resetForTests()
   EditorViewStateCache._resetForTests()
   _resetDiffModelCacheForTests()
@@ -305,5 +361,118 @@ describe('SwarmDiffEditor', () => {
     }
     expect(secondModel.original).toBe(firstModel.original)
     expect(secondModel.modified).toBe(firstModel.modified)
+  })
+
+  it('does not attach Vim without the optional Vim services', async () => {
+    render(
+      <ServicesContext.Provider value={createInstantiationService()}>
+        <EditorGroupContext.Provider value={{ id: 12 } as never}>
+          <SwarmDiffEditor input={createInput()} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    await waitForDiffEditor()
+    expect(attachVim).not.toHaveBeenCalled()
+  })
+
+  it('attaches Vim to the read-only modified pane', async () => {
+    const input = createInput()
+    const group = createGroup(13)
+    const vim = createVimServices()
+    render(
+      <ServicesContext.Provider value={createInstantiationService({ vim })}>
+        <EditorGroupContext.Provider value={group as never}>
+          <SwarmDiffEditor input={input} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    const editor = await waitForDiffEditor()
+
+    expect(attachVim).toHaveBeenCalledTimes(1)
+    const options = vi.mocked(attachVim).mock.calls[0]![0]
+    expect(options.editor).toBe(editor.getModifiedEditor())
+    expect(options.editor).not.toBe(editor.getOriginalEditor())
+    expect(options.surfaceKey()).toBe(editorVimSurfaceKey(group.id, input.id))
+    expect(options.isReadOnly?.()).toBe(true)
+    expect(options.getLineHeight?.()).toBe(23)
+    expect(options.vimModeService).toBe(vim.vimModeService)
+    expect(options.inputMethodService).toBe(vim.vimInputMethodService)
+  })
+
+  it('routes ]c / [c through the command service', async () => {
+    const commandService = { _serviceBrand: undefined, executeCommand: vi.fn(async () => []) }
+    render(
+      <ServicesContext.Provider
+        value={createInstantiationService({
+          vim: createVimServices(),
+          commandService: commandService as never,
+        })}
+      >
+        <EditorGroupContext.Provider value={createGroup(14) as never}>
+          <SwarmDiffEditor input={createInput()} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    await waitForDiffEditor()
+
+    const options = vi.mocked(attachVim).mock.calls[0]![0]
+    await options.executeCommand?.('workbench.action.editor.nextChange')
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      'workbench.action.editor.nextChange',
+      undefined,
+    )
+  })
+
+  it('disposes the Vim attachment on unmount', async () => {
+    const result = render(
+      <ServicesContext.Provider value={createInstantiationService({ vim: createVimServices() })}>
+        <EditorGroupContext.Provider value={createGroup(15) as never}>
+          <SwarmDiffEditor input={createInput()} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    await waitForDiffEditor()
+    const attachment = vi.mocked(attachVim).mock.results[0]!.value as { dispose(): void }
+
+    result.unmount()
+    expect(attachment.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('forgets the Vim surface when the tab is closed', async () => {
+    const input = createInput()
+    const group = createGroup(16)
+    const vim = createVimServices()
+    render(
+      <ServicesContext.Provider value={createInstantiationService({ vim })}>
+        <EditorGroupContext.Provider value={group as never}>
+          <SwarmDiffEditor input={input} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    await waitForDiffEditor()
+
+    group.emitModelChange({ kind: 'close', editor: input })
+    expect(vim.vimModeService.forgetSurface).toHaveBeenCalledWith(
+      editorVimSurfaceKey(group.id, input.id),
+    )
+  })
+
+  it('forgets the Vim surface when the whole group closes', async () => {
+    const input = createInput()
+    const group = createGroup(17)
+    const vim = createVimServices()
+    const result = render(
+      <ServicesContext.Provider value={createInstantiationService({ vim, groups: [] })}>
+        <EditorGroupContext.Provider value={group as never}>
+          <SwarmDiffEditor input={input} />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    await waitForDiffEditor()
+
+    result.unmount()
+    expect(vim.vimModeService.forgetSurface).toHaveBeenCalledWith(
+      editorVimSurfaceKey(group.id, input.id),
+    )
   })
 })

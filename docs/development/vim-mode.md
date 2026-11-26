@@ -73,7 +73,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | `vimKeyHelp.ts` | 速查表里的编辑器键位说明——**从上面的注册表派生**（motion / operator / 文本对象 / 前缀表 / 简单命令 / Visual 键），加键位自动出现在速查表；`EXTRA_ROWS` 只放 reducer 内联处理的键（`.` `v` `"x` `r`…）。描述用英文，`vim.keyHelp.<slug>` 本地化；`describeVimKeyHelp()` 同时供 which-key 使用 |
 | `vimPendingHints.ts` | 纯函数 `computeVimPendingHint(state)`：从同一批注册表派生编辑器内核前缀的 which-key 候选（`g` / `z` / `[` / `]`、操作符等待、`i`/`a` 文本对象、Visual `g`），静态表按类别 memo；等待字符参数（`f` / `r` / `"`）与纯计数返回 undefined |
 | `vimEditorController.ts` | 把 reducer 的输出绑到 Monaco：`COMMAND_HANDLERS`（`Record` 覆盖每个 `VimCommand['type']`，缺一个编译器就报）、Visual 状态（anchor + cursor）、`.` 重放、Insert 会话记录（`3ifoo<Esc>`）、块状光标、`"+`/`"*`/`vim.useSystemClipboard` |
-| `attachVim.ts` | 一次调用接好 controller + surface 注册；`FileEditor` / `DiffEditor` / session 输入框共用。可选 `defaultMode`（默认 `normal`）与 `idleEscapeCommand`（默认聚焦编辑器标签栏）：session 输入框的 `defaultMode` 取自 `vim.prompt.defaultMode`，`idleEscapeCommand` 传 `workbench.action.agent.focusTimeline` |
+| `attachVim.ts` | 一次调用接好 controller + surface 注册；`FileEditor` / `DiffEditor` / `SwarmDiffEditor` / session 输入框共用。可选 `defaultMode`（默认 `normal`）与 `idleEscapeCommand`（默认聚焦编辑器标签栏）：session 输入框的 `defaultMode` 取自 `vim.prompt.defaultMode`，`idleEscapeCommand` 传 `workbench.action.agent.focusTimeline`。Swarm diff 的 modified 侧是只读快照，靠 `isReadOnly` 拒绝写命令 |
 | `vimSurfaceKeys.ts` | `editorVimSurfaceKey(groupId, inputId)` |
 | `workbench/panel/output/outputVimKeymap.ts` | Output 只读编辑器：**复用 `reduceVimKey`** 再 `project()` 成可执行子集（`j/k`、`gj/gk`、`Ctrl+E/Y/D/U/F/B`、`gg/G`），其余吞掉；要多支持一个 motion 就在 `project` 加 `case`，不要另写键表 |
 | `workbench/panel/output/outputVimController.ts` | 把投影后的命令绑到 Output 的 Monaco 实例；只跟踪 text focus 与 blur 重置 |
@@ -229,7 +229,7 @@ reducer 是纯函数：`VimState = { mode, count, operatorCount, pendingOperator
 - **光标期望列（curswant）**：`j` / `k` 记住进入垂直移动前的列，穿过短行后回到原列；`$` 之后贴行尾（`END_OF_LINE_COLUMN`，下移到的每一行都停在行尾，Visual `$` 同样保留换行）；任何水平移动、或光标被别处移走，都会让记忆失效。`gj` / `gk` 单独记住**显示段内的字符偏移**，见下节。
 - **折叠头行上的行级操作**：折叠闭合时，`dd` / `yy` / `>>` / `o` / `dj` 等行级命令把整个折叠当一行（作用于折叠头行到末行，`j` / `k` 计数同理）。
 - **一个命令一个撤销步**：`3J` 一次 `u` 撤销；`J` 次数是 `count - 1` 次合并（`J` 单次合并两行）。
-- **只读编辑器**：`isReadOnly` 为真时写命令（`isWriteCommand`）被 `refuseWrite` 拒绝——不改缓冲区、不进 Insert、Visual 的 `c` / `d` 直接退出 Visual；移动与 `y` 照常；Insert 中缓冲区变只读会被踢回 Normal。
+- **只读编辑器**：`isReadOnly` 为真时写命令（`isWriteCommand`）被 `refuseWrite` 拒绝——不改缓冲区、不进 Insert、Visual 的 `c` / `d` 直接退出 Visual；移动与 `y` 照常；Insert 中缓冲区变只读会被踢回 Normal。Swarm diff 两侧都是只读 depot 快照，modified 侧挂 Vim 后移动、搜索、`y` 与 `]c` / `[c` 正常，写键被忽略。
 - **文本对象与 `d}`**：`}` / `{` 是 exclusive charwise motion，`d}` 套用 Vim 的 o_v 规则（终点落在第 1 列时收到上一行行尾，起点在缩进内则变整行删除；停在末行时 `}` 取末行最后一个字符、inclusive）；引号对象按 Vim `current_quote` 取（光标前最近的引号开串、不看奇偶；光标前无引号则取之后的第一个）。`v$` 包含换行。`I` 到首个非空白字符，`gI` 到第 1 列。
 
 ### 编辑器滚动命令（`vimViewport.ts` / `vimEditorController`）

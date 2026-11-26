@@ -247,9 +247,10 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     modifiedModelEditableRef.current = modifiedEditable
     DiffEditorRegistry.register(diffInput, ed, group?.id)
 
-    // Vim on the modified side. The original side stays a plain viewer. Only the
-    // editable (live working-tree) diff is a text surface: a read-only snapshot
-    // diff would report Insert mode while every keystroke was dropped.
+    // Vim on the modified side. The original side stays a plain viewer. This
+    // gate keeps generic snapshot diffs (git commit, compare) non-Vim; the
+    // read-only-safe controller means a view that wants Vim over a snapshot
+    // (SwarmDiffEditor) attaches its own read-only modified pane.
     const vimSurfaceKey = (): string => editorVimSurfaceKey(group?.id, diffInput.id)
     let vim: VimAttachment | undefined
     if (modifiedEditable && vimModeService !== undefined && vimInputMethodService !== undefined) {

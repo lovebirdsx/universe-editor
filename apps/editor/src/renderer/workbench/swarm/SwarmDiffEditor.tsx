@@ -23,9 +23,13 @@ import {
   type SwarmAddCommentRequest,
   type SwarmCommentDto,
 } from '@universe-editor/extensions-common'
-import { useService } from '../useService.js'
+import { useOptionalService, useService } from '../useService.js'
 import type { monaco } from '../editor/monaco/MonacoLoader.js'
 import { MonacoLoader } from '../editor/monaco/MonacoLoader.js'
+import { attachVim, type VimAttachment } from '../editor/vim/attachVim.js'
+import { editorVimSurfaceKey } from '../editor/vim/vimSurfaceKeys.js'
+import { IVimInputMethodService } from '../../../shared/ipc/vimInputMethodService.js'
+import { IVimModeService } from '../../services/vim/vimModeService.js'
 import { buildBridgedEditorOptions } from '../editor/monaco/editorOptionsFromConfig.js'
 import { languageForResource } from '../files/resourceLanguage.js'
 import { diffModelUri } from '../editor/diffModelUri.js'
@@ -51,6 +55,10 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
   const configService = useService(IConfigurationService)
   const contextKeyService = useService(IContextKeyService)
   const groupsService = useService(IEditorGroupsService)
+  // Optional so the component's unit tests (minimal service container) keep
+  // running without the Vim kernel; the real workbench always provides both.
+  const vimModeService = useOptionalService(IVimModeService)
+  const vimInputMethodService = useOptionalService(IVimInputMethodService)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
@@ -135,6 +143,23 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
     return () => sub.dispose()
   }, [configService])
 
+  // Closing a Swarm diff drops its remembered Vim mode, like a file editor tab.
+  useEffect(() => {
+    if (group === null) return undefined
+    const subscription = group.onDidChangeModel?.((event) => {
+      const closed =
+        event.kind === 'close'
+          ? event.editor
+          : event.kind === 'replace' || event.kind === 'previewReplace'
+            ? event.replacedEditor
+            : undefined
+      if (closed !== undefined) {
+        vimModeService?.forgetSurface(editorVimSurfaceKey(group.id, closed.id))
+      }
+    })
+    return () => subscription?.dispose()
+  }, [group, vimModeService])
+
   // Create the diff editor + inline-comment controller, set models.
   useEffect(() => {
     if (!monacoNs || !containerRef.current) return
@@ -203,6 +228,26 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
     )
     DiffEditorRegistry.register(diffInput, ed, group?.id)
 
+    // Vim on the modified side only; the original side stays a plain viewer.
+    // Both sides are read-only depot snapshots, so isReadOnly refuses writes
+    // while motions, search, yank and ]c / [c keep working.
+    const vimSurfaceKey = (): string => editorVimSurfaceKey(group?.id, diffInput.id)
+    let vim: VimAttachment | undefined
+    if (vimModeService !== undefined && vimInputMethodService !== undefined) {
+      const modifiedEditor = ed.getModifiedEditor()
+      vim = attachVim({
+        editor: modifiedEditor,
+        surfaceKey: vimSurfaceKey,
+        configService,
+        contextKeyService,
+        vimModeService,
+        inputMethodService: vimInputMethodService,
+        getLineHeight: () => modifiedEditor.getOption(monacoNs.editor.EditorOption.lineHeight),
+        isReadOnly: () => modifiedEditor.getOption(monacoNs.editor.EditorOption.readOnly) === true,
+        executeCommand: (id, args) => commands.executeCommand(id, args),
+      })
+    }
+
     const activeGroup = groupsService.activeGroup
     if (activeGroup.activeEditor === diffInput && !activeGroup.lastActivationPreservedFocus) {
       ed.focus()
@@ -234,7 +279,15 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
       controllerRef.current = null
       // Dispose before ed.dispose() so the final view-state flush reads a live editor.
       viewState.dispose()
+      // Dispose Vim before detaching the model / killing the editor: its model,
+      // content and focus subscriptions must not observe a half-disposed instance.
+      vim?.dispose()
+      vim = undefined
       DiffEditorRegistry.unregister(diffInput, ed)
+      if (group !== null && groupsService.groups?.includes?.(group) === false) {
+        // The whole group is going away (its closeAll event carries no editor).
+        vimModeService?.forgetSurface(vimSurfaceKey())
+      }
       ed.setModel(null)
       // Hand the models to the LRU instead of disposing — a reopen of this same
       // diff (tab close/reopen, switch-back) then skips createModel + tokenize.
@@ -256,6 +309,9 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
     group,
     groupsService,
     contextKeyService,
+    commands,
+    vimModeService,
+    vimInputMethodService,
   ])
 
   // Refresh both sides in place when the input's content changes (a re-shelved
