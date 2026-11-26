@@ -32,17 +32,22 @@ import {
 } from '@universe-editor/workbench-ui'
 import type { monaco } from '../monaco/MonacoLoader.js'
 import type { IVimModeService } from '../../../services/vim/vimModeService.js'
+import { VIM_CORE_IDS } from '../../../services/vim/vimCoreKeymap.js'
+import { LEADER_TOKEN, isModifierChord } from '../../../services/vim/vimKeymapMerge.js'
 import type { IVimInputMethodService } from '../../../../shared/ipc/vimInputMethodService.js'
 import { affectsBridgedEditorOption } from '../monaco/editorOptionsFromConfig.js'
 import { createVimEdits, visualStartPosition } from './vimEdits.js'
 import { releaseInputMethod, requestInputMethod } from './vimInputMethod.js'
 import { consumeEvent, isImeKeyEvent, toVimKeyInput } from './vimKeyUtils.js'
 import {
+  buildPrefixTables,
   effectiveCount,
   formatPendingKeys,
   idle,
   isAwaitingCharArg,
   reduceVimKey,
+  type VimCoreKeymapOverrides,
+  type VimCoreRemap,
 } from './vimKeymap.js'
 import { computeVimPendingHint } from './vimPendingHints.js'
 import { clampNormalPosition } from './vimMotions.js'
@@ -246,6 +251,38 @@ export function createVimEditorController(
   let currentSurfaceKey = resolveSurfaceKey()
   // A surface returns in the mode it left (focus may sit in a list meanwhile).
   let state: VimState = { ...INITIAL_VIM_STATE, mode: readStoredMode() }
+  // `vim.keymap` may move the core bracket commands; rebuild on `vim.keymap` changes.
+  let prefixTables = buildPrefixTables(readCoreOverrides())
+
+  function readCoreOverrides(): VimCoreKeymapOverrides {
+    const disabled = new Set<string>()
+    const remapped = new Map<string, VimCoreRemap>()
+    const leader = vimModeService.getLeader()
+    for (const item of vimModeService.getUserKeymap()) {
+      if (item.id === undefined || !VIM_CORE_IDS.has(item.id)) continue
+      if (item.unbind) {
+        disabled.add(item.id)
+        continue
+      }
+      const keys = item.keys
+      const first = keys?.[0]
+      if (keys === undefined || first === undefined) continue
+      const second = keys[1]
+      if (keys.length === 2 && second !== undefined && (first === '[' || first === ']')) {
+        remapped.set(item.id, { kind: first, key: second })
+        continue
+      }
+      if (first === LEADER_TOKEN || first === leader || isModifierChord(first)) {
+        // A workbench alias replaces the core key; mergeVimKeymap adds the alias.
+        disabled.add(item.id)
+        continue
+      }
+      console.warn(
+        `[vim] ${item.id}: core entries take a "[x" / "]x" sequence or a leader/modifier alias; ignoring`,
+      )
+    }
+    return { disabled, remapped }
+  }
   let enabled = configService.get<boolean>('vim.enabled') === true
   let surfaceEnabled = configService.get<boolean>('vim.surfaces.editor') !== false
   let autoSwitchInputMethod = configService.get<boolean>('vim.autoSwitchInputMethod') !== false
@@ -335,7 +372,7 @@ export function createVimEditorController(
 
   function getPendingHint(): IVimPendingHint | undefined {
     if (disposed || !active() || state.mode === 'insert') return undefined
-    return computeVimPendingHint(state)
+    return computeVimPendingHint(state, prefixTables)
   }
 
   function editorPosition(): VimPosition {
@@ -981,7 +1018,7 @@ export function createVimEditorController(
     }
     const wasInsert = state.mode === 'insert'
     dropStaleVisual()
-    const result = reduceVimKey(state, toVimKeyInput(event))
+    const result = reduceVimKey(state, toVimKeyInput(event), prefixTables)
     // An unhandled key still resets a half-typed prefix (`d` then Ctrl+Z).
     state = result.state
     // Monaco never sees the Escape that leaves Insert (we consume it), so the
@@ -1054,6 +1091,9 @@ export function createVimEditorController(
     configService.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('vim.useSystemClipboard')) {
         useSystemClipboard = configService.get<boolean>('vim.useSystemClipboard') === true
+      }
+      if (event.affectsConfiguration('vim.keymap')) {
+        prefixTables = buildPrefixTables(readCoreOverrides())
       }
       let reevaluate = false
       if (event.affectsConfiguration('vim.surfaces.editor')) {

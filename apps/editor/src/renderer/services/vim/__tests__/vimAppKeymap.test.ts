@@ -80,6 +80,27 @@ describe('VIM_APP_KEYMAP', () => {
     }
   })
 
+  it('offers single-chord change navigation on editors and lists', () => {
+    const editorNext = entriesFor('editor', ['alt+j']).find(
+      (entry) => entry.command === 'workbench.action.editor.nextChange',
+    )
+    expect(editorNext?.when).toBe('!acpChatFocused')
+    const editorPrevious = entriesFor('editor', ['alt+k']).find(
+      (entry) => entry.command === 'workbench.action.editor.previousChange',
+    )
+    expect(editorPrevious?.when).toBe('!acpChatFocused')
+
+    const listNext = entriesFor('list', ['alt+j']).find(
+      (entry) => entry.command === 'workbench.action.compareEditor.nextChange',
+    )
+    expect(listNext?.when).toBe('textCompareEditorVisible && !acpChatFocused && !inKeybindings')
+    const listPrevious = entriesFor('list', ['alt+k']).find(
+      (entry) => entry.command === 'workbench.action.compareEditor.previousChange',
+    )
+    expect(listPrevious?.when).toBe('textCompareEditorVisible && !acpChatFocused && !inKeybindings')
+    expect(commandFor('menu', ['alt+j'])).toBeUndefined()
+  })
+
   it('terminal motion reuses the generic list commands', () => {
     expect(commandFor('terminal', ['j'])).toBe('list.focusDown')
     expect(commandFor('terminal', ['k'])).toBe('list.focusUp')

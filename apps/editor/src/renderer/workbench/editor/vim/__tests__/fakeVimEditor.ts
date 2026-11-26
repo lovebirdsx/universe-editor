@@ -535,6 +535,8 @@ export function createVimModeServiceFake() {
     reportUnsupportedKey: vi.fn(),
     setEditorSubMode: vi.fn(),
     isSurfaceEnabled: () => true,
+    getUserKeymap: () => [],
+    getLeader: () => 'space',
   }
 }
 

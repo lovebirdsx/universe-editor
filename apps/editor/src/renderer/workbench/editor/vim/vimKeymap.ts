@@ -16,6 +16,7 @@
  *  - Visual-mode actions → `VISUAL_ACTION_KEYS` in vimVisual.ts
  *--------------------------------------------------------------------------------------------*/
 
+import { VIM_CORE_KEYMAP, type VimCorePrefix } from '../../../services/vim/vimCoreKeymap.js'
 import { accumulateCount, isCountDigitKey, isFunctionKeyName } from './vimKeyUtils.js'
 import { findVimMotionByKey } from './vimMotions.js'
 import { findVimOperatorByKey, getVimOperator, prefixedVimOperators } from './vimOperators.js'
@@ -292,10 +293,12 @@ export type VimPrefixEntry =
       readonly description: string
       /** Meaningless after an operator (`dgJ`): cancels it instead of running. */
       readonly noOperator?: true
+      /** Stable id for `vim.keymap` core remaps; only bracket-table commands carry one. */
+      readonly id?: string
     }
   | { readonly operator: VimOperator }
 
-interface VimPrefixTable {
+export interface VimPrefixTable {
   readonly entries: ReadonlyMap<string, VimPrefixEntry>
   /** False: the prefix cancels a pending operator (`dz` is not a command). */
   readonly allowedWithOperator: boolean
@@ -328,44 +331,39 @@ function revealEntry(at: 'top' | 'center' | 'bottom', description: string): VimP
   }
 }
 
-function bracketTable(prefix: '[' | ']'): VimPrefixTable {
+function bracketTable(prefix: VimCorePrefix): VimPrefixTable {
   const forward = prefix === ']'
-  return {
-    allowedWithOperator: true,
-    entries: new Map<string, VimPrefixEntry>([
-      [
-        'd',
-        editorCommand(
-          forward ? 'editor.action.marker.nextInFiles' : 'editor.action.marker.prevInFiles',
-          forward ? 'Next diagnostic' : 'Previous diagnostic',
-        ),
-      ],
-      [
-        'c',
-        {
-          command: (count) => ({
-            type: 'platform-command',
-            commandId: forward
-              ? 'workbench.action.editor.nextChange'
-              : 'workbench.action.editor.previousChange',
-            count: Math.max(1, count),
-          }),
-          description: forward ? 'Next change (diff)' : 'Previous change (diff)',
-        },
-      ],
-      [
-        'z',
-        {
-          command: () => ({ type: 'fold-goto', edge: forward ? 'end' : 'start' }),
-          description: forward ? 'End of the current fold' : 'Start of the current fold',
-        },
-      ],
-    ]),
+  const entries = new Map<string, VimPrefixEntry>()
+  for (const def of VIM_CORE_KEYMAP) {
+    if (def.prefix !== prefix) continue
+    entries.set(
+      def.key,
+      def.target === 'platform'
+        ? {
+            id: def.id,
+            command: (count) => ({
+              type: 'platform-command',
+              commandId: def.command,
+              count: Math.max(1, count),
+            }),
+            description: def.description,
+          }
+        : {
+            id: def.id,
+            command: () => ({ type: 'editor-command', commandId: def.command }),
+            description: def.description,
+          },
+    )
   }
+  entries.set('z', {
+    command: () => ({ type: 'fold-goto', edge: forward ? 'end' : 'start' }),
+    description: forward ? 'End of the current fold' : 'Start of the current fold',
+  })
+  return { allowedWithOperator: true, entries }
 }
 
 /** Second-key tables for each multi-key prefix. */
-export const PREFIX_TABLES: Record<VimPendingKind, VimPrefixTable> = {
+const DEFAULT_PREFIX_TABLES: Record<VimPendingKind, VimPrefixTable> = {
   g: {
     allowedWithOperator: true,
     entries: new Map<string, VimPrefixEntry>([
@@ -426,6 +424,61 @@ export const PREFIX_TABLES: Record<VimPendingKind, VimPrefixTable> = {
   '[': bracketTable('['),
   ']': bracketTable(']'),
 }
+
+export interface VimCoreRemap {
+  readonly kind: VimCorePrefix
+  readonly key: string
+}
+
+export interface VimCoreKeymapOverrides {
+  /** Built-in entries these ids no longer occupy (unbound, or moved to a leader alias). */
+  readonly disabled: ReadonlySet<string>
+  /** id → its new bracket-table position. */
+  readonly remapped: ReadonlyMap<string, VimCoreRemap>
+}
+
+function cloneBracketEntries(prefix: VimCorePrefix): Map<string, VimPrefixEntry> {
+  return new Map(DEFAULT_PREFIX_TABLES[prefix].entries)
+}
+
+/**
+ * `g` / `z` are reused by reference: only the bracket tables take `vim.keymap`
+ * remaps, so their caches and tables stay stable. User remaps win over a
+ * default entry already sitting on the target key, like any other override.
+ */
+export function buildPrefixTables(
+  overrides?: VimCoreKeymapOverrides,
+): Record<VimPendingKind, VimPrefixTable> {
+  if (overrides === undefined) return DEFAULT_PREFIX_TABLES
+  const brackets: Record<VimCorePrefix, Map<string, VimPrefixEntry>> = {
+    '[': cloneBracketEntries('['),
+    ']': cloneBracketEntries(']'),
+  }
+  const moved = new Map<string, VimPrefixEntry>()
+  for (const prefix of ['[', ']'] as const) {
+    const entries = brackets[prefix]
+    for (const [key, entry] of entries) {
+      const id = 'command' in entry ? entry.id : undefined
+      if (id === undefined) continue
+      if (!overrides.disabled.has(id) && !overrides.remapped.has(id)) continue
+      if (overrides.remapped.has(id)) moved.set(id, entry)
+      entries.delete(key)
+    }
+  }
+  for (const [id, target] of overrides.remapped) {
+    const entry = moved.get(id)
+    if (entry !== undefined) brackets[target.kind].set(target.key, entry)
+  }
+  return {
+    g: DEFAULT_PREFIX_TABLES.g,
+    z: DEFAULT_PREFIX_TABLES.z,
+    '[': { allowedWithOperator: true, entries: brackets['['] },
+    ']': { allowedWithOperator: true, entries: brackets[']'] },
+  }
+}
+
+/** The built-in tables (`vim.keymap` has not remapped anything). */
+export const PREFIX_TABLES: Record<VimPendingKind, VimPrefixTable> = DEFAULT_PREFIX_TABLES
 
 /** The key that opens each prefix. */
 export const PREFIX_STARTERS: ReadonlyMap<string, VimPendingKind> = new Map<string, VimPendingKind>(
@@ -654,13 +707,18 @@ function visualCommandFor(state: VimState, key: string, g: boolean): VimKeyResul
   )
 }
 
-function resolvePrefixKey(state: VimState, kind: VimPendingKind, key: string): VimKeyResult {
+function resolvePrefixKey(
+  state: VimState,
+  kind: VimPendingKind,
+  key: string,
+  tables: Record<VimPendingKind, VimPrefixTable>,
+): VimKeyResult {
   const visual = isVisualMode(state.mode)
   if (visual && kind === 'g') {
     const action = visualCommandFor(state, key, true)
     if (action !== null) return action
   }
-  const entry = PREFIX_TABLES[kind].entries.get(key)
+  const entry = tables[kind].entries.get(key)
   if (entry === undefined) return unclaimedKey(state, key)
   if ('motion' in entry) return motion(state, entry.motion)
   if ('operator' in entry) {
@@ -782,7 +840,11 @@ function reduceVisualKey(state: VimState, key: string): VimKeyResult {
   return unclaimedKey(state, key)
 }
 
-export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult {
+export function reduceVimKey(
+  state: VimState,
+  input: VimKeyInput,
+  tables: Record<VimPendingKind, VimPrefixTable> = PREFIX_TABLES,
+): VimKeyResult {
   if (state.mode === 'insert') {
     if (isEscapeStroke(input)) {
       return {
@@ -880,11 +942,11 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
   if (functional !== null) return functional
 
   const prefix = state.pending === null ? null : prefixKindOf(state.pending)
-  if (prefix !== null) return resolvePrefixKey(state, prefix, key)
+  if (prefix !== null) return resolvePrefixKey(state, prefix, key, tables)
 
   const prefixKind = PREFIX_STARTERS.get(key)
   if (prefixKind !== undefined) {
-    if (state.pendingOperator !== null && !PREFIX_TABLES[prefixKind].allowedWithOperator) {
+    if (state.pendingOperator !== null && !tables[prefixKind].allowedWithOperator) {
       return unsupported(state, key)
     }
     return pendingResult({ ...state, pending: { kind: prefixKind } })

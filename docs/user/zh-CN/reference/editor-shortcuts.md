@@ -269,9 +269,9 @@
 | Hover 文档 | `K` 或 `gh` |
 | 搜索光标下单词 | `*` 向前 / `#` 向后（整词匹配，Vim `\<...\>` 语义） |
 | 下一个 / 上一个问题（跨文件） | `]d` / `[d` |
-| 下一处 / 上一处更改 | `]c` / `[c`；焦点在列表 / 树中时，只要活动编辑器是对比编辑器也同样生效 |
+| 下一处 / 上一处更改 | `]c` / `[c`，或单和弦 `Alt+J` / `Alt+K`（j 向下 = 下一处，k 向上 = 上一处）；焦点在列表 / 树中时，只要活动编辑器是对比编辑器也同样生效 |
 
-`g`、`[`、`]`、`>`、`<`、`z`、`f` `t` `r`、`"` 等是待定前缀，无限等待下一键（同 Vim 内置命令，不受 `vim.sequenceTimeoutMs` 影响）。待定期间按功能键（`F1`–`F12`）会取消前缀并照常交给工作台；按 `Backspace` / `Delete` / `Enter` / `Tab` / 方向键等编辑或移动类按键则取消前缀并**吞掉这一击**（不会误删字符或换行）。`r<Space>`（替换成空格）、`r<Enter>`（换行）、`f<Tab>` 这类「把该键当字符参数」的用法照常可用；等待字符参数期间 `Space` 也是参数，不会触发 leader。`AltGr` / macOS `Option` 组合出来的字符（如 `@`、`€`）作为普通字符键处理。这些原生前缀键由编辑器内核处理，不能用 `vim.keymap` 覆盖；需要自定义时使用下文的 leader 别名（折叠父级也可用 `<leader>z`）。`dz*`、`dH` 这类「操作符 + 视口 / 折叠命令」组合不支持，会取消操作符。`d}` / `d{` 遵循 Vim 规则：终点落在下一段空行行首时收到上一行行尾，起点在缩进里则按整行删除。
+`g`、`[`、`]`、`>`、`<`、`z`、`f` `t` `r`、`"` 等是待定前缀，无限等待下一键（同 Vim 内置命令，不受 `vim.sequenceTimeoutMs` 影响）。待定期间按功能键（`F1`–`F12`）会取消前缀并照常交给工作台；按 `Backspace` / `Delete` / `Enter` / `Tab` / 方向键等编辑或移动类按键则取消前缀并**吞掉这一击**（不会误删字符或换行）。`r<Space>`（替换成空格）、`r<Enter>`（换行）、`f<Tab>` 这类「把该键当字符参数」的用法照常可用；等待字符参数期间 `Space` 也是参数，不会触发 leader。`AltGr` / macOS `Option` 组合出来的字符（如 `@`、`€`）作为普通字符键处理。这些原生前缀键由编辑器内核处理，其中 `]c` / `[c` / `]d` / `[d` 四个条目可以按 id（`editor.nextChange` / `editor.previousChange` / `editor.nextDiagnostic` / `editor.previousDiagnostic`）用 `vim.keymap` 覆盖或解绑；其余原生前缀键不能用 `vim.keymap` 覆盖，需要自定义时使用下文的 leader 别名（折叠父级也可用 `<leader>z`）。`dz*`、`dH` 这类「操作符 + 视口 / 折叠命令」组合不支持，会取消操作符。`d}` / `d{` 遵循 Vim 规则：终点落在下一段空行行首时收到上一行行尾，起点在缩进里则按整行删除。
 
 Normal 模式下**未实现的字符键会被吞掉**，不会输入到缓冲区；`F1`–`F12`、媒体键、输入法组合键等非文本功能键不拦截，仍交给工作台和编辑器处理。
 
@@ -420,6 +420,7 @@ Panel / 辅助侧边栏的**标签式**容器标题聚焦时：`h` / `l` 切换�
   - **覆盖**：`id` 与内置条目相同时只改你写出的字段，其余（`surfaces` / `when` / `args`）继承内置；某个界面自带的键位（如设置页的 `/`）同样可以按 `id` 覆盖或解绑，仅在该界面聚焦时生效（`id` 见「Vim：显示当前键位映射」的输出）；
   - **追加**：`id` 不是内置时，必须同时写 `keys` 与 `command`；
   - **解绑**：`command` 以 `-` 开头（同 keybindings.json），用 `id` 或 `keys` 指明目标，如 `{ "id": "list.activate.o", "command": "-list.activate" }`，`{ "keys": ["x"], "command": "-" }` 表示该键任意命令，可加 `surfaces` 限定；
+  - **编辑器内核条目**：`editor.nextChange` / `editor.previousChange` / `editor.nextDiagnostic` / `editor.previousDiagnostic` 可按 `id` 重映射为 `[` / `]` 开头的两段序列（如 `["]", "n"]`），也可以改成 leader / 修饰键别名（如 `["<leader>", "N"]`）或解绑。覆盖表示**替换**默认键；想保留默认再加别名时用新的 `user.*` id；
   - **token 写法**：可打印键保持大小写（`g` 与 `G` 不同），特殊键用小写名（`escape`、`enter`、`space`、`up`），组合键写 `ctrl+d`（修饰键小写，顺序为 `ctrl+alt+meta+shift`），`<leader>` 代表 `vim.leader`；
   - 省略 `surfaces` 时对所有非编辑器 surface 生效（编辑器只处理以 leader 开头的序列）；写错的条目会被忽略并在 Output 的 **Vim Keymap** 通道里列为问题（执行「Vim：显示当前键位映射」查看）。
 
@@ -428,7 +429,9 @@ Panel / 辅助侧边栏的**标签式**容器标题聚焦时：`h` / `l` 切换�
 ```json
 "vim.keymap": [
   { "id": "user.saveAll", "keys": ["<leader>", "S"], "command": "workbench.action.files.saveAll" },
-  { "id": "list.activate.o", "keys": ["l"], "command": "list.activate" }
+  { "id": "list.activate.o", "keys": ["l"], "command": "list.activate" },
+  { "id": "editor.nextChange", "keys": ["]", "n"] },
+  { "id": "editor.nextDiagnostic", "command": "-" }
 ]
 ```
 

@@ -115,6 +115,13 @@ test.describe('@p1 diff keyboard navigation', () => {
     await page.keyboard.press('c')
     await expect.poll(() => cursorLine(page), { timeout: 10_000 }).toBe(FIRST_CHANGE_LINE)
 
+    // The single-chord alternative works on the same list surface.
+    await page.keyboard.press('Alt+j')
+    await expect.poll(() => cursorLine(page), { timeout: 10_000 }).toBe(SECOND_CHANGE_LINE)
+
+    await page.keyboard.press('Alt+k')
+    await expect.poll(() => cursorLine(page), { timeout: 10_000 }).toBe(FIRST_CHANGE_LINE)
+
     expect(await workbench.getContextKey<string>('focusedPart')).toBe('sideBar')
   })
 })

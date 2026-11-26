@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { reduceVimKey } from '../vimKeymap.js'
+import { buildPrefixTables, reduceVimKey } from '../vimKeymap.js'
 import { computeVimPendingHint } from '../vimPendingHints.js'
 import { INITIAL_VIM_STATE, type VimKeyInput, type VimState } from '../vimTypes.js'
 
@@ -58,6 +58,16 @@ describe('computeVimPendingHint', () => {
     expect(next?.items[0]?.title).toBe('Next diagnostic')
     const previous = computeVimPendingHint(after('['))
     expect(previous?.items[0]?.title).toBe('Previous diagnostic')
+  })
+
+  it('follows vim.keymap core remaps when given the effective tables', () => {
+    const tables = buildPrefixTables({
+      disabled: new Set(),
+      remapped: new Map([['editor.nextChange', { kind: ']', key: 'n' }]]),
+    })
+    const keys = computeVimPendingHint(after(']'), tables)?.items.map((item) => item.key) ?? []
+    expect(keys).toContain('n')
+    expect(keys).not.toContain('c')
   })
 
   it('uses the Visual actions for g, without the Normal-only operators', () => {

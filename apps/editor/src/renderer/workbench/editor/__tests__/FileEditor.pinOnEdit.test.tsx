@@ -290,6 +290,8 @@ describe('FileEditor — auto-pin on first edit', () => {
       setMode: () => {},
       getMode: (_key: string, fallback: string) => fallback,
       forgetSurface: () => {},
+      getUserKeymap: () => [],
+      getLeader: () => 'space',
     } as never)
 
     render(
@@ -336,6 +338,8 @@ describe('FileEditor — auto-pin on first edit', () => {
       setMode: () => {},
       getMode: (_key: string, fallback: string) => fallback,
       forgetSurface: () => {},
+      getUserKeymap: () => [],
+      getLeader: () => 'space',
     } as never)
 
     render(
@@ -382,6 +386,8 @@ describe('FileEditor — auto-pin on first edit', () => {
       setMode: () => {},
       getMode: (_key: string, fallback: string) => fallback,
       forgetSurface: () => {},
+      getUserKeymap: () => [],
+      getLeader: () => 'space',
     } as never)
 
     render(
@@ -441,6 +447,8 @@ describe('FileEditor — auto-pin on first edit', () => {
       setMode: () => {},
       getMode: (_key: string, fallback: string) => fallback,
       forgetSurface: () => {},
+      getUserKeymap: () => [],
+      getLeader: () => 'space',
     } as never)
 
     render(
@@ -499,6 +507,8 @@ describe('FileEditor — auto-pin on first edit', () => {
       setMode: () => {},
       getMode: (_key: string, fallback: string) => fallback,
       forgetSurface: () => {},
+      getUserKeymap: () => [],
+      getLeader: () => 'space',
     } as never)
 
     render(

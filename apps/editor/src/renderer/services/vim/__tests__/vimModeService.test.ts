@@ -412,6 +412,40 @@ describe('VimModeService', () => {
     expect(keymap.find((entry) => entry.id === 'user.custom')?.keys).toEqual(['space', 'z'])
   })
 
+  it('accepts core editor ids in vim.keymap without requiring a command', () => {
+    const { service } = create({
+      'vim.enabled': true,
+      'vim.keymap': [
+        { id: 'editor.nextChange', keys: [']', 'n'] },
+        { id: 'editor.previousChange', keys: ['<leader>', 'N'] },
+        { id: 'editor.nextDiagnostic', command: '-' },
+      ],
+    })
+    expect(service.getUserKeymapIssues()).toEqual([])
+    expect(service.getUserKeymap().map((item) => item.id)).toEqual([
+      'editor.nextChange',
+      'editor.previousChange',
+      'editor.nextDiagnostic',
+    ])
+  })
+
+  it('keeps the core editor defaults out of the merged keymap but merges aliases', () => {
+    const { service } = create({ 'vim.enabled': true })
+    const editor = service.getEffectiveKeymap('editor')
+    expect(editor.some((entry) => entry.id === 'editor.nextChange')).toBe(false)
+    expect(editor.some((entry) => entry.id === 'editor.nextDiagnostic')).toBe(false)
+
+    const { service: overridden } = create({
+      'vim.enabled': true,
+      'vim.keymap': [{ id: 'editor.nextChange', keys: ['<leader>', 'N'] }],
+    })
+    const entry = overridden
+      .getEffectiveKeymap('editor')
+      .find((candidate) => candidate.id === 'editor.nextChange')
+    expect(entry?.keys).toEqual(['space', 'N'])
+    expect(entry?.command).toBe('workbench.action.editor.nextChange')
+  })
+
   it('replaces the leader token in reserved keys', () => {
     const { service } = create({ 'vim.enabled': true, 'vim.leader': 'space' })
     expect(service.reservedKeys).toContain('space')

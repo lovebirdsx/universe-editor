@@ -3,7 +3,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
+import { VIM_CORE_KEYMAP } from '../../../../services/vim/vimCoreKeymap.js'
 import {
+  buildPrefixTables,
   idle,
   isAwaitingCharArg,
   isVimViewportStroke,
@@ -21,6 +23,10 @@ function press(state: VimState, key: string, modifiers: Partial<Omit<VimKeyInput
     shift: false,
     ...modifiers,
   })
+}
+
+function pressWith(state: VimState, key: string, tables: ReturnType<typeof buildPrefixTables>) {
+  return reduceVimKey(state, { key, ctrl: false, alt: false, meta: false, shift: false }, tables)
 }
 
 describe('reduceVimKey', () => {
@@ -418,6 +424,45 @@ describe('reduceVimKey', () => {
       commandId: 'workbench.action.editor.previousChange',
       count: 1,
     })
+  })
+
+  it('builds prefix tables from vim.keymap core remaps', () => {
+    const tables = buildPrefixTables({
+      disabled: new Set(),
+      remapped: new Map([['editor.nextChange', { kind: ']', key: 'n' }]]),
+    })
+    const pending = press(INITIAL_VIM_STATE, ']').state
+    expect(pressWith(pending, 'c', tables)).toMatchObject({ command: null, unsupported: 'c' })
+    expect(pressWith(pending, 'n', tables).command).toEqual({
+      type: 'platform-command',
+      commandId: 'workbench.action.editor.nextChange',
+      count: 1,
+    })
+    // `g` / `z` are shared by reference with the built-in tables.
+    expect(tables.g).toBe(PREFIX_TABLES.g)
+    expect(tables.z).toBe(PREFIX_TABLES.z)
+  })
+
+  it('removes a core bracket command when vim.keymap unbinds it', () => {
+    const tables = buildPrefixTables({
+      disabled: new Set(['editor.nextChange']),
+      remapped: new Map(),
+    })
+    const pending = press(INITIAL_VIM_STATE, ']').state
+    expect(pressWith(pending, 'c', tables)).toMatchObject({ command: null, unsupported: 'c' })
+    // The neighbour entry is untouched.
+    expect(pressWith(pending, 'd', tables).command).toEqual({
+      type: 'editor-command',
+      commandId: 'editor.action.marker.nextInFiles',
+    })
+  })
+
+  it('keeps the core keymap catalog in sync with the built-in tables', () => {
+    for (const def of VIM_CORE_KEYMAP) {
+      const entry = PREFIX_TABLES[def.prefix].entries.get(def.key)
+      expect(entry).toBeDefined()
+      expect('command' in entry! ? entry.id : undefined).toBe(def.id)
+    }
   })
 
   it('indents and outdents with >> and << carrying counts', () => {

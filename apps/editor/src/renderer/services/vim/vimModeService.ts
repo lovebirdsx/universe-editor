@@ -38,6 +38,7 @@ import {
   type VimSurfaceMode,
 } from '@universe-editor/workbench-ui'
 import { VIM_APP_KEYMAP } from './vimAppKeymap.js'
+import { VIM_CORE_KEYMAP_ENTRIES } from './vimCoreKeymap.js'
 import { VIM_SURFACE_KEYMAPS } from './vimSurfaceKeymaps.js'
 import {
   mergeVimKeymap,
@@ -234,8 +235,13 @@ const BUILT_IN_ENTRIES: readonly IVimKeymapEntry[] = [
   ...VIM_DEFAULT_KEYMAP,
   ...VIM_APP_KEYMAP,
   ...VIM_SURFACE_KEYMAPS,
+  ...VIM_CORE_KEYMAP_ENTRIES,
 ]
-const BASE_ENTRIES: readonly IVimKeymapEntry[] = [...VIM_DEFAULT_KEYMAP, ...VIM_APP_KEYMAP]
+const BASE_ENTRIES: readonly IVimKeymapEntry[] = [
+  ...VIM_DEFAULT_KEYMAP,
+  ...VIM_APP_KEYMAP,
+  ...VIM_CORE_KEYMAP_ENTRIES,
+]
 
 function readStringArray(value: unknown, fallback: readonly string[]): readonly string[] {
   // A non-array means "not configured" (fall back); an empty array is a real

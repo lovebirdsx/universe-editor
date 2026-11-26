@@ -141,6 +141,40 @@ const COMPARE_ENTRIES: readonly IVimKeymapEntry[] = [
   },
 ]
 
+// Single-chord alternative to `]c` / `[c`: j is down (next), k is up (previous).
+// `!acpChatFocused` keeps the chat timeline's Alt+J / Alt+K; `!inKeybindings`
+// keeps the shortcuts editor's Alt+K.
+const CHANGE_CHORD_ENTRIES: readonly IVimKeymapEntry[] = [
+  {
+    id: 'editor.nextChangeChord',
+    keys: ['alt+j'],
+    command: 'workbench.action.editor.nextChange',
+    surfaces: ['editor'],
+    when: '!acpChatFocused',
+  },
+  {
+    id: 'editor.previousChangeChord',
+    keys: ['alt+k'],
+    command: 'workbench.action.editor.previousChange',
+    surfaces: ['editor'],
+    when: '!acpChatFocused',
+  },
+  {
+    id: 'list.nextChangeChord',
+    keys: ['alt+j'],
+    command: 'workbench.action.compareEditor.nextChange',
+    surfaces: ['list'],
+    when: 'textCompareEditorVisible && !acpChatFocused && !inKeybindings',
+  },
+  {
+    id: 'list.previousChangeChord',
+    keys: ['alt+k'],
+    command: 'workbench.action.compareEditor.previousChange',
+    surfaces: ['list'],
+    when: 'textCompareEditorVisible && !acpChatFocused && !inKeybindings',
+  },
+]
+
 // Navigation history is workbench-wide, so the jump keys mean the same on every
 // Normal surface: from the Explorer `Ctrl+O` returns to the last editor location
 // instead of falling through to the global Open File. Menus / overlays excluded.
@@ -159,6 +193,7 @@ const NAVIGATION_ENTRIES: readonly IVimKeymapEntry[] = (
 export const VIM_APP_KEYMAP: readonly IVimKeymapEntry[] = [
   ...NAVIGATION_ENTRIES,
   ...COMPARE_ENTRIES,
+  ...CHANGE_CHORD_ENTRIES,
   ...CHAT_ENTRIES,
   ...TERMINAL_ENTRIES,
   ...LEADER_ENTRIES,

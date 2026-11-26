@@ -286,6 +286,8 @@ function makeServices() {
     setMode: () => {},
     getMode: (_key: string, fallback: string) => fallback,
     forgetSurface: () => {},
+    getUserKeymap: () => [],
+    getLeader: () => 'space',
   } as never)
   const instantiation = new InstantiationService(services)
   const inputA = instantiation.createInstance(FileEditorInput, uriA)

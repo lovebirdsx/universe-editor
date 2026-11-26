@@ -1350,6 +1350,44 @@ describe('createVimEditorController', () => {
     controller.dispose()
   })
 
+  it('applies vim.keymap remaps to core bracket commands', () => {
+    const executeCommand = vi.fn()
+    const vim = {
+      ...createVimModeService(),
+      getUserKeymap: () => [{ id: 'editor.nextChange', keys: [']', 'n'], unbind: false }],
+    }
+    const { controller } = createNormalHarness(['abc'], {
+      executeCommand,
+      vimModeService: vim as never,
+    })
+    controller.handleKeyDown(key(']'))
+    expect(controller.getPendingHint()?.items.map((item) => item.key)).toContain('n')
+    expect(controller.getPendingHint()?.items.map((item) => item.key)).not.toContain('c')
+    controller.handleKeyDown(key('n'))
+    expect(executeCommand).toHaveBeenLastCalledWith('workbench.action.editor.nextChange')
+    executeCommand.mockClear()
+    controller.handleKeyDown(key(']'))
+    controller.handleKeyDown(key('c'))
+    expect(executeCommand).not.toHaveBeenCalled()
+    controller.dispose()
+  })
+
+  it('unbinds a core bracket command from vim.keymap', () => {
+    const executeCommand = vi.fn()
+    const vim = {
+      ...createVimModeService(),
+      getUserKeymap: () => [{ id: 'editor.nextChange', command: '-', unbind: true }],
+    }
+    const { controller } = createNormalHarness(['abc'], {
+      executeCommand,
+      vimModeService: vim as never,
+    })
+    controller.handleKeyDown(key(']'))
+    controller.handleKeyDown(key('c'))
+    expect(executeCommand).not.toHaveBeenCalled()
+    controller.dispose()
+  })
+
   it('opens a new line with o/O and enters Insert', () => {
     const { fake, vim, controller } = createNormalHarness(['abc'])
     controller.handleKeyDown(key('o'))

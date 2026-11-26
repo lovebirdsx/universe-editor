@@ -11,11 +11,16 @@ import { localize } from '@universe-editor/platform'
 import type { IVimPendingHint, IVimPendingHintItem } from '@universe-editor/workbench-ui'
 import { formatVimToken } from '../../../services/vim/vimKeyFormat.js'
 import { describeVimKeyHelp } from './vimKeyHelp.js'
-import { PREFIX_TABLES, formatPendingKeys, type VimPrefixEntry } from './vimKeymap.js'
+import {
+  PREFIX_TABLES,
+  formatPendingKeys,
+  type VimPrefixEntry,
+  type VimPrefixTable,
+} from './vimKeymap.js'
 import { VIM_MOTIONS, getVimMotion } from './vimMotions.js'
 import { getVimOperator } from './vimOperators.js'
 import { VIM_TEXT_OBJECTS } from './vimTextObjects.js'
-import { isVisualMode, type VimOperator, type VimState } from './vimTypes.js'
+import { isVisualMode, type VimOperator, type VimPendingKind, type VimState } from './vimTypes.js'
 import { VISUAL_G_ACTION_KEYS } from './vimVisual.js'
 
 function item(key: string, title: string, isGroup = false): IVimPendingHintItem {
@@ -81,13 +86,17 @@ function operatorGItems(operator: VimOperator): readonly IVimPendingHintItem[] {
   return items
 }
 
-const staticPrefixes = new Map<'z' | '[' | ']', readonly IVimPendingHintItem[]>()
+const staticPrefixes = new WeakMap<VimPrefixTable, readonly IVimPendingHintItem[]>()
 
-function staticPrefixItems(kind: 'z' | '[' | ']'): readonly IVimPendingHintItem[] {
-  const cached = staticPrefixes.get(kind)
+function staticPrefixItems(
+  kind: VimPendingKind,
+  tables: Record<VimPendingKind, VimPrefixTable>,
+): readonly IVimPendingHintItem[] {
+  const table = tables[kind]
+  const cached = staticPrefixes.get(table)
   if (cached !== undefined) return cached
-  const items = [...PREFIX_TABLES[kind].entries].map(([key, entry]) => prefixEntryItem(key, entry))
-  staticPrefixes.set(kind, items)
+  const items = [...table.entries].map(([key, entry]) => prefixEntryItem(key, entry))
+  staticPrefixes.set(table, items)
   return items
 }
 
@@ -146,7 +155,10 @@ function operatorPendingItems(operator: VimOperator): readonly IVimPendingHintIt
 }
 
 /** The keys that can follow the core's pending prefix, or undefined when there is no list. */
-export function computeVimPendingHint(state: VimState): IVimPendingHint | undefined {
+export function computeVimPendingHint(
+  state: VimState,
+  tables: Record<VimPendingKind, VimPrefixTable> = PREFIX_TABLES,
+): IVimPendingHint | undefined {
   if (state.mode === 'insert') return undefined
   const pending = state.pending
   let items: readonly IVimPendingHintItem[]
@@ -168,7 +180,7 @@ export function computeVimPendingHint(state: VimState): IVimPendingHint | undefi
       case 'z':
       case '[':
       case ']':
-        items = staticPrefixItems(pending.kind)
+        items = staticPrefixItems(pending.kind, tables)
         break
     }
   } else if (state.pendingOperator !== null) {

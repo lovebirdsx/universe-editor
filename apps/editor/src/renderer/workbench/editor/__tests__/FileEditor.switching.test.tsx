@@ -332,6 +332,8 @@ describe('FileEditor tab switching', () => {
       getMode: (_key: string, fallback: string) => fallback,
       forgetSurface,
       activateSurface,
+      getUserKeymap: () => [],
+      getLeader: () => 'space',
     } as never)
 
     const { rerender } = render(renderEditor(instantiation, group, inputA))
