@@ -404,6 +404,17 @@ async function openGate(harness: Harness): Promise<void> {
   await settle()
 }
 
+/**
+ * Dispose only after the debounced state write has landed. `settle()` alone can
+ * outrun an in-flight atomic write on a loaded runner; a restart that reads a
+ * stale state.json then loses the queued run or replays a consumed key.
+ * `listTriggers()` flushes the pending write by contract.
+ */
+async function flushAndDispose(service: TriggerMainService): Promise<void> {
+  await service.listTriggers()
+  service.dispose()
+}
+
 function pollSource(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     type: 'poll',
@@ -593,7 +604,7 @@ describe('TriggerMainService dedupe', () => {
     expect(harness.startRun).toHaveBeenCalledTimes(1)
     expect(harness.loggerLines.some((line) => line.includes('duplicate event poll:R-2'))).toBe(true)
 
-    harness.service.dispose()
+    await flushAndDispose(harness.service)
     await settle()
 
     const restarted = new TriggerMainService({
@@ -806,7 +817,7 @@ describe('TriggerMainService queueing', () => {
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     const firstRunId = harness.requests[0]!.origin.runId
 
-    harness.service.dispose()
+    await flushAndDispose(harness.service)
     await settle()
 
     const restarted = new TriggerMainService({
@@ -1782,7 +1793,7 @@ describe('TriggerMainService first-seen pause', () => {
     })
     expect(summary(await first.service.listTriggers(), 'trigger-1').paused).toBe(true)
     await first.service.setPaused(first.key, false)
-    first.service.dispose()
+    await flushAndDispose(first.service)
     await settle()
 
     const second = await createHarness({
