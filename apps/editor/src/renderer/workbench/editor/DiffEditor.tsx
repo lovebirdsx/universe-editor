@@ -7,7 +7,9 @@
  *  and is writable; otherwise it stays read-only over snapshot models that on
  *  unmount go to the diffModelCache LRU (services/editor/diffModelCache) so a
  *  reopen skips the createModel + tokenization + diff-compute trio and the
- *  unmount commit never pays a synchronous multi-MB model teardown.
+ *  unmount commit never pays a synchronous multi-MB model teardown. Both modes
+ *  attach Vim on the modified side; the read-only snapshot path refuses write
+ *  commands through `isReadOnly`.
  *--------------------------------------------------------------------------------------------*/
 
 import { useContext, useEffect, useRef, useState } from 'react'
@@ -247,13 +249,14 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     modifiedModelEditableRef.current = modifiedEditable
     DiffEditorRegistry.register(diffInput, ed, group?.id)
 
-    // Vim on the modified side. The original side stays a plain viewer. This
-    // gate keeps generic snapshot diffs (git commit, compare) non-Vim; the
-    // read-only-safe controller means a view that wants Vim over a snapshot
-    // (SwarmDiffEditor) attaches its own read-only modified pane.
+    // Vim on the modified side, whether the right pane is the live working-tree
+    // buffer or a read-only snapshot (commit changes, timeline revisions, depot
+    // blobs, Explorer compare). The controller refuses write commands through
+    // `isReadOnly` while motions / search / yank / ]c / [c keep working; the
+    // original side stays a plain viewer.
     const vimSurfaceKey = (): string => editorVimSurfaceKey(group?.id, diffInput.id)
     let vim: VimAttachment | undefined
-    if (modifiedEditable && vimModeService !== undefined && vimInputMethodService !== undefined) {
+    if (vimModeService !== undefined && vimInputMethodService !== undefined) {
       const modifiedEditor = ed.getModifiedEditor()
       vim = attachVim({
         editor: modifiedEditor,
@@ -277,7 +280,11 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     }
     // Focus does not move on an in-place model swap, so republish the surface
     // while the modified side owns the keyboard (mode memory is per input).
-    if (modifiedEditable && vimModeService !== undefined && ed.getModifiedEditor().hasTextFocus()) {
+    if (
+      vim !== undefined &&
+      vimModeService !== undefined &&
+      ed.getModifiedEditor().hasTextFocus()
+    ) {
       const key = vimSurfaceKey()
       vimModeService.activateSurface({
         surfaceKey: key,
