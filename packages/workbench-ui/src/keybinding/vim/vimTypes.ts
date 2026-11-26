@@ -102,7 +102,8 @@ export interface IVimSurfaceActions {
   readonly previous?: (count: number) => void
   /**
    * Returns false when there was nothing to escape (a tree with a single selected
-   * row): a view list then hands focus back to the editor, like Esc without Vim.
+   * row). A side bar / panel view list then hands focus back to the editor; a list
+   * inside the editor area hands it to the tab strip, like idle Esc without Vim.
    */
   readonly escape?: (count: number) => boolean | void
   /** `/`: open the host's own filter / find box (type-to-filter trees). */

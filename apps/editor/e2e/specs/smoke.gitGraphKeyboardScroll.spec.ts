@@ -26,6 +26,7 @@ import { execFileSync } from 'node:child_process'
 import { seedBaselineUserData, mkTempDir } from '@universe-editor/e2e-harness'
 import { closeApp, launchCoreGitApp } from '../fixtures/coreGitApp.js'
 import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import { setVimEnabled } from '../pages/vimHelpers.js'
 
 const COMMITS = 120
 
@@ -211,6 +212,59 @@ test.describe('@p1 git graph keyboard scroll', () => {
       await page.keyboard.press('ArrowUp')
       await expect.poll(selectedHash).toBe(firstHash)
       expectFirstRowBelowHeader(await readTopRowGeometry(page), 'after ArrowDown/ArrowUp')
+    } finally {
+      await closeApp(app)
+    }
+  })
+
+  test('idle Escape from the graph list hands focus to the editor tab strip', async () => {
+    test.setTimeout(120_000)
+
+    const userDataDir = makeUserDataDir()
+    const { repoDir } = makeManyCommitsRepo(COMMITS)
+    const app = await launchCoreGitApp({ userDataDir, extraArgs: [repoDir] })
+
+    try {
+      const page = await app.firstWindow()
+      await page.waitForLoadState('domcontentloaded')
+      await page.waitForFunction(() =>
+        Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+      )
+      await evaluateWhenRestored(page)
+
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+          timeout: 60_000,
+          message: 'git extension should register a source control',
+        })
+        .toBeGreaterThan(0)
+
+      await setVimEnabled(page, true)
+      await page.evaluate(() => window.__E2E__!.runCommand('git-graph.view'))
+
+      const editor = page.locator('[data-testid="gitGraph-editor"]')
+      await expect(editor).toBeVisible()
+      const body = editor.locator('[data-testid="gitGraph-scrollBody"]')
+      await expect(body).toBeFocused({ timeout: 30_000 })
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('vimSurface')), {
+          timeout: 15_000,
+        })
+        .toBe('list')
+
+      // The graph is a list in the editor area: idle Esc leaves the view for the
+      // tab strip instead of being swallowed.
+      await page.keyboard.press('Escape')
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.getAttribute('role')), {
+          timeout: 10_000,
+        })
+        .toBe('tab')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('vimSurface')), {
+          timeout: 10_000,
+        })
+        .toBe('tabs')
     } finally {
       await closeApp(app)
     }

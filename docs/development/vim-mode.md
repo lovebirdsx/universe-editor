@@ -148,7 +148,7 @@ useVimSurface({
 
 `registerVimSurface` 是给非 React 调用方的同义入口（如终端实例、`attachVim`）；React 侧一律用 `useVimSurface`，它会通过 ref 读取最新注册，避免每次渲染重注册。
 
-`IVimSurfaceActions` 字段：`move(direction,count)`、`first(count)`、`last(count)`、`page(direction,count)`、`scrollViewport(direction,count)`、`expand/collapse/toggle(count)`、`activate(count,preview)`、`contextMenu/copy/remove(c)`、`next/previous(count)`、`escape(count)`（返回 `false` 表示没有可退出的状态：侧栏 / 底栏视图里的 `list`（`focusedView` 非空）随后执行 `workbench.action.focusActiveEditorGroup` 回编辑器，未实现 `escape` 同理；返回 void 视为已处理）、`find()`（`/` 打开宿主自己的筛选框；树通过 `onVimFind` 暴露，Outline 是范例），以及编辑器专用的 `handleStroke(event)` / `isAwaitingCharArg()` / `takeCount()` / `getPendingHint()`。
+`IVimSurfaceActions` 字段：`move(direction,count)`、`first(count)`、`last(count)`、`page(direction,count)`、`scrollViewport(direction,count)`、`expand/collapse/toggle(count)`、`activate(count,preview)`、`contextMenu/copy/remove(c)`、`next/previous(count)`、`escape(count)`（返回 `false` 表示没有可退出的状态：侧栏 / 底栏视图里的 `list`（`focusedView` 非空）随后执行 `workbench.action.focusActiveEditorGroup` 回编辑器；编辑器区里的 `list`（`editorAreaFocus` 为真）执行 `workbench.action.focusEditorTabs` 回标签栏；未实现 `escape` 同理；返回 void 视为已处理）、`find()`（`/` 打开宿主自己的筛选框；树通过 `onVimFind` 暴露，Outline 是范例），以及编辑器专用的 `handleStroke(event)` / `isAwaitingCharArg()` / `takeCount()` / `getPendingHint()`。
 
 **count 语义（全 surface 统一）**：`first(count)` / `last(count)` 的 `count` 为 0 表示没敲数字（`gg` = 首项、`G` = 末项），`n ≥ 1` 表示跳第 n 项（1 基、夹到范围内）：`3G` / `3gg` 都是第 3 项，`1G` 是首项。`vimSurfaceActions` 靠 dispatcher 额外传的 `hasCount` 区分「没敲」与「敲了 1」，直接调命令不带 `hasCount` 时只有 count > 1 才算敲了。新 surface 用 `createIndexListVimActions` / `createStripVimActions` 就自动遵守，不要手写。
 
@@ -225,7 +225,7 @@ reducer 是纯函数：`VimState = { mode, count, operatorCount, pendingOperator
 - **寄存器**：`vimRegisters.ts` 管 `""` / `"0` / 编号 `"1`–`"9` / 小删除 `"-` / 具名（大写追加）/ 黑洞；写入总会落到 `""`，只有无寄存器名的 yank 才写 `"0`（delete 不覆盖 `"0`）。无寄存器名的 delete / change 跨行（或整行）时推入编号寄存器 `"1`–`"9`（逐级后移），不跨行的写小删除寄存器 `"-`；Vim 里 `d%` `d/` `dn` `d{` 等总用 `"1` 的例外**未实现**（host 不向寄存器层传 motion）。`"+` / `"*` 及 `vim.useSystemClipboard`（让 `""` 与系统剪贴板互通）在 controller 里经 `readClipboardText` / `writeClipboardText` 异步读写；从剪贴板读回的文本若与自己上次写入的相同，则保留 linewise / blockwise 形态。读剪贴板失败会降级到内部寄存器，只 `console.debug`。异步粘贴带 `pasteGeneration` / `contentVersion` 守卫：等待剪贴板期间光标或内容变了就放弃，不会粘到错误位置。
 - **Insert 进出**：进入前 `pushUndoStop`（上一步自成一个撤销单元）；`Esc` 时 `finishInsertSession` → 重复输入（`3ifoo`）→ `exitInsert`（再 `pushUndoStop` 关闭撤销组，**光标左移一格**，块插入后收成单光标）。因此 `u` 一次撤销整个 Insert。
 - **块状光标**：Normal / Visual 下 `editor.updateOptions({ cursorStyle: 'block' })`，Insert 与 deactivate 还原为用户的 `editor.cursorStyle`。「编辑器选项桥」在任意桥接配置变化时会重设 `cursorStyle`，所以 controller 在配置事件里用 `queueMicrotask` 重新夺回。
-- **Normal 空闲 `Esc`**：reducer 在「没有任何待定状态」时发 `search-highlight-clear`；handler 先清 hlsearch 高亮，没有可清的才执行 `workbench.action.focusEditorTabs`（把焦点交给标签栏）。取消待定前缀 / 计数的那一次 `Esc` 不会触发它。
+- **Normal 空闲 `Esc`**：reducer 在「没有任何待定状态」时发 `search-highlight-clear`；handler 先清 hlsearch 高亮，没有可清的才执行 `workbench.action.focusEditorTabs`（把焦点交给标签栏）。取消待定前缀 / 计数的那一次 `Esc` 不会触发它。编辑器区内的 `list` surface（Git / Perforce 图谱、Chat 时间线、设置 / 快捷键列表等）没有待退出状态时同样执行该命令（见上节 `escape` 的落点）。
 - **`Ctrl+[`**：reducer 的 `isEscapeStroke` 把它视同 `Esc`（Normal / Visual / Insert 皆然）；dispatcher 的 Insert 分支同样放行 `ctrl+[` 给内核（编辑器上也会离开 Insert），保留集默认含 `ctrl+[`。
 - **光标期望列（curswant）**：`j` / `k` 记住进入垂直移动前的列，穿过短行后回到原列；`$` 之后贴行尾（`END_OF_LINE_COLUMN`，下移到的每一行都停在行尾，Visual `$` 同样保留换行）；任何水平移动、或光标被别处移走，都会让记忆失效。`gj` / `gk` 单独记住**显示段内的字符偏移**，见下节。
 - **折叠头行上的行级操作**：折叠闭合时，`dd` / `yy` / `>>` / `o` / `dj` 等行级命令把整个折叠当一行（作用于折叠头行到末行，`j` / `k` 计数同理）。

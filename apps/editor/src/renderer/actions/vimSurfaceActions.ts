@@ -19,6 +19,7 @@ import { getActiveVimSurface, type IVimSurfaceActions } from '@universe-editor/w
 import { getActiveWorkbenchDocument } from '../services/windows/workbenchDocuments.js'
 
 const FOCUS_ACTIVE_EDITOR_GROUP = 'workbench.action.focusActiveEditorGroup'
+const FOCUS_EDITOR_TABS = 'workbench.action.focusEditorTabs'
 
 type Invoke = (actions: IVimSurfaceActions, count: number, hasCount: boolean) => void
 
@@ -259,11 +260,22 @@ export class SurfaceEscapeAction extends Action2 {
     const { kind, actions } = active.surface
     const escaped = actions.escape?.(readCount(args[0]))
     // Vim's list Esc used to swallow the workbench's own "Esc leaves the view":
-    // once there is nothing left to escape, a side bar / panel list returns to
-    // the editor. Lists hosted in the editor area are not views and stay put.
+    // once there is nothing left to escape, the focus has to go somewhere.
     if (kind !== 'list' || (actions.escape !== undefined && escaped !== false)) return
-    if (!accessor.get(IContextKeyService).get('focusedView')) return
-    void accessor.get(ICommandService).executeCommand(FOCUS_ACTIVE_EDITOR_GROUP)
+    const contextKeys = accessor.get(IContextKeyService)
+    const commands = accessor.get(ICommandService)
+    // A list inside the editor area (graph, session timeline, settings) is not a
+    // view: idle Esc hands focus to the tab strip, matching a text editor's idle
+    // Esc. `editorAreaFocus` keeps portalled lists (breadcrumb pickers) out, which
+    // have no `focusedView` either but are not in the editor area.
+    if (contextKeys.get('editorAreaFocus') === true) {
+      void commands.executeCommand(FOCUS_EDITOR_TABS)
+      return
+    }
+    // Side bar / panel view lists return to the editor.
+    if (contextKeys.get('focusedView')) {
+      void commands.executeCommand(FOCUS_ACTIVE_EDITOR_GROUP)
+    }
   }
 }
 

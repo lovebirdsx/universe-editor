@@ -132,6 +132,33 @@ test.describe('@p1 vim chat', () => {
       .toBe(true)
   })
 
+  test('idle Escape from the timeline hands focus to the tab strip', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await setVimEnabled(page, true)
+    await startEchoSessionWithOptions(page)
+    await page.evaluate(() => window.__E2E__!.sendAcpPrompt('first question'))
+    await page.evaluate(() => window.__E2E__!.sendAcpPrompt('second question'))
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages().length), POLL)
+      .toBe(4)
+
+    await focusTimelineCard(page)
+
+    // The timeline is a list in the editor area: idle Esc leaves the view for
+    // the tab strip instead of being swallowed.
+    await page.keyboard.press('Escape')
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.getAttribute('role')), POLL)
+      .toBe('tab')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('vimSurface')), POLL)
+      .toBe('tabs')
+  })
+
   test('an agents config overlay closes on Escape while Vim is enabled', async ({
     page,
     workbench,

@@ -159,12 +159,16 @@ describe('Vim surface commands', () => {
   })
 
   describe('Escape with nothing left to escape', () => {
-    function services(focusedView: string) {
+    function services(context: { focusedView?: string; editorAreaFocus?: boolean }) {
       const executeCommand = vi.fn(async () => undefined)
       const collection = new ServiceCollection()
       collection.set(ICommandService, { executeCommand } as never)
       collection.set(IContextKeyService, {
-        get: (key: string) => (key === 'focusedView' ? focusedView : undefined),
+        get: (key: string) => {
+          if (key === 'focusedView') return context.focusedView ?? ''
+          if (key === 'editorAreaFocus') return context.editorAreaFocus ?? false
+          return undefined
+        },
       } as never)
       return { collection, executeCommand }
     }
@@ -172,25 +176,47 @@ describe('Vim surface commands', () => {
     it('hands focus back to the editor from a view list', () => {
       for (const actions of [{ escape: () => false }, {}]) {
         focusSurface(actions)
-        const { collection, executeCommand } = services('workbench.explorer.fileView')
+        const { collection, executeCommand } = services({
+          focusedView: 'workbench.explorer.fileView',
+        })
         invokeWith(collection, SurfaceEscapeAction)
         expect(executeCommand).toHaveBeenCalledWith('workbench.action.focusActiveEditorGroup')
         __resetVimSurfacesForTests()
       }
     })
 
-    it('stays put when the surface escaped something or is not a view', () => {
+    it('hands focus to the tab strip from an editor-area list', () => {
+      for (const actions of [{ escape: () => false }, {}]) {
+        focusSurface(actions)
+        const { collection, executeCommand } = services({ editorAreaFocus: true })
+        invokeWith(collection, SurfaceEscapeAction)
+        expect(executeCommand).toHaveBeenCalledWith('workbench.action.focusEditorTabs')
+        __resetVimSurfacesForTests()
+      }
+    })
+
+    it('prefers the tab strip when both focus markers are present', () => {
+      focusSurface({})
+      const { collection, executeCommand } = services({
+        focusedView: 'workbench.explorer.fileView',
+        editorAreaFocus: true,
+      })
+      invokeWith(collection, SurfaceEscapeAction)
+      expect(executeCommand).toHaveBeenCalledWith('workbench.action.focusEditorTabs')
+    })
+
+    it('stays put when the surface escaped something or is not in the editor area', () => {
       focusSurface({ escape: () => true })
-      const handled = services('workbench.explorer.fileView')
+      const handled = services({ focusedView: 'workbench.explorer.fileView' })
       invokeWith(handled.collection, SurfaceEscapeAction)
       expect(handled.executeCommand).not.toHaveBeenCalled()
       __resetVimSurfacesForTests()
 
-      // A list inside the editor area (settings, graph) already is the editor.
+      // A portalled list (breadcrumbs) has no focusedView but is not in the editor area.
       focusSurface({ escape: () => false })
-      const editorList = services('')
-      invokeWith(editorList.collection, SurfaceEscapeAction)
-      expect(editorList.executeCommand).not.toHaveBeenCalled()
+      const portalList = services({})
+      invokeWith(portalList.collection, SurfaceEscapeAction)
+      expect(portalList.executeCommand).not.toHaveBeenCalled()
     })
   })
 

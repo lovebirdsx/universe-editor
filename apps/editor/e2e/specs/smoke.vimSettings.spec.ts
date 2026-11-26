@@ -61,6 +61,25 @@ test.describe('@p1 vim settings', () => {
     await expect(list).toBeFocused()
   })
 
+  test('idle Esc from the row list hands focus to the tab strip', async ({ page, workbench }) => {
+    test.slow()
+    const list = page.getByTestId('settings-list')
+    await expect(list).toBeVisible()
+
+    // Click a group header (no inline control) to hand focus to the list.
+    await page.locator('[data-testid^="settings-group-"]').first().click()
+    await expect(list).toHaveAttribute('data-focused', 'true')
+    await expect.poll(() => workbench.getContextKey<string>('vimSurface')).toBe('list')
+
+    // A list hosted in the editor area has no view to fall back to: idle Esc
+    // hands focus to the tab strip, like a text editor's idle Esc.
+    await page.keyboard.press('Escape')
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.getAttribute('role')))
+      .toBe('tab')
+    await expect.poll(() => workbench.getContextKey<string>('vimSurface')).toBe('tabs')
+  })
+
   test('TOC: j/k highlight a group and Enter hands focus to the rows', async ({ page }) => {
     test.slow()
     const toc = page.getByTestId('settings-toc')
