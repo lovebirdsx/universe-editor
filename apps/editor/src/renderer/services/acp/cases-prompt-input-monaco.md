@@ -45,8 +45,9 @@
 
 ## Vim 模式
 
-- 输入框是内嵌 Monaco，直接复用编辑器 Vim 内核：`PromptMonacoEditor` 在编辑器创建后、autoFocus 前调 `attachVim`（surfaceKey `prompt:<sessionId>`、`defaultMode: 'insert'`、`idleEscapeCommand: 'workbench.action.agent.focusTimeline'`）。服务经 `PromptInput` 的 `useOptionalService` 以可选 prop 传入；服务缺失（单测 stub / 非 workbench 场景）时完全不 attach，输入框退化为普通 Monaco。
-- 默认 Insert：聚焦即可打字。Esc 进 Normal；Normal 的 Enter 是 Vim motion，**不发送消息**（发送只在 Insert 的 Enter，见上文 `addCommand` 红线）。空闲 Normal Esc 回时间线，时间线 surface 已有 `i` 回输入框的键位。
+- 输入框是内嵌 Monaco，直接复用编辑器 Vim 内核：`PromptMonacoEditor` 在编辑器创建后、autoFocus 前调 `attachVim`（surfaceKey `prompt:<sessionId>`、`defaultMode` 读 `vim.prompt.defaultMode`（`normal` / `insert`，默认 `normal`）、`idleEscapeCommand: 'workbench.action.agent.focusTimeline'`）。服务经 `PromptInput` 的 `useOptionalService` 以可选 prop 传入；服务缺失（单测 stub / 非 workbench 场景）时完全不 attach，输入框退化为普通 Monaco。
+- 起始模式：默认 Normal，聚焦后按 `i` 才能打字；`vim.prompt.defaultMode` 设为 `insert` 则聚焦即可打字。该值每次挂载时读取，切换设置后重新打开 session 输入框生效。仅 Vim 开启且 `vim.surfaces.editor` 开启时影响输入框。
+- Normal 的 Enter 是 Vim motion，**不发送消息**（发送只在 Insert 的 Enter，见上文 `addCommand` 红线）。空闲 Normal Esc 回时间线，时间线 surface 已有 `i` 回输入框的键位。
 - **浮层优先级**：`acpPromptPopupVisible` 为真时 `VimDispatcher` 对 editor kind 整体放行，`Up` / `Down` / `Tab` / `Enter` / `Esc` 归全局 suggestion 命令——Esc 先关 popover、模式保持 Insert，再按一次才退出 Insert。限定 editor kind，避免误放行菜单 / 设置对话框。
 - **User 键位**：`useGlobalKeybindingHandler` 的 `inVimNormalSurface` 把 `acpPromptInputFocused` 纳入（与 `editorTextFocus` 并列）。否则 Normal 下 User 绑定让行后会被文本输入守卫吞掉；`vimNormalMode` 为假时行为不变。
 - 焦点键仍是 `acpPromptInputFocused`，**不桥接** `editorTextFocus`（原因见 monaco-embedding.md 的焦点桥接）。dispatcher 的 editable guard 只拒绝非 editor / terminal surface，prompt 以 editor kind 正常进入内核。

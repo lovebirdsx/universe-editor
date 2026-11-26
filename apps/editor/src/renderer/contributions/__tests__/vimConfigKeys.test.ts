@@ -11,11 +11,12 @@ import { ConfigurationRegistry } from '@universe-editor/platform'
 import { SettingsContribution } from '../SettingsContribution.js'
 import { VIM_SERVICE_CONFIG_KEYS } from '../../services/vim/vimModeService.js'
 
-/** Read by the editor Vim core (vimSearchController), not by the workbench service. */
+/** Read by the editor Vim core or a surface component, not by the workbench service. */
 const EDITOR_CORE_ONLY_KEYS = [
   'vim.searchCaseSensitivity',
   'vim.highlightSearch',
   'vim.useSystemClipboard',
+  'vim.prompt.defaultMode',
 ]
 
 describe('vim.* configuration keys', () => {

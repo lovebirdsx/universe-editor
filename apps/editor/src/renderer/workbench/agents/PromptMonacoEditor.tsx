@@ -490,7 +490,7 @@ export function PromptMonacoEditor({
       const vimOptions = vimRef.current
       if (vimOptions !== undefined) {
         // Attach before the autoFocus below so the first focus already reports
-        // the Insert mode and the context keys settle synchronously.
+        // the configured mode and the context keys settle synchronously.
         attachedVim = vimOptions
         vimAttachment = attachVim({
           editor: ed,
@@ -500,9 +500,10 @@ export function PromptMonacoEditor({
           vimModeService: vimOptions.vimModeService,
           inputMethodService: vimOptions.inputMethodService,
           executeCommand: vimOptions.executeCommand,
-          // The prompt is a prose input: it opens ready to type. Normal mode is
-          // one Escape away, like the file editor's Insert.
-          defaultMode: 'insert',
+          // Read once per mount: the setting is the mode a newly opened prompt
+          // starts in, and reopening a session input picks up later changes.
+          defaultMode:
+            configService.get<string>('vim.prompt.defaultMode') === 'insert' ? 'insert' : 'normal',
           // Idle Normal Escape leaves the input for the timeline, where j/k
           // continue browsing; `i` on the timeline comes back here.
           idleEscapeCommand: 'workbench.action.agent.focusTimeline',

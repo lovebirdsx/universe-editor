@@ -503,6 +503,19 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Enable Vim keys in text editors, the agent chat prompt, and the Output panel. When off, editors behave as plain Monaco even while vim.enabled is on; the leader chords stay inactive there too.',
             ),
           },
+          'vim.prompt.defaultMode': {
+            type: 'string',
+            default: 'normal',
+            enum: ['normal', 'insert'],
+            enumItemLabels: {
+              normal: localize('settings.vim.prompt.defaultMode.normal', 'Normal'),
+              insert: localize('settings.vim.prompt.defaultMode.insert', 'Insert'),
+            },
+            description: localize(
+              'settings.vim.prompt.defaultMode.description',
+              'Mode an agent chat prompt starts in when it is opened. "normal" starts in Vim Normal mode; "insert" starts ready to type. Only affects the prompt while Vim is enabled and vim.surfaces.editor is on.',
+            ),
+          },
         },
       }),
     )

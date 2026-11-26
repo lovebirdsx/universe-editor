@@ -1569,6 +1569,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.vim.surfaces.terminalNormalMode.description': '启用终端 Normal 模式 surface。',
   'settings.vim.surfaces.editor.description':
     '在文本编辑器、Chat 输入框与输出面板中启用 Vim 按键。关闭后即使 vim.enabled 为 true，编辑器也保持普通 Monaco 行为，leader 序列在编辑器中同样不生效。',
+  'settings.vim.prompt.defaultMode.description':
+    '打开 Agent Chat 输入框时的起始模式。"normal" 从 Vim Normal 模式开始；"insert" 打开即可打字。仅在 Vim 已启用且 vim.surfaces.editor 开启时影响该输入框。',
+  'settings.vim.prompt.defaultMode.normal': 'Normal',
+  'settings.vim.prompt.defaultMode.insert': 'Insert',
   'settings.files.nativeDialog.enable.description':
     '打开文件/文件夹及保存时使用操作系统文件对话框，而不是内置对话框。',
   'settings.issueReporter': '问题报告器',

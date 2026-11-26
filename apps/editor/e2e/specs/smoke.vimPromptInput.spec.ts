@@ -2,9 +2,10 @@
  *  Vim mode — the session prompt input (@p1).
  *
  *  The prompt is an embedded Monaco editor, so it joins the existing `editor`
- *  Vim surface: it must open in Insert, let the editor core own Normal mode,
- *  yield its own popover keys (ArrowUp / Escape) to the suggestion commands, and
- *  hand focus back to the timeline on an idle Normal Escape.
+ *  Vim surface: it opens in the mode set by `vim.prompt.defaultMode` (Normal by
+ *  default), lets the editor core own Normal mode, yields its own popover keys
+ *  (ArrowUp / Escape) to the suggestion commands, and hands focus back to the
+ *  timeline on an idle Normal Escape.
  *
  *  Assertions read the draft cache / context keys / status bar through
  *  `window.__E2E__`; nothing pokes at Monaco's internal DOM.
@@ -14,7 +15,13 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
-import { expectStableFor, setVimEnabled, statusIcon, statusText } from '../pages/vimHelpers.js'
+import {
+  expectStableFor,
+  setVimEnabled,
+  setVimPromptDefaultMode,
+  statusIcon,
+  statusText,
+} from '../pages/vimHelpers.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
@@ -49,13 +56,38 @@ const popupVisible = (page: Page) =>
   page.evaluate(() => window.__E2E__!.getContextKey('acpPromptPopupVisible') === true)
 
 test.describe('vim prompt input', () => {
-  test('opens in Insert while the editor core owns Normal mode @p1', async ({
+  test('opens in Normal by default; i enters Insert @p1', async ({ page, workbench }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await setVimEnabled(page, true)
+    await startEchoSession(page)
+
+    // `vim.prompt.defaultMode` is unset here, so the shipped default applies.
+    await page.getByTestId('acp-prompt-drop-host').click()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')), POLL)
+      .toBe(true)
+    await expect.poll(() => statusIcon(page), POLL).toBe('vim-normal')
+    expect(await statusText(page)).toBe('NORMAL')
+
+    // A printable key is a Vim command in Normal, not text.
+    await page.keyboard.type('x')
+    await expectStableFor(() => promptText(page), '', 500)
+
+    await page.keyboard.press('i')
+    await expect.poll(() => statusIcon(page), POLL).toBe('vim-insert')
+    await page.keyboard.type('abc')
+    await expect.poll(() => promptText(page), POLL).toBe('abc')
+  })
+
+  test('opens in Insert when configured while the editor core owns Normal mode @p1', async ({
     page,
     workbench,
   }) => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
     await setVimEnabled(page, true)
+    await setVimPromptDefaultMode(page, 'insert')
     await startEchoSession(page)
     await focusPrompt(page)
     expect(await statusText(page)).toBe('INSERT')
@@ -101,6 +133,7 @@ test.describe('vim prompt input', () => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
     await setVimEnabled(page, true)
+    await setVimPromptDefaultMode(page, 'insert')
     await startEchoSession(page)
     await focusPrompt(page)
 
@@ -137,6 +170,7 @@ test.describe('vim prompt input', () => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
     await setVimEnabled(page, true)
+    await setVimPromptDefaultMode(page, 'insert')
     await startEchoSession(page)
     await focusPrompt(page)
 

@@ -151,7 +151,7 @@
 
 **常见问题**：
 
-- **按键没反应或在输入框里打不出 Vim 命令**：普通输入框（搜索框、行内输入框等）、Quick Input、模态对话框、HTML 预览（Webview）里 Vim 不介入，这是设计；Chat 输入框是例外，它是内嵌编辑器，默认 Insert，就像在文件里打字。
+- **按键没反应或在输入框里打不出 Vim 命令**：普通输入框（搜索框、行内输入框等）、Quick Input、模态对话框、HTML 预览（Webview）里 Vim 不介入，这是设计；Chat 输入框是例外，它是内嵌编辑器，按 Vim 工作——起始模式由 `vim.prompt.defaultMode` 决定，默认 `normal`（按 `i` 开始输入），设为 `insert` 则聚焦即可打字。
 - **某个键被快捷键抢走了**：你若给该键绑定了自己的快捷键，Vim 会让行（保留键除外），见下文[优先级](#优先级用户键位保留集与自定义映射)。
 - **`Ctrl+V` 不能粘贴 / `Ctrl+R` 变成重做**：编辑器文本 Normal 下这些 Ctrl 键归 Vim；需要粘贴先 `i` 进入 Insert，或用 `p`。
 - **想在终端里用**：终端默认是 Insert（按键属于 shell），按 `Ctrl+Shift+\` 进入终端 Normal Mode。
@@ -174,9 +174,9 @@
 ### 模式、记忆与透传
 
 - **Normal / Insert / Visual**：编辑器文本与 Chat 输入框有 Normal、Insert 与三种 Visual（`v` 按字符、`V` 按行、`Ctrl+V` 块选择）；其它第一方 surface 没有自己的 Insert，`Esc` 会回到 Normal 并把后续按键交还给 Vim。
-- **模式按 surface 实例记忆**（仅内存，重启后重置）：编辑器按「编辑器组 + 输入」记忆，同一个文件在两个分屏里互不影响；关闭标签页会忘掉该输入的模式，重新打开从 Normal 开始。终端按终端实例记忆，默认是 Insert。Chat 输入框按 session 记忆，默认是 Insert；切走再回来从 Insert 开始，同一 session 的两个分屏共享。列表 / 菜单 / 浮层 / 标签栏 / ActivityBar / 视图容器标题默认 Normal。
+- **模式按 surface 实例记忆**（仅内存，重启后重置）：编辑器按「编辑器组 + 输入」记忆，同一个文件在两个分屏里互不影响；关闭标签页会忘掉该输入的模式，重新打开从 Normal 开始。终端按终端实例记忆，默认是 Insert。Chat 输入框按 session 记忆，起始模式取 `vim.prompt.defaultMode`（默认 Normal）；切走再回来按该默认值开始，同一 session 的两个分屏共享。列表 / 菜单 / 浮层 / 标签栏 / ActivityBar / 视图容器标题默认 Normal。
 - **Insert 模式只处理 `Esc` 与 `Ctrl+[`**（编辑器内另见下文 Insert 一节；编辑器里 `Ctrl+[` 同样退出 Insert，不会变成 Monaco 的「减少缩进」）：其余按键全部原样输入。编辑器与终端在切到 Normal 时，`vim.autoSwitchInputMethod`（默认开启，仅 Windows）会把系统输入法临时切到英文，Insert 恢复；输入法组合期间的按键（`isComposing` / `keyCode 229`）一律放行。
-- **输入框、Quick Input、对话框透传**：普通可编辑控件（搜索框、行内输入框等）聚焦时，裸键保持普通输入；Quick Input（快速打开 / 命令面板等）打开期间 Vim 完全不介入；带 `[data-renderer-dialog]` 的模态对话框同样透传。**Chat 输入框例外**：它是内嵌的 Monaco 编辑器，按编辑器 Vim 工作，默认 Insert（可直接打字），Esc 进 Normal；Normal 下 Enter 是 Vim 的换行移动、不再发送消息，浮层打开时 Esc / 方向键先归浮层，空闲 Esc 把焦点交回 Chat 时间线（从时间线按 `i` 可回来）。
+- **输入框、Quick Input、对话框透传**：普通可编辑控件（搜索框、行内输入框等）聚焦时，裸键保持普通输入；Quick Input（快速打开 / 命令面板等）打开期间 Vim 完全不介入；带 `[data-renderer-dialog]` 的模态对话框同样透传。**Chat 输入框例外**：它是内嵌的 Monaco 编辑器，按编辑器 Vim 工作，起始模式由 `vim.prompt.defaultMode` 决定（默认 Normal，按 `i` 进 Insert；设为 `insert` 则打开即可打字）；Normal 下 Enter 是 Vim 的换行移动、不再发送消息，浮层打开时 Esc / 方向键先归浮层，空闲 Esc 把焦点交回 Chat 时间线（从时间线按 `i` 可回来）。
 - **Webview 不支持**：焦点进入 iframe（例如 HTML 预览）时 Vim 不介入，按键留在 frame 内。需要宿主标记的场景使用 `data-vim-surface="webview"`。
 - **按键序列只认当前可用的**：带 `when` 条件的键位在条件不成立时不会占住前缀——例如不在对比编辑器里时按 `]` 不会进入「等待下一键」，而是直接交回编辑器自己的 `]` 前缀。
 - **未映射键**：Normal 模式下，列表 / 菜单 / 浮层 / 终端里未映射的可打印键会被 Vim 吞掉，不会触发 Quick Open 或输入到别处，并在状态栏短暂提示 `Unsupported: <键>`；功能键和组合键照常交给工作台。把 `vim.passThroughUnmappedKeys` 设为 `true` 可让这些可打印键继续下传。
@@ -455,6 +455,7 @@ Panel / 辅助侧边栏的**标签式**容器标题聚焦时：`h` / `l` 切换�
 | `vim.surfaces.activityBar` | `true` | ActivityBar 与视图容器标题 |
 | `vim.surfaces.terminalNormalMode` | `true` | 终端 Normal Mode |
 | `vim.surfaces.editor` | `true` | 编辑器文本、Chat 输入框与 Output 面板；关闭后编辑器按普通 Monaco 工作，leader 序列也不再生效 |
+| `vim.prompt.defaultMode` | `normal` | 新打开的 Chat 输入框起始模式：`normal`（按 `i` 开始输入）或 `insert`（打开即可打字）；仅在 Vim 启用且 `vim.surfaces.editor` 开启时生效 |
 
 ### 排障：当前键位与分发轨迹
 

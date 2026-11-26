@@ -73,7 +73,7 @@ Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也�
 | `vimKeyHelp.ts` | 速查表里的编辑器键位说明——**从上面的注册表派生**（motion / operator / 文本对象 / 前缀表 / 简单命令 / Visual 键），加键位自动出现在速查表；`EXTRA_ROWS` 只放 reducer 内联处理的键（`.` `v` `"x` `r`…）。描述用英文，`vim.keyHelp.<slug>` 本地化；`describeVimKeyHelp()` 同时供 which-key 使用 |
 | `vimPendingHints.ts` | 纯函数 `computeVimPendingHint(state)`：从同一批注册表派生编辑器内核前缀的 which-key 候选（`g` / `z` / `[` / `]`、操作符等待、`i`/`a` 文本对象、Visual `g`），静态表按类别 memo；等待字符参数（`f` / `r` / `"`）与纯计数返回 undefined |
 | `vimEditorController.ts` | 把 reducer 的输出绑到 Monaco：`COMMAND_HANDLERS`（`Record` 覆盖每个 `VimCommand['type']`，缺一个编译器就报）、Visual 状态（anchor + cursor）、`.` 重放、Insert 会话记录（`3ifoo<Esc>`）、块状光标、`"+`/`"*`/`vim.useSystemClipboard` |
-| `attachVim.ts` | 一次调用接好 controller + surface 注册；`FileEditor` / `DiffEditor` / session 输入框共用。可选 `defaultMode`（默认 `normal`）与 `idleEscapeCommand`（默认聚焦编辑器标签栏）：session 输入框传 `insert` 与 `workbench.action.agent.focusTimeline` |
+| `attachVim.ts` | 一次调用接好 controller + surface 注册；`FileEditor` / `DiffEditor` / session 输入框共用。可选 `defaultMode`（默认 `normal`）与 `idleEscapeCommand`（默认聚焦编辑器标签栏）：session 输入框的 `defaultMode` 取自 `vim.prompt.defaultMode`，`idleEscapeCommand` 传 `workbench.action.agent.focusTimeline` |
 | `vimSurfaceKeys.ts` | `editorVimSurfaceKey(groupId, inputId)` |
 | `workbench/panel/output/outputVimKeymap.ts` | Output 只读编辑器：**复用 `reduceVimKey`** 再 `project()` 成可执行子集（`j/k`、`gj/gk`、`Ctrl+E/Y/D/U/F/B`、`gg/G`），其余吞掉；要多支持一个 motion 就在 `project` 加 `case`，不要另写键表 |
 | `workbench/panel/output/outputVimController.ts` | 把投影后的命令绑到 Output 的 Monaco 实例；只跟踪 text focus 与 blur 重置 |
@@ -277,10 +277,11 @@ reducer 是纯函数：`VimState = { mode, count, operatorCount, pendingOperator
 
 ### Session 输入框（prompt）
 
-AI session 的输入框（`PromptMonacoEditor`）是内嵌 Monaco，直接接入编辑器内核：`attachVim` 传 `defaultMode: 'insert'`、`idleEscapeCommand: 'workbench.action.agent.focusTimeline'`，surfaceKey 为 `prompt:<sessionId>`。普通输入框仍走 dispatcher 的 editable guard 透传，prompt 是唯一例外（`vim.surfaces.editor` 同时控制两者）。
+AI session 的输入框（`PromptMonacoEditor`）是内嵌 Monaco，直接接入编辑器内核：`attachVim` 的 `defaultMode` 取自 `vim.prompt.defaultMode`（`normal` / `insert`，默认 `normal`），`idleEscapeCommand: 'workbench.action.agent.focusTimeline'`，surfaceKey 为 `prompt:<sessionId>`。普通输入框仍走 dispatcher 的 editable guard 透传，prompt 是唯一例外（`vim.surfaces.editor` 同时控制两者）。
 
-- 默认 Insert：聚焦即可打字；Insert 下 `Enter` 提交、`Tab` / `ArrowUp` 开候选或历史，都是输入框已有的本地行为，Vim 不截。Normal 的 `Enter` 是 Vim 的 `enter` motion，不发送消息。
-- 浮层打开期间 dispatcher 对 editor kind 放行（分发顺序第 7 步）：方向键 / `Tab` / `Enter` 归 suggestion 命令，`Esc` 先关浮层且模式保持 Insert，再按一次才退出 Insert。
+- 起始模式由 `vim.prompt.defaultMode` 决定，每次挂载时读取：默认 `normal`，聚焦后按 `i` 进 Insert 才能打字；设为 `insert` 则聚焦即可打字。切换设置后重新打开 session 输入框生效（已有模式记忆的存活输入框不受影响）。
+- Insert 下 `Enter` 提交、`Tab` / `ArrowUp` 开候选或历史，都是输入框已有的本地行为，Vim 不截。Normal 的 `Enter` 是 Vim 的 `enter` motion，不发送消息。
+- 浮层打开期间 dispatcher 对 editor kind 放行（分发顺序第 7 步）：方向键 / `Tab` / `Enter` 归 suggestion 命令，`Esc` 先关浮层且模式不变，再按一次才退出 Insert。
 - 空闲 Normal `Esc` 执行 `workbench.action.agent.focusTimeline`，从时间线按 `i` 可回到输入框（`vimAppKeymap` 已有）。
 - 焦点键仍是 `acpPromptInputFocused`，不桥接 `editorTextFocus`（见 `docs/development/monaco-embedding.md`）；因此 `useGlobalKeybindingHandler` 的 `inVimNormalSurface` 显式把 prompt 的 Normal 算进去，否则 User 键位让行后会被文本输入守卫吞掉。
 
@@ -340,7 +341,7 @@ KeybindingsRegistry.hasBindingAtOrAbove(
 | surface | surfaceKey |
 | --- | --- |
 | 编辑器 | `editor:${groupId ?? 0}:${inputId}`（`editorVimSurfaceKey`）；同一文件两个分屏互不影响，关闭输入时 forget |
-| Agent 输入框（prompt） | `prompt:${sessionId}`（`promptVimSurfaceKey`）；`kind: 'editor'`、默认 `insert`，卸载时 forget（重新打开从 Insert 开始）；同 session 的两个分屏共享模式记忆 |
+| Agent 输入框（prompt） | `prompt:${sessionId}`（`promptVimSurfaceKey`）；`kind: 'editor'`、默认取 `vim.prompt.defaultMode`（出厂 `normal`），卸载时 forget（重新打开按该默认值开始）；同 session 的两个分屏共享模式记忆 |
 | 终端 | `terminal:${terminalId}`；默认 `insert`，终端在 panel / editor 间移动不重建键 |
 | 列表 / 树 / 图谱 | `list:${viewId}`；无 id 时 `list:auto:<n>` |
 | Markdown 预览 / 文档中心 | `reader:auto:<n>` |

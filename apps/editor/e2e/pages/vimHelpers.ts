@@ -12,24 +12,34 @@ import { join } from 'node:path'
 import { expect } from '@playwright/test'
 import { mkTempDir } from '@universe-editor/e2e-harness'
 
-/** `vim.enabled` is USER scope; the shared fixture resets settings.json between tests. */
-export async function setVimEnabled(page: Page, enabled: boolean): Promise<void> {
+/** Write a USER-scope Vim setting and wait for it to be readable. */
+async function setVimConfig(page: Page, key: string, value: unknown): Promise<void> {
   // Cold start hydrates user settings after the first frame; a write before
   // that point is lost without a retry (the configuration subscription is
   // registered at the end of initialize()).
   await page.evaluate(() => window.__E2E__!.whenUserSettingsInitialized())
   await page.evaluate(
-    (value) => window.__E2E__!.runCommand('_workbench.updateConfiguration', 'vim.enabled', value),
-    enabled,
+    ([k, v]) => window.__E2E__!.runCommand('_workbench.updateConfiguration', k, v),
+    [key, value] as const,
   )
   await expect
     .poll(() =>
-      page.evaluate(
-        (key) => window.__E2E__!.runCommand('_workbench.getConfiguration', key),
-        'vim.enabled',
-      ),
+      page.evaluate((k) => window.__E2E__!.runCommand('_workbench.getConfiguration', k), key),
     )
-    .toBe(enabled)
+    .toEqual(value)
+}
+
+/** `vim.enabled` is USER scope; the shared fixture resets settings.json between tests. */
+export async function setVimEnabled(page: Page, enabled: boolean): Promise<void> {
+  await setVimConfig(page, 'vim.enabled', enabled)
+}
+
+/** Mode a newly opened agent prompt starts in; set it before opening the session input. */
+export async function setVimPromptDefaultMode(
+  page: Page,
+  mode: 'normal' | 'insert',
+): Promise<void> {
+  await setVimConfig(page, 'vim.prompt.defaultMode', mode)
 }
 
 /** Icon of the Vim mode status-bar entry (`vim-normal` / `vim-insert` / ...), undefined when Vim is off. */
