@@ -146,6 +146,7 @@ function renderEditor(options: HarnessOptions = {}) {
   const listTriggers = vi.fn(async () => options.summaries ?? [])
   const setPaused = vi.fn(async () => undefined)
   const setAllPaused = vi.fn(async () => undefined)
+  const clearLastError = vi.fn(async () => undefined)
   const runNow = vi.fn(async () => undefined)
   const listRuns = vi.fn(async () => options.runs ?? [])
   const listWorkspaces = vi.fn(async () => [
@@ -174,6 +175,7 @@ function renderEditor(options: HarnessOptions = {}) {
     ensureConfigFile: vi.fn(async () => ''),
     setPaused,
     setAllPaused,
+    clearLastError,
     runNow,
     listRuns,
     onDidChangeTriggers: (listener: (list: readonly TriggerSummary[]) => void) => {
@@ -251,6 +253,7 @@ function renderEditor(options: HarnessOptions = {}) {
     listWorkspaces,
     setPaused,
     setAllPaused,
+    clearLastError,
     runNow,
     listTriggers,
     listRuns,
@@ -573,6 +576,17 @@ describe('TriggerManagerEditor', () => {
     fireEvent.click(within(rowByKey('a')).getByTestId('trigger-manager-row-toggle'))
 
     expect(harness.setPaused).toHaveBeenCalledWith('a', false)
+  })
+
+  it('dismisses the overview runtime error through clearLastError', async () => {
+    const harness = renderEditor({
+      summaries: [summary({ id: 'a', lastError: 'command failed', consecutiveFailures: 1 })],
+    })
+    await screen.findAllByTestId('trigger-manager-row')
+
+    fireEvent.click(screen.getByTestId('trigger-manager-dismiss-error'))
+
+    await waitFor(() => expect(harness.clearLastError).toHaveBeenCalledWith('a'))
   })
 
   it('disables the row toggle while every trigger is paused', async () => {

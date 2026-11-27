@@ -364,6 +364,14 @@ export async function setTriggerPaused(
   })
 }
 
+export async function clearTriggerLastError(
+  services: TriggerActionServices,
+  summary: TriggerSummary,
+): Promise<void> {
+  services.logger.info(`clearing the last error of trigger ${summary.id}`)
+  await services.triggers.clearLastError(summary.key)
+}
+
 export async function openTriggerConfig(services: TriggerActionServices): Promise<void> {
   const folder = services.workspace.current?.folder
   // Definitions live inside a workspace; an empty window has nowhere to put them.

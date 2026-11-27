@@ -47,6 +47,14 @@
   gap: var(--spacing-4);
 }
 
+.sectionHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+
 .sectionTitle {
   margin: 0;
   font-size: var(--font-size-base);

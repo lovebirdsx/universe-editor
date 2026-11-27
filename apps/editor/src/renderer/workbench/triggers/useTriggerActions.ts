@@ -28,6 +28,7 @@ import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
 import type { TriggerSummary } from '../../../shared/triggers/types.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
+  clearTriggerLastError,
   confirmTriggerActivation,
   openTriggerConfig,
   rescanTriggerWorkspace,
@@ -45,6 +46,7 @@ export interface TriggerManagerActions {
   readonly runNow: (summary: TriggerSummary) => Promise<void>
   readonly setPaused: (summary: TriggerSummary, paused: boolean) => Promise<void>
   readonly setAllPaused: (paused: boolean) => Promise<void>
+  readonly clearLastError: (summary: TriggerSummary) => Promise<void>
   readonly confirmActivation: (summary: TriggerSummary) => Promise<void>
   readonly openConfig: () => Promise<void>
   readonly rescan: () => Promise<void>
@@ -119,6 +121,8 @@ export function useTriggerActions(): TriggerManagerActions {
         runTriggerAction(services, () => setTriggerPaused(services, summary, paused)),
       setAllPaused: (paused) =>
         runTriggerAction(services, () => setAllTriggersPaused(services, paused)),
+      clearLastError: (summary) =>
+        runTriggerAction(services, () => clearTriggerLastError(services, summary)),
       confirmActivation: (summary) =>
         runTriggerAction(services, () => confirmTriggerActivation(services, summary)),
       openConfig: () => runTriggerAction(services, () => openTriggerConfig(services)),

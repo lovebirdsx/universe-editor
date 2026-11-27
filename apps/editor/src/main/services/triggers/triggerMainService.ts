@@ -593,6 +593,20 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._fireChange()
   }
 
+  async clearLastError(triggerKey: string): Promise<void> {
+    await this._awaitReady()
+    const trigger = this._catalog.requireTrigger(triggerKey)
+    if (this._stateFor(trigger.key).lastError === undefined) return
+    this._setTriggerState(trigger.key, { lastError: undefined })
+    this._logger.info(`trigger ${trigger.id}: last error dismissed`)
+    this._audit(
+      'clear-last-error',
+      'success',
+      `trigger=${trigger.id} workspace=${trigger.workspace}`,
+    )
+    this._fireChange()
+  }
+
   /**
    * Workspace-defined triggers are never run before the user confirms them once on
    * this machine; the confirmation is bound to the config fingerprint, so editing

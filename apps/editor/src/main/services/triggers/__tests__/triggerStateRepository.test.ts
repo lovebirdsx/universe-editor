@@ -234,4 +234,46 @@ describe('TriggerStateRepository pruning', () => {
     expect(clock.pendingTimers).toBe(2)
     repo.dispose()
   })
+
+  it('deletes fields patched with undefined and ignores an unchanged patch', async () => {
+    const dir = await tempDir()
+    const pendingDir = join(dir, 'pending')
+    await mkdir(pendingDir, { recursive: true })
+    const file = join(dir, 'state.json')
+    const clock = new FakeClock()
+    const repo = new TriggerStateRepository({
+      file,
+      pendingDir,
+      logger: createLogger(),
+      clock,
+      debounceMs: 200,
+    })
+    await repo.load()
+    const key = triggerKeyFor(REGISTERED, 'triage')
+
+    repo.setTriggerState(key, { lastError: 'boom', consecutiveFailures: 2, backoffUntil: 5 })
+    expect(clock.pendingTimers).toBe(1)
+    repo.setTriggerState(key, { lastError: 'boom', consecutiveFailures: 2, backoffUntil: 5 })
+    expect(clock.pendingTimers).toBe(1)
+
+    repo.setTriggerState(key, {
+      lastError: undefined,
+      consecutiveFailures: undefined,
+      backoffUntil: undefined,
+    })
+    const state = repo.stateFor(key)
+    expect(Object.hasOwn(state, 'lastError')).toBe(false)
+    expect(Object.hasOwn(state, 'consecutiveFailures')).toBe(false)
+    expect(Object.hasOwn(state, 'backoffUntil')).toBe(false)
+
+    await repo.flushIfPending()
+    const persisted = JSON.parse(await readFile(file, 'utf8')) as {
+      triggers: Record<string, Record<string, unknown>>
+    }
+    const entry = persisted.triggers[key] ?? {}
+    expect(Object.hasOwn(entry, 'lastError')).toBe(false)
+    expect(Object.hasOwn(entry, 'consecutiveFailures')).toBe(false)
+    expect(Object.hasOwn(entry, 'backoffUntil')).toBe(false)
+    repo.dispose()
+  })
 })

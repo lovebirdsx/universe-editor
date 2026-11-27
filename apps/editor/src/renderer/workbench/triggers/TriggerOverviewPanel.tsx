@@ -37,10 +37,10 @@ export function TriggerOverviewPanel({ summary, actions }: TriggerOverviewPanelP
   const facts = triggerSourceFacts(summary.source)
   const outcomeLabel = triggerRunOutcomeLabel(summary.lastRunOutcome)
   const verdictLabel = automationVerdictLabel(summary.lastRunVerdict)
-  const errors = [...(summary.errors ?? [])]
-  if (summary.lastError !== undefined && summary.lastError.length > 0) {
-    errors.unshift(summary.lastError)
-  }
+  const configErrors = summary.errors ?? []
+  const lastError =
+    summary.lastError !== undefined && summary.lastError.length > 0 ? summary.lastError : undefined
+  const hasErrors = lastError !== undefined || configErrors.length > 0
 
   return (
     <div className={styles['overview']} data-testid="trigger-manager-overview">
@@ -262,14 +262,34 @@ export function TriggerOverviewPanel({ summary, actions }: TriggerOverviewPanelP
         )}
       </section>
 
-      {errors.length > 0 && (
+      {hasErrors && (
         <section className={styles['section']} data-testid="trigger-manager-errors">
-          <h3 className={styles['sectionTitle']}>
-            {localize('trigger.manager.overview.errors', 'Errors')}
-          </h3>
+          <div className={styles['sectionHeader']}>
+            <h3 className={styles['sectionTitle']}>
+              {localize('trigger.manager.overview.errors', 'Errors')}
+            </h3>
+            {lastError !== undefined && (
+              <Button
+                size="sm"
+                onClick={() => void actions.clearLastError(summary)}
+                data-testid="trigger-manager-dismiss-error"
+              >
+                {localize('trigger.manager.action.dismissError', 'Dismiss error')}
+              </Button>
+            )}
+          </div>
           <ul className={styles['errorList']}>
-            {errors.map((error, index) => (
-              <li key={`${index}:${error}`} className={styles['errorItem']}>
+            {lastError !== undefined && (
+              <li className={styles['errorItem']} data-testid="trigger-manager-last-error">
+                {lastError}
+              </li>
+            )}
+            {configErrors.map((error, index) => (
+              <li
+                key={`${index}:${error}`}
+                className={styles['errorItem']}
+                data-testid="trigger-manager-config-error"
+              >
                 {error}
               </li>
             ))}

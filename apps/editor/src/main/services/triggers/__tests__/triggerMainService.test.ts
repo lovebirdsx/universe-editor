@@ -451,6 +451,7 @@ interface RawState {
         readonly paused?: boolean
         readonly consecutiveFailures?: number
         readonly backoffUntil?: number
+        readonly lastError?: string
       }
     >
   >
@@ -1461,6 +1462,100 @@ describe('TriggerMainService poll source', () => {
     const item = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(item.status).toBe('paused')
     expect(harness.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears failure state when a poll succeeds again', async () => {
+    let failing = false
+    const fetch = vi.fn<PollCommandFetcher>(
+      async (): Promise<PollFetchResult> =>
+        failing ? { ok: false, error: 'command failed' } : { ok: true, items: [] },
+    )
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+    })
+    await openGate(harness)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    failing = true
+    await harness.clock.advance(30_000)
+    await settle()
+    expect(fetch).toHaveBeenCalledTimes(2)
+    const key = harness.keyOf('trigger-1')
+    let state = await stateOf(harness)
+    expect(state.triggers[key]?.consecutiveFailures).toBe(1)
+    expect(state.triggers[key]?.lastError).toBe('command failed')
+    expect(state.triggers[key]?.backoffUntil).toBeDefined()
+
+    failing = false
+    await harness.clock.advance(60_000)
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(3))
+    await settle()
+
+    state = await stateOf(harness)
+    const entry = state.triggers[key]
+    expect(entry?.consecutiveFailures).toBe(0)
+    expect(Object.hasOwn(entry ?? {}, 'lastError')).toBe(false)
+    expect(Object.hasOwn(entry ?? {}, 'backoffUntil')).toBe(false)
+    expect(entry?.baselineDone).toBe(true)
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.lastError).toBeUndefined()
+    expect(item.consecutiveFailures).toBe(0)
+    expect(item.status).toBe('idle')
+    expect(harness.startRun).not.toHaveBeenCalled()
+  })
+
+  it('clears failure state when the first successful poll records the baseline', async () => {
+    let failing = true
+    const fetch = vi.fn<PollCommandFetcher>(
+      async (): Promise<PollFetchResult> =>
+        failing ? { ok: false, error: 'command failed' } : { ok: true, items: [] },
+    )
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+    })
+    await openGate(harness)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    failing = false
+    await harness.clock.advance(60_000)
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    await settle()
+
+    const state = await stateOf(harness)
+    const entry = state.triggers[harness.keyOf('trigger-1')]
+    expect(entry?.baselineDone).toBe(true)
+    expect(entry?.consecutiveFailures).toBe(0)
+    expect(Object.hasOwn(entry ?? {}, 'lastError')).toBe(false)
+    expect(Object.hasOwn(entry ?? {}, 'backoffUntil')).toBe(false)
+  })
+
+  it('dismisses the last error without resetting failure counters', async () => {
+    const fetch = vi.fn<PollCommandFetcher>(
+      async (): Promise<PollFetchResult> => ({ ok: false, error: 'command failed' }),
+    )
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+    })
+    await openGate(harness)
+    const key = harness.keyOf('trigger-1')
+    let state = await stateOf(harness)
+    expect(state.triggers[key]?.consecutiveFailures).toBe(1)
+
+    await harness.service.clearLastError(key)
+    state = await stateOf(harness)
+    expect(Object.hasOwn(state.triggers[key] ?? {}, 'lastError')).toBe(false)
+    expect(state.triggers[key]?.consecutiveFailures).toBe(1)
+    expect(state.triggers[key]?.backoffUntil).toBeDefined()
+
+    await harness.service.clearLastError(key)
+    await harness.clock.advance(60_000)
+    await settle()
+    state = await stateOf(harness)
+    expect(state.triggers[key]?.lastError).toBe('command failed')
+    expect(state.triggers[key]?.consecutiveFailures).toBe(2)
   })
 
   it('never overlaps two poll commands of the same trigger and re-arms from completion', async () => {

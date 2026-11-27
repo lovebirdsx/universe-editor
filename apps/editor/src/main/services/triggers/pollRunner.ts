@@ -114,6 +114,7 @@ export class PollRunner {
         ? []
         : result.items.slice(0, result.items.length - selected.items.length)
     const state = host.stateFor(trigger.key)
+    const recovery = pollRecoveryPatch(state)
     const droppedNew = dropped.filter(
       (item) => !isProcessed(state.processed, `poll:${item.key}`),
     ).length
@@ -137,6 +138,7 @@ export class PollRunner {
       host.setTriggerState(trigger.key, {
         processed: prune(processed, now, pruneOptions),
         baselineDone: true,
+        ...(recovery ?? {}),
       })
       host.logger.info(
         `trigger ${trigger.id}: poll baseline recorded items=${result.items.length}` +
@@ -156,8 +158,12 @@ export class PollRunner {
       }
       host.setTriggerState(trigger.key, {
         processed: prune(processed, now, pruneOptions),
+        ...(recovery ?? {}),
       })
+    } else if (recovery !== undefined) {
+      host.setTriggerState(trigger.key, recovery)
     }
+    if (recovery !== undefined) host.fireChange()
 
     for (const item of selected.items) {
       await host.acceptEvent(host.findTrigger(trigger.key) ?? current, {
@@ -168,4 +174,16 @@ export class PollRunner {
       })
     }
   }
+}
+
+/** A successful fetch proves the source healthy again, so failure state is cleared. */
+function pollRecoveryPatch(state: TriggerRuntimeState): RuntimeStatePatch | undefined {
+  if (
+    state.lastError === undefined &&
+    state.consecutiveFailures <= 0 &&
+    state.backoffUntil === undefined
+  ) {
+    return undefined
+  }
+  return { consecutiveFailures: 0, lastError: undefined, backoffUntil: undefined }
 }

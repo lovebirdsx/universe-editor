@@ -42,6 +42,7 @@ function makeActions(): TriggerManagerActions {
     runNow: vi.fn(async () => undefined),
     setPaused: vi.fn(async () => undefined),
     setAllPaused: vi.fn(async () => undefined),
+    clearLastError: vi.fn(async () => undefined),
     confirmActivation: noop,
     openConfig: noop,
     rescan: noop,
@@ -101,5 +102,30 @@ describe('TriggerOverviewPanel', () => {
     const actions = renderPanel(summary())
     fireEvent.click(screen.getByTestId('trigger-manager-reveal-json'))
     expect(actions.revealInJson).toHaveBeenCalledWith(expect.objectContaining({ id: 'alpha' }))
+  })
+
+  it('dismisses a runtime error through the shared action', () => {
+    const actions = renderPanel(summary({ lastError: 'command failed' }))
+    expect(screen.getByTestId('trigger-manager-last-error').textContent).toBe('command failed')
+    fireEvent.click(screen.getByTestId('trigger-manager-dismiss-error'))
+    expect(actions.clearLastError).toHaveBeenCalledWith(expect.objectContaining({ id: 'alpha' }))
+  })
+
+  it('keeps configuration errors visible without a dismiss button', () => {
+    renderPanel(summary({ status: 'invalid', errors: ['bad field'] }))
+    expect(screen.getByTestId('trigger-manager-config-error').textContent).toBe('bad field')
+    expect(screen.queryByTestId('trigger-manager-dismiss-error')).toBeNull()
+  })
+
+  it('shows runtime and configuration errors together', () => {
+    renderPanel(summary({ errors: ['bad field'], lastError: 'command failed' }))
+    expect(screen.getByTestId('trigger-manager-last-error').textContent).toBe('command failed')
+    expect(screen.getByTestId('trigger-manager-config-error').textContent).toBe('bad field')
+    expect(screen.getByTestId('trigger-manager-dismiss-error')).toBeDefined()
+  })
+
+  it('hides the Errors section when no error is present', () => {
+    renderPanel(summary({ lastError: '' }))
+    expect(screen.queryByTestId('trigger-manager-errors')).toBeNull()
   })
 })

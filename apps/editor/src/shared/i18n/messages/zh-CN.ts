@@ -4765,6 +4765,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'trigger.manager.action.confirmActivation': '确认触发器',
   'trigger.manager.action.showLog': '查看日志',
   'trigger.manager.action.revealJson': '在 JSON 中定位',
+  'trigger.manager.action.dismissError': '清除错误',
   'trigger.config.error.documentNotObject': 'triggers.json 必须包含一个 JSON 对象。',
   'trigger.config.error.version': '配置版本必须是 {expected}。',
   'trigger.config.error.triggersNotArray': '"triggers" 必须是数组。',

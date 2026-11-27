@@ -101,6 +101,12 @@ export interface ITriggerControlService {
   setPaused(triggerKey: string, paused: boolean): Promise<void>
   setAllPaused(paused: boolean): Promise<void>
   /**
+   * Dismiss the last runtime error shown in the Trigger Manager. Keeps the failure
+   * counters and backoff, so a continuing failure is reported again and auto-pause
+   * is unaffected.
+   */
+  clearLastError(triggerKey: string): Promise<void>
+  /**
    * Record the user's one-time confirmation of a workspace-defined trigger, the
    * only local gate (it also covers a bypass-class mode). Bound to the config
    * fingerprint; editing the definition invalidates it. `fingerprint` is the one
