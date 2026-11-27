@@ -785,8 +785,9 @@ ContributionsRegistry.registerContribution(
 )
 
 // Remote-ssh status bar entry (`SSH: <authority>`) + `remoteAuthority` context
-// key, shown only while the current workspace folder is remote. AfterRestore so
-// the status bar + workspace service are live.
+// key, shown while the current workspace folder is remote — or while THIS
+// window's own connect is in flight. AfterRestore so the status bar + workspace
+// service are live.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.remoteStatus',
   RemoteStatusContribution,

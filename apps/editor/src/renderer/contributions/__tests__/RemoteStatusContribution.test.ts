@@ -31,6 +31,10 @@ import {
   type RemoteConnectionStatusDto,
 } from '../../../shared/ipc/remoteStatusService.js'
 import { StatusBarService } from '../../services/statusbar/StatusBarService.js'
+import {
+  IRemoteConnectIntentService,
+  RemoteConnectIntentService,
+} from '../../services/remote/RemoteConnectIntentService.js'
 import { RemoteStatusContribution, formatElapsedMs } from '../RemoteStatusContribution.js'
 
 const REMOTE_STATUS_MENU_COMMAND_ID = 'workbench.action.remote.showMenu'
@@ -113,9 +117,17 @@ let workspace: ReturnType<typeof makeWorkspace> | undefined
 let commands: { _serviceBrand: undefined; executeCommand: ReturnType<typeof vi.fn> }
 let quickInput: { _serviceBrand: undefined; pick: ReturnType<typeof vi.fn> }
 let inst: InstantiationService | undefined
+let connectIntents: RemoteConnectIntentService | undefined
 
-function setup(opts?: { localWorkspace?: boolean; authority?: string }): void {
+function setup(opts?: {
+  localWorkspace?: boolean
+  authority?: string
+  seededStates?: readonly RemoteConnectionStatusDto[]
+}): void {
   remoteStatus = makeRemoteStatus()
+  if (opts?.seededStates !== undefined) {
+    remoteStatus.getConnections.mockResolvedValue(opts.seededStates)
+  }
   statusBar = new StatusBarService()
   contextKeyService = new ContextKeyService()
   const folder = opts?.localWorkspace
@@ -130,16 +142,25 @@ function setup(opts?: { localWorkspace?: boolean; authority?: string }): void {
     _serviceBrand: undefined,
     pick: vi.fn(),
   }
+  connectIntents = new RemoteConnectIntentService()
 
   const services = new ServiceCollection()
   services.set(IStatusBarService, statusBar)
   services.set(IWorkspaceService, workspace as never)
   services.set(IRemoteStatusService, remoteStatus as never)
+  services.set(IRemoteConnectIntentService, connectIntents)
   services.set(IContextKeyService, contextKeyService)
   services.set(ICommandService, commands as never)
   services.set(IQuickInputService, quickInput as never)
   inst = new InstantiationService(services)
   contribution = inst.createInstance(RemoteStatusContribution)
+}
+
+/** Let the constructor's async state seed (`_seedStates().then(render)`) land. */
+async function flushSeed(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 function fireProgress(authority: string, progress: RemoteConnectionProgressDto): void {
@@ -164,6 +185,8 @@ describe('RemoteStatusContribution', () => {
     contribution = undefined
     contextKeyService?.dispose()
     contextKeyService = undefined
+    connectIntents?.dispose()
+    connectIntents = undefined
     workspace = undefined
     inst = undefined
     vi.useRealTimers()
@@ -212,10 +235,11 @@ describe('RemoteStatusContribution', () => {
     expect(entryText()).toContain('Connecting...')
   })
 
-  it('surfaces an in-flight bring-up while the workspace is still local', () => {
+  it('surfaces an in-flight bring-up this window initiated while the workspace is still local', () => {
     setup({ localWorkspace: true })
     expect(entryText()).toBe('$(remote)')
 
+    connectIntents!.begin(AUTHORITY)
     fireProgress(AUTHORITY, {
       stepId: 'uploading',
       stepIndex: 2,
@@ -225,6 +249,57 @@ describe('RemoteStatusContribution', () => {
     expect(entryText()).toContain('Step 2/4: Uploading server bundle')
 
     fireState(AUTHORITY, 'connected')
+    expect(entryText()).toBe('$(remote)')
+  })
+
+  it("ignores another window's in-flight bring-up", () => {
+    setup({ localWorkspace: true })
+
+    fireProgress(AUTHORITY, {
+      stepId: 'uploading',
+      stepIndex: 2,
+      stepTotal: 4,
+      startedAt: Date.now(),
+    })
+
+    const e = entry()
+    expect(e?.text).toBe('$(remote)')
+    expect(e?.backgroundColor).toBeUndefined()
+    expect(e?.color).toBeUndefined()
+  })
+
+  it("ignores another window's in-flight state seeded at startup", async () => {
+    setup({
+      localWorkspace: true,
+      seededStates: [
+        {
+          authority: AUTHORITY,
+          state: 'deploying',
+          progress: { stepId: 'uploading', stepIndex: 2, stepTotal: 4, startedAt: Date.now() },
+        },
+      ],
+    })
+    await flushSeed()
+    expect(entryText()).toBe('$(remote)')
+
+    connectIntents!.begin(AUTHORITY)
+    fireState(AUTHORITY, 'deploying')
+    expect(entryText()).toContain('Connecting...')
+  })
+
+  it('stops surfacing the bring-up once this window’s connect flow settles', () => {
+    setup({ localWorkspace: true })
+    connectIntents!.begin(AUTHORITY)
+    fireProgress(AUTHORITY, {
+      stepId: 'uploading',
+      stepIndex: 2,
+      stepTotal: 4,
+      startedAt: Date.now(),
+    })
+    expect(entryText()).toContain('Uploading server bundle')
+
+    connectIntents!.end(AUTHORITY)
+    fireState(AUTHORITY, 'deploying')
     expect(entryText()).toBe('$(remote)')
   })
 

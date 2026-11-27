@@ -7,7 +7,10 @@
  *  / `isRemote` / `remoteName` context keys, and opens a QuickPick menu (Open
  *  Folder on Host / Close / Retry / Stop Server) on click. In a local window
  *  the same slot renders a plain `$(remote)` block that opens the "Open a
- *  Remote Window" menu (Connect to Host / Connect to WSL).
+ *  Remote Window" menu (Connect to Host / Connect to WSL); it only takes over
+ *  the remote rendering while THIS window's own connect is in flight (the
+ *  remote folder is not open yet) — connection state otherwise belongs to
+ *  whichever window owns the authority.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -44,6 +47,7 @@ import {
   RetryConnectionAction,
   StopRemoteServerAction,
 } from '../actions/remoteActions.js'
+import { IRemoteConnectIntentService } from '../services/remote/RemoteConnectIntentService.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 
 const REMOTE_STATUS_MENU_COMMAND_ID = 'workbench.action.remote.showMenu'
@@ -74,6 +78,7 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
     @IStatusBarService private readonly _statusBar: IStatusBarService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IRemoteStatusService private readonly _remoteStatus: IRemoteStatusService,
+    @IRemoteConnectIntentService private readonly _connectIntents: IRemoteConnectIntentService,
     @IContextKeyService contextKeyService: IContextKeyService,
     @ICommandService private readonly _commands: ICommandService,
     @IQuickInputService private readonly _quickInput: IQuickInputService,
@@ -158,14 +163,19 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
 
   /**
    * A fresh connect brings the server up before the remote folder opens
-   * (connect → openFolder), so fall back to any in-flight bring-up while the
-   * workspace is still local — otherwise install steps would never surface.
+   * (connect → openFolder), so fall back to an in-flight bring-up while the
+   * workspace is still local — but only one THIS window started: main
+   * broadcasts connection state to every renderer, and another window's
+   * bring-up must not paint this window's status bar.
    */
   private _displayAuthority(): string | undefined {
     const current = this._currentAuthority()
     if (current !== undefined) return current
     for (const [authority, state] of this._states) {
-      if (state === 'deploying' || state === 'forwarding' || state === 'handshaking') {
+      if (
+        (state === 'deploying' || state === 'forwarding' || state === 'handshaking') &&
+        this._connectIntents.has(authority)
+      ) {
         return authority
       }
     }

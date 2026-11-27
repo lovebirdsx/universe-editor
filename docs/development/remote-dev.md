@@ -271,7 +271,9 @@ per-connection 回调）。快速路径（server 已就绪）与 reconnect 天�
 `unref`，否则退出被顶 10 秒（直连验收抓到）。
 
 状态栏条目的 in-flight authority 回退见
-`apps/editor/src/renderer/contributions/RemoteStatusContribution.ts` 的 `_displayAuthority()`。
+`apps/editor/src/renderer/contributions/RemoteStatusContribution.ts` 的 `_displayAuthority()`：main 把连接状态广播给
+所有 renderer，因此回退只认本窗口发起的连接（`renderer/services/remote/RemoteConnectIntentService.ts`，由
+Connect to Host / WSL 在 `connect → openFolder` 期间登记），别窗的 bring-up 不会画到本窗口。
 
 ## 10. 实机验收
 

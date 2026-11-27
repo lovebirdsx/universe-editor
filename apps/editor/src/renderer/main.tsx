@@ -175,6 +175,10 @@ import {
   IExplorerFileOperationService,
 } from './services/explorer/ExplorerFileOperationService.js'
 import {
+  IRemoteConnectIntentService,
+  RemoteConnectIntentService,
+} from './services/remote/RemoteConnectIntentService.js'
+import {
   IRemoteExplorerService,
   RemoteExplorerService,
 } from './services/remote/RemoteExplorerService.js'
@@ -970,6 +974,12 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(RemoteExplorerService),
   )
   services.set(IRemoteExplorerService, remoteExplorerService)
+
+  // Per-window connect intent — main broadcasts connection state to every
+  // renderer, so the status bar must only surface an in-flight bring-up that
+  // THIS window initiated (Connect to Host / WSL before the folder opens).
+  const remoteConnectIntentService = workbenchStore.add(new RemoteConnectIntentService())
+  services.set(IRemoteConnectIntentService, remoteConnectIntentService)
 
   // ACP (Agent Client Protocol) services. PathPolicy needs static platform/home
   // args; ClientService brings together host + permission + IFileService +

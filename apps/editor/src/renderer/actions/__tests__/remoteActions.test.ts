@@ -48,6 +48,10 @@ import {
   RemoveManualHostAction,
   StopRemoteServerAction,
 } from '../remoteActions.js'
+import {
+  IRemoteConnectIntentService,
+  RemoteConnectIntentService,
+} from '../../services/remote/RemoteConnectIntentService.js'
 import { IRemoteExplorerService } from '../../services/remote/RemoteExplorerService.js'
 
 function distro(name: string, over: Partial<WslDistroDto> = {}): WslDistroDto {
@@ -71,6 +75,8 @@ function makeRemoteStatusStub(cfg: {
   hosts?: readonly string[]
   wslDistros?: readonly WslDistroDto[]
   wslError?: Error
+  connectError?: Error
+  onConnect?: (authority: string) => void
 }): RemoteStatusStub {
   const emitter = new Emitter<RemoteConnectionStatusDto>()
   const connectCalls: string[] = []
@@ -82,7 +88,10 @@ function makeRemoteStatusStub(cfg: {
     getConnections: () => Promise.resolve([]),
     connect: (authority: string) => {
       connectCalls.push(authority)
-      return Promise.resolve(ENV)
+      cfg.onConnect?.(authority)
+      return cfg.connectError !== undefined
+        ? Promise.reject(cfg.connectError)
+        : Promise.resolve(ENV)
     },
     onDidChangeState: emitter.event,
   } as unknown as RemoteStatusStub
@@ -190,6 +199,7 @@ function runCommand(
     notification: INotificationServiceType
     quickInput: IQuickInputServiceType
     fileDialog?: IFileDialogServiceType
+    connectIntents?: IRemoteConnectIntentService
   },
   authorityArg?: string,
 ): Promise<unknown> {
@@ -201,6 +211,10 @@ function runCommand(
   collection.set(IFileDialogService, services.fileDialog ?? makeFileDialogStub())
   collection.set(IWorkspaceService, makeWorkspaceStub())
   collection.set(ILifecycleService, new LifecycleService())
+  collection.set(
+    IRemoteConnectIntentService,
+    services.connectIntents ?? new RemoteConnectIntentService(),
+  )
   const inst = new InstantiationService(collection)
   return new Promise((resolve) => {
     inst.invokeFunction(async (accessor) => {
@@ -337,6 +351,49 @@ describe('remoteActions — WSL command surface', () => {
       'alpha',
     ])
     expect(remoteStatus.connectCalls).toEqual(['alpha'])
+  })
+
+  it('marks this window’s connect intent for the normalized authority while connecting', async () => {
+    disposables.push(registerAction2(ConnectToWslAction))
+    const intents = new RemoteConnectIntentService()
+    const seenDuringConnect: boolean[] = []
+    const remoteStatus = makeRemoteStatusStub({
+      onConnect: (authority) => seenDuringConnect.push(intents.has(authority)),
+    })
+    await runCommand(
+      ConnectToWslAction.ID,
+      {
+        remoteStatus,
+        notification: makeNotificationStub(),
+        quickInput: makeQuickInputStub(),
+        connectIntents: intents,
+      },
+      'wsl+Ubuntu',
+    )
+    // begin ran before connect; the key matches the normalized state event.
+    expect(seenDuringConnect).toEqual([true])
+    expect(intents.has('wsl+ubuntu')).toBe(false)
+    intents.dispose()
+  })
+
+  it('clears the connect intent when the connection fails', async () => {
+    disposables.push(registerAction2(ConnectToWslAction))
+    const intents = new RemoteConnectIntentService()
+    const seenDuringConnect: boolean[] = []
+    const remoteStatus = makeRemoteStatusStub({
+      connectError: new Error('unreachable'),
+      onConnect: (authority) => seenDuringConnect.push(intents.has(authority)),
+    })
+    const notification = makeNotificationStub()
+    await runCommand(
+      ConnectToWslAction.ID,
+      { remoteStatus, notification, quickInput: makeQuickInputStub(), connectIntents: intents },
+      'wsl+Debian',
+    )
+    expect(seenDuringConnect).toEqual([true])
+    expect(notification.notified).toHaveLength(1)
+    expect(intents.has('wsl+debian')).toBe(false)
+    intents.dispose()
   })
 })
 

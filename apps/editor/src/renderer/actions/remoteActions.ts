@@ -45,6 +45,7 @@ import {
   type RemoteEnvironmentDto,
   type WslDistroDto,
 } from '../../shared/ipc/remoteStatusService.js'
+import { IRemoteConnectIntentService } from '../services/remote/RemoteConnectIntentService.js'
 import { IRemoteExplorerService } from '../services/remote/RemoteExplorerService.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 
@@ -63,6 +64,7 @@ interface RemoteConnectServices {
   readonly fileDialog: IFileDialogServiceType
   readonly workspace: IWorkspaceServiceType
   readonly lifecycle: ILifecycleServiceType
+  readonly connectIntents: IRemoteConnectIntentService
 }
 
 /** Must run before the first await — the accessor is dead afterwards. */
@@ -75,6 +77,7 @@ function gatherConnectServices(accessor: ServicesAccessor): RemoteConnectService
     fileDialog: accessor.get(IFileDialogService),
     workspace: accessor.get(IWorkspaceService),
     lifecycle: accessor.get(ILifecycleService),
+    connectIntents: accessor.get(IRemoteConnectIntentService),
   }
 }
 
@@ -151,29 +154,37 @@ async function connectAndOpenRemoteFolder(
   services: RemoteConnectServices,
   authority: string,
 ): Promise<void> {
-  const { remoteStatus, notification, progress } = services
+  const { remoteStatus, notification, progress, connectIntents } = services
 
-  let env: RemoteEnvironmentDto
+  // Connection state is broadcast to every window; record the intent so only
+  // this window (still local until the folder opens) surfaces the bring-up.
+  const intentKey = normalizeRemoteAuthority(authority)
+  connectIntents.begin(intentKey)
   try {
-    env = await progress.withProgress(
-      {
-        location: ProgressLocation.Window,
-        title: localize('remote.progress.connect', 'Connecting to {authority}…', { authority }),
-        source: 'remote',
-      },
-      () => remoteStatus.connect(authority),
-    )
-  } catch (err) {
-    notification.notify({
-      severity: Severity.Error,
-      message: localize('remote.connect.failed', 'Failed to connect to {authority}: {message}', {
-        authority,
-        message: err instanceof Error ? err.message : String(err),
-      }),
-    })
-    return
+    let env: RemoteEnvironmentDto
+    try {
+      env = await progress.withProgress(
+        {
+          location: ProgressLocation.Window,
+          title: localize('remote.progress.connect', 'Connecting to {authority}…', { authority }),
+          source: 'remote',
+        },
+        () => remoteStatus.connect(authority),
+      )
+    } catch (err) {
+      notification.notify({
+        severity: Severity.Error,
+        message: localize('remote.connect.failed', 'Failed to connect to {authority}: {message}', {
+          authority,
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      })
+      return
+    }
+    await selectAndOpenRemoteFolder(services, authority, env)
+  } finally {
+    connectIntents.end(intentKey)
   }
-  await selectAndOpenRemoteFolder(services, authority, env)
 }
 
 async function listWslDistrosSafe(
