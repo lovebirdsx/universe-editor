@@ -50,6 +50,8 @@ const rendererDomTests = [
   'src/renderer/services/editor/__tests__/ClosedEditorsService.test.ts',
   'src/renderer/services/editor/__tests__/FileEditorInput.externalChange.test.ts',
   'src/renderer/services/editor/__tests__/DiffEditorInput.test.ts',
+  'src/renderer/services/editor/__tests__/SwarmDiffEditorInput.test.ts',
+  'src/renderer/services/editor/__tests__/WebviewDiffInput.test.ts',
   'src/renderer/services/editor/__tests__/FileEditorInput.test.ts',
   'src/renderer/services/editor/__tests__/openPreviewInGroup.test.ts',
   'src/renderer/services/editor/__tests__/activateGroupAndFocus.test.ts',

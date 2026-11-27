@@ -33,7 +33,7 @@ import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
  *  Perforce shelved/have revision, an agent session baseline), so the text itself
  *  must be persisted — re-fetching from disk/SCM only works for a working-tree
  *  diff and would collapse every other diff into two identical (empty) panes. */
-interface ISerializedDiffEditor {
+export interface ISerializedDiffEditor {
   readonly originalUri: UriComponents
   readonly originalContent: string
   readonly modifiedContent: string

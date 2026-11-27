@@ -94,6 +94,54 @@ describe('EditorGroupsService serialization', () => {
     svc.dispose()
   })
 
+  it('toJSON prefers serializeForPersistence and falls back to serialize', () => {
+    class BudgetedInput extends EditorInput {
+      static readonly TYPE_ID = 'budgeted.test.editor'
+      override get typeId(): string {
+        return BudgetedInput.TYPE_ID
+      }
+      override get resource(): URI {
+        return URI.from({ scheme: 'budgeted', path: '/x' })
+      }
+      override getName(): string {
+        return 'Budgeted'
+      }
+      override serialize(): unknown {
+        return { raw: true }
+      }
+      override serializeForPersistence(): unknown {
+        return { budgeted: true }
+      }
+    }
+    class RawOnlyInput extends EditorInput {
+      static readonly TYPE_ID = 'raw.test.editor'
+      override get typeId(): string {
+        return RawOnlyInput.TYPE_ID
+      }
+      override get resource(): URI {
+        return URI.from({ scheme: 'raw', path: '/x' })
+      }
+      override getName(): string {
+        return 'Raw'
+      }
+      override serialize(): unknown {
+        return { raw: true }
+      }
+    }
+
+    const svc = new EditorGroupsService()
+    svc.activeGroup.openEditor(new BudgetedInput())
+    svc.activeGroup.openEditor(new RawOnlyInput())
+    const json = svc.toJSON()
+    if (json.grid.root.type === 'branch') {
+      const leaf = json.grid.root.children?.[0]
+      if (leaf?.type === 'leaf' && leaf.data) {
+        expect(leaf.data.editors.map((e) => e.data)).toEqual([{ budgeted: true }, { raw: true }])
+      }
+    }
+    svc.dispose()
+  })
+
   it('toJSON captures activeIndex for multi-editor groups', () => {
     const svc = new EditorGroupsService()
     const a = new FakeEditorInput()

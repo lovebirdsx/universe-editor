@@ -41,6 +41,18 @@
 
 **护栏测试写法**（`workbench/editor/__tests__/EditorGroupView.perforceGraphScopeSwap.test.tsx`）：一个 `ProbeX` 组件用**空依赖 `useEffect`** 计数挂载次数，同组连续切两个不同 id 的 input，断言新 id 的计数为 1——没有 key 时第二个 input 复用实例、计数为 0（挂在 `useState` 惰性初始器上也可，任选其一，关键是**观察挂载而非渲染**）。
 
+## 次生点 6：虚拟 EditorInput 的恢复能力（serialize / deserialize / 持久化预算）
+
+关闭后的 Alt+←（Go Back）、Ctrl+Shift+T、窗口重启都走 `EditorRegistry.deserialize(typeId, data, accessor)`。**有 `typeId` 的虚拟输入如果只注册组件、不注册 `deserialize`，历史条目就无法重建**：
+
+- 旧兜底是 `new FileEditorInput(entry.resource)`；对 `swarm-diff:` / `merge:` / `swarm:` 这类无 FS provider 的虚拟 scheme，`FileEditorInput.resolveModel()` 的 `.catch(() => '')` 会把它显示成**空白编辑器**（Swarm diff 关闭后 Alt+← 空白的根因）。
+- 现行约定：
+  1. 需要恢复的虚拟输入必须实现 `serialize()`（把重建所需的一切都放进去，如 `SwarmDiffContext`），并在 `BuiltInEditorProvidersContribution` 注册 `deserialize`。
+  2. 内容可能很大（diff 两侧文本、webview base64）时，同时实现 `serializeForPersistence()` 预算；`EditorPart.toJSON` 优先用它，`serialize()` 供历史 / 关闭栈使用。
+  3. 明确不恢复的类型（如 `merge`：重放 stale save 会重复 stage）保持无 `deserialize`；`historyActions` 的 `isStale` 按元数据跳过它，且 `navigateTo` 不再回退成 `FileEditorInput`。
+  4. `ReopenClosedEditorAction` 会消费并跳过不可恢复条目，继续找下一条。
+- 回归：`SwarmDiffEditorInput.test.ts`、`WebviewDiffInput.test.ts`、`historyActions.test.ts`、`ClosedEditorsService.test.ts`。
+
 ## 验证
 
 ```bash

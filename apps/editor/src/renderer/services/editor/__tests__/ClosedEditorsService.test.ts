@@ -912,6 +912,46 @@ describe('ReopenClosedEditorAction', () => {
     h.closedSvc.dispose()
   })
 
+  it('skips an unrestorable top entry and reopens the next closed editor below it', () => {
+    class NoDeserializeTopInput extends EditorInput {
+      static readonly TYPE_ID = 'fake.nodeserialize.top'
+      override get typeId() {
+        return NoDeserializeTopInput.TYPE_ID
+      }
+      override get resource() {
+        return URI.parse('virtual:///nodeserialize-top')
+      }
+      override getName() {
+        return 'NoDeserializeTop'
+      }
+    }
+    const d = EditorRegistry.registerEditorProvider({
+      typeId: NoDeserializeTopInput.TYPE_ID,
+      componentKey: 'fake.nodeserialize.top',
+      // No deserialize: this entry can never be rebuilt.
+    })
+
+    const h = makeHarness()
+    const reopenable = new FakeVirtualInput('below')
+    h.groups.activeGroup.openEditor(reopenable)
+    h.groups.activeGroup.closeEditor(reopenable)
+    const top = new NoDeserializeTopInput()
+    h.groups.activeGroup.openEditor(top)
+    h.groups.activeGroup.closeEditor(top)
+
+    runAction(h)
+
+    // One Ctrl+Shift+T press consumes the unrestorable entry and reopens the
+    // next one instead of doing nothing.
+    const reopened = h.groups.activeGroup.activeEditor
+    expect(reopened).toBeDefined()
+    expect(reopened!.typeId).toBe(FakeVirtualInput.TYPE_ID)
+
+    d.dispose()
+    h.groups.dispose()
+    h.closedSvc.dispose()
+  })
+
   it('records a preview evicted by previewReplace and reopens it pinned', () => {
     const h = makeHarness()
     const group = h.groups.activeGroup

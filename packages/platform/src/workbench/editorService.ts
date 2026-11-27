@@ -115,6 +115,15 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
   serialize?(): unknown
 
   /**
+   * Budgeted variant of {@link serialize} used only for workspace-state
+   * persistence (`EditorPart.toJSON`). Oversized snapshots may degrade to a
+   * structure-only marker that `deserialize` rejects; same-session reopen paths
+   * (history, Ctrl+Shift+T) keep using the unbudgeted `serialize()`.
+   * Persistence falls back to `serialize()` when this hook is absent.
+   */
+  serializeForPersistence?(): unknown
+
+  /**
    * Optional string icon id for the tab. When undefined the tab falls back to a
    * resource-derived file icon. Resolved to a concrete icon component by the
    * renderer, keeping the platform layer free of any icon-library dependency.

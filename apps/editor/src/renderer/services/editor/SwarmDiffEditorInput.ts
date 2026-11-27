@@ -7,10 +7,21 @@
  *  anchor comments (Swarm context.leftLine/rightLine + version). The identity is
  *  keyed on review + file + version pair so distinct comparisons never dedupe into
  *  one tab (see apps/editor/src/renderer/services/editor/CLAUDE.md).
+ *
+ *  Both sides' text and the Swarm context are serialized, so history (Alt+←),
+ *  Ctrl+Shift+T and workspace restore rebuild the same frozen snapshot without
+ *  re-reading p4. Oversized snapshots degrade to a contentDropped payload that
+ *  deserialize rejects (only workspace persistence is budgeted; same-session
+ *  reopen keeps the full text).
  *--------------------------------------------------------------------------------------------*/
 
-import { IFileService, URI } from '@universe-editor/platform'
-import { DiffEditorInput } from './DiffEditorInput.js'
+import {
+  IFileService,
+  IInstantiationService,
+  URI,
+  type ServicesAccessor,
+} from '@universe-editor/platform'
+import { DiffEditorInput, type ISerializedDiffEditor } from './DiffEditorInput.js'
 
 export interface SwarmDiffContext {
   readonly reviewId: string
@@ -31,8 +42,44 @@ export interface SwarmDiffContext {
   readonly rightChange?: string | null
 }
 
+export interface ISerializedSwarmDiffEditor extends ISerializedDiffEditor {
+  readonly context: SwarmDiffContext
+}
+
 function swarmFileUri(context: SwarmDiffContext): URI {
   return URI.from({ scheme: 'swarm', path: `/${context.displayPath}` })
+}
+
+/** Validate a persisted context (also rejects the older payload shape that
+ *  predates this field), returning a fresh object with optional members omitted
+ *  rather than set to undefined (exactOptionalPropertyTypes). */
+export function parseSwarmDiffContext(raw: unknown): SwarmDiffContext | null {
+  if (!raw || typeof raw !== 'object') return null
+  const c = raw as Record<string, unknown>
+  const isNullableNumber = (v: unknown): v is number | null =>
+    v === null || (typeof v === 'number' && Number.isFinite(v))
+  const localPath = c.localPath
+  if (localPath !== null && typeof localPath !== 'string') return null
+  if (!isNullableNumber(c.leftVersion) || !isNullableNumber(c.rightVersion)) return null
+  const leftChange = c.leftChange
+  const rightChange = c.rightChange
+  if (leftChange !== undefined && leftChange !== null && typeof leftChange !== 'string') return null
+  if (rightChange !== undefined && rightChange !== null && typeof rightChange !== 'string') {
+    return null
+  }
+  if (typeof c.reviewId !== 'string' || c.reviewId.length === 0) return null
+  if (typeof c.depotFile !== 'string' || c.depotFile.length === 0) return null
+  if (typeof c.displayPath !== 'string' || c.displayPath.length === 0) return null
+  return {
+    reviewId: c.reviewId,
+    depotFile: c.depotFile,
+    displayPath: c.displayPath,
+    localPath,
+    leftVersion: c.leftVersion,
+    rightVersion: c.rightVersion,
+    ...(leftChange !== undefined ? { leftChange } : {}),
+    ...(rightChange !== undefined ? { rightChange } : {}),
+  }
 }
 
 /** The tab-identity string for a swarm diff — exported so callers (e.g. the
@@ -98,5 +145,24 @@ export class SwarmDiffEditorInput extends DiffEditorInput {
     const l = sideLabel(this._context.leftVersion, this._context.leftChange)
     const r = sideLabel(this._context.rightVersion, this._context.rightChange)
     return `${base} (${l} ↔ ${r})`
+  }
+
+  override serialize(): ISerializedSwarmDiffEditor {
+    return { ...super.serialize(), context: this._context }
+  }
+
+  /** Rebuild the frozen snapshot from history / Ctrl+Shift+T / workspace
+   *  restore. The base `serializeForPersistence` budget already applies: its
+   *  in-budget branch calls this overridden `serialize()` (so the context rides
+   *  along), and its over-budget branch sets contentDropped, which we reject. */
+  static deserialize(data: unknown, accessor?: ServicesAccessor): SwarmDiffEditorInput | null {
+    const d = data as ISerializedSwarmDiffEditor | null
+    if (!d || d.contentDropped) return null
+    if (!accessor) return null
+    if (typeof d.originalContent !== 'string' || typeof d.modifiedContent !== 'string') return null
+    const context = parseSwarmDiffContext(d.context)
+    if (!context) return null
+    const inst = accessor.get(IInstantiationService)
+    return inst.createInstance(SwarmDiffEditorInput, context, d.originalContent, d.modifiedContent)
   }
 }

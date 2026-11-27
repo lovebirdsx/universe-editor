@@ -1132,24 +1132,29 @@ export class ReopenClosedEditorAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const closedService = accessor.get(IClosedEditorsService)
-    const entry = closedService.popMostRecent()
-    if (!entry) return
-    const group = groups.getGroup(entry.groupId) ?? groups.activeGroup
-    const input = EditorRegistry.deserialize(entry.typeId, entry.serializedData, accessor)
-    if (!input) return
-    if (input instanceof MarkdownPreviewInput || input instanceof HtmlPreviewInput) {
-      // Reopen means "bring back exactly this tab", but a preview of the same
-      // file open elsewhere wins — focus it instead of duplicating.
-      // openPreviewInGroup activates the owning group itself (which may differ
-      // from `group`), so don't re-activate here.
-      openPreviewInGroup(groups, group, input, {
-        pinned: true,
-        windowFocus: accessor.get(IWindowFocusService),
-      })
+    for (;;) {
+      const entry = closedService.popMostRecent()
+      if (!entry) return
+      const input = EditorRegistry.deserialize(entry.typeId, entry.serializedData, accessor)
+      // Consume entries that cannot be rebuilt (merge, webview panels, ...) and
+      // try the next one instead of silently swallowing the whole shortcut press.
+      if (!input) continue
+      const group = groups.getGroup(entry.groupId) ?? groups.activeGroup
+      if (input instanceof MarkdownPreviewInput || input instanceof HtmlPreviewInput) {
+        // Reopen means "bring back exactly this tab", but a preview of the same
+        // file open elsewhere wins — focus it instead of duplicating.
+        // openPreviewInGroup activates the owning group itself (which may differ
+        // from `group`), so don't re-activate here.
+        openPreviewInGroup(groups, group, input, {
+          pinned: true,
+          windowFocus: accessor.get(IWindowFocusService),
+        })
+        return
+      }
+      group.openEditor(input, { activate: true, pinned: true })
+      focusGroupAndEditor(accessor, groups, group, input)
       return
     }
-    group.openEditor(input, { activate: true, pinned: true })
-    focusGroupAndEditor(accessor, groups, group, input)
   }
 }
 

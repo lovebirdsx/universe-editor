@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
+  EditorInput,
   EditorRegistry,
   IContextKeyService,
   IEditorGroupsService,
@@ -24,6 +25,10 @@ import { EditorGroupsService } from '../../services/editor/EditorGroupsService.j
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
+import {
+  SwarmDiffEditorInput,
+  type SwarmDiffContext,
+} from '../../services/editor/SwarmDiffEditorInput.js'
 import { HistoryService } from '../../services/history/HistoryService.js'
 import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
@@ -249,6 +254,139 @@ describe('History navigation actions', () => {
     expect(groups.activeGroup.previewEditor).toBe(active)
     expect(groups.activeGroup.isPinned(active!)).toBe(false)
     expect(groups.activeGroup.editors).toHaveLength(1)
+  })
+
+  it('GoBack rebuilds a closed Swarm diff from its serialized snapshot', async () => {
+    const { groups, history, inst } = setup()
+    disposables.push(
+      EditorRegistry.registerEditorProvider({
+        typeId: SwarmDiffEditorInput.TYPE_ID,
+        componentKey: 'swarmDiff',
+        deserialize: (data, accessor) => SwarmDiffEditorInput.deserialize(data, accessor),
+      }),
+    )
+    const context: SwarmDiffContext = {
+      reviewId: '101',
+      depotFile: '//depot/branch_x/main/src/file.ts',
+      displayPath: 'main/src/file.ts',
+      localPath: 'X:/workspace/main/src/file.ts',
+      leftVersion: 0,
+      rightVersion: 2,
+      leftChange: null,
+      rightChange: '9001',
+    }
+    const diff = inst.createInstance(SwarmDiffEditorInput, context, 'before', 'after')
+    history.record({
+      resource: diff.resource,
+      typeId: diff.typeId,
+      serialized: diff.serialize(),
+    })
+
+    const current = inst.createInstance(FileEditorInput, URI.file('/repo/current.ts'))
+    groups.activeGroup.openEditor(current, { pinned: true, activate: true })
+    history.record({
+      resource: URI.file('/repo/current.ts'),
+      selection: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 },
+    })
+
+    await runCommand(inst, GoBackAction, disposables)
+
+    const active = groups.activeGroup.activeEditor
+    expect(active).toBeInstanceOf(SwarmDiffEditorInput)
+    const revived = active as SwarmDiffEditorInput
+    expect(revived.context).toEqual(context)
+    expect(revived.originalContent).toBe('before')
+    expect(revived.modifiedContent).toBe('after')
+  })
+
+  it('does not fall back to FileEditorInput when a registered editor cannot deserialize', async () => {
+    class NullDeserializeInput extends EditorInput {
+      static readonly TYPE_ID = 'test.nullDeserialize'
+      override get typeId(): string {
+        return NullDeserializeInput.TYPE_ID
+      }
+      override get resource(): URI {
+        return URI.from({ scheme: 'virtual-test', path: '/null' })
+      }
+      override getName(): string {
+        return 'NullDeserialize'
+      }
+    }
+    disposables.push(
+      EditorRegistry.registerEditorProvider({
+        typeId: NullDeserializeInput.TYPE_ID,
+        componentKey: 'test.nullDeserialize',
+        deserialize: () => null,
+      }),
+    )
+    const { groups, history, inst } = setup()
+    const virtual = new NullDeserializeInput()
+    history.record({
+      resource: virtual.resource,
+      typeId: virtual.typeId,
+      serialized: {},
+    })
+    const current = inst.createInstance(FileEditorInput, URI.file('/repo/current.ts'))
+    groups.activeGroup.openEditor(current, { pinned: true, activate: true })
+    history.record({
+      resource: URI.file('/repo/current.ts'),
+      selection: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 },
+    })
+
+    await runCommand(inst, GoBackAction, disposables)
+
+    // No blank `virtual-test:` FileEditorInput was created; the current editor stays.
+    expect(groups.activeGroup.editors).toHaveLength(1)
+    expect(groups.activeGroup.activeEditor).toBe(current)
+  })
+
+  it('skips an editor entry whose provider has no deserialize and lands below it', async () => {
+    class NoHookInput extends EditorInput {
+      static readonly TYPE_ID = 'test.noHook'
+      override get typeId(): string {
+        return NoHookInput.TYPE_ID
+      }
+      override get resource(): URI {
+        return URI.from({ scheme: 'merge-test', path: '/no-hook' })
+      }
+      override getName(): string {
+        return 'NoHook'
+      }
+    }
+    disposables.push(
+      EditorRegistry.registerEditorProvider({
+        typeId: NoHookInput.TYPE_ID,
+        componentKey: 'test.noHook',
+        // No deserialize: history navigation must treat it as stale.
+      }),
+    )
+    const { groups, history, inst } = setup()
+    const older = inst.createInstance(FileEditorInput, URI.file('/repo/older.ts'))
+    groups.activeGroup.openEditor(older, { pinned: true, activate: true })
+    history.record({
+      resource: URI.file('/repo/older.ts'),
+      selection: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 },
+    })
+    const stale = new NoHookInput()
+    history.record({
+      resource: stale.resource,
+      typeId: stale.typeId,
+      serialized: {},
+    })
+    const current = inst.createInstance(FileEditorInput, URI.file('/repo/current.ts'))
+    groups.activeGroup.openEditor(current, { pinned: true, activate: true })
+    history.record({
+      resource: URI.file('/repo/current.ts'),
+      selection: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 },
+    })
+
+    await runCommand(inst, GoBackAction, disposables)
+
+    expect(groups.activeGroup.activeEditor).toBe(older)
+    // The stale entry is dropped, not moved into the forward stack.
+    const forwards = history.getForwardStack().filter((e): e is IHistoryEntry => e.kind !== 'view')
+    expect(forwards).toHaveLength(1)
+    expect(forwards[0]?.resource.toString()).toBe(URI.file('/repo/current.ts').toString())
   })
 
   it('calls settleNavigation with the entry resource once the reveal completes', async () => {

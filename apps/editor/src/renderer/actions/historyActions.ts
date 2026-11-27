@@ -65,13 +65,28 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryStackEntry)
     // History navigation to an editor no longer in any group opens into the
     // preview slot — matches VSCode and prevents leaving a stale duplicate
     // alongside whatever previously replaced this entry. Non-text editors
-    // (Settings, Welcome, ...) rebuild via the registered EditorProvider;
-    // fall back to FileEditorInput when typeId is missing or unknown.
-    let recreated: EditorInput | null = null
+    // (Settings, Welcome, ...) rebuild via the registered EditorProvider.
+    // A registered virtual editor that cannot rebuild must NOT degrade into a
+    // FileEditorInput over its virtual scheme (`swarm-diff:`, `merge:`, ...):
+    // the file service has no provider for those, and the failed read is
+    // swallowed into an empty editor. Such entries are filtered as stale before
+    // navigation whenever possible; this guard covers corrupt/missing payloads.
+    let input: EditorInput
     if (entry.typeId) {
-      recreated = EditorRegistry.deserialize(entry.typeId, entry.serialized, accessor)
+      const provider = EditorRegistry.getProvider(entry.typeId)
+      const recreated = EditorRegistry.deserialize(entry.typeId, entry.serialized, accessor)
+      if (recreated) {
+        input = recreated
+      } else if (entry.typeId === FileEditorInput.TYPE_ID || !provider) {
+        // Plain-file entries (or forward-compatible unknown types) keep the
+        // old fallback: FileEditorInput still names a real-or-virtual resource.
+        input = inst.createInstance(FileEditorInput, entry.resource)
+      } else {
+        return
+      }
+    } else {
+      input = inst.createInstance(FileEditorInput, entry.resource)
     }
-    const input = recreated ?? inst.createInstance(FileEditorInput, entry.resource)
     if (input instanceof MarkdownPreviewInput) {
       // A preview no longer open: re-create it in the preview slot (pinned:false,
       // like the plain-file branch below) so Alt+←/→ walks the trail in a single
@@ -117,7 +132,21 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryStackEntry)
 }
 
 /**
- * Vim's `3<C-o>` count, plus skipping views that can no longer be focused.
+ * Editor entries whose provider is registered but has no `deserialize` hook can
+ * never be rebuilt (merge, schema viewer, extension webview panels, ...). Treat
+ * them as stale so Alt+←/→ skips them instead of consuming a step and landing on
+ * an empty fallback tab. Pure registry metadata — no accessor, no await — so it
+ * is safe inside goBack/goForward's synchronous `isStale` callback.
+ */
+function isUnrestorableEditorEntry(entry: IHistoryStackEntry): boolean {
+  if (entry.kind === 'view') return false
+  if (!entry.typeId || entry.typeId === FileEditorInput.TYPE_ID) return false
+  const provider = EditorRegistry.getProvider(entry.typeId)
+  return provider !== undefined && provider.deserialize === undefined
+}
+
+/**
+ * Vim's `3<C-o>` count, plus skipping views / editors that cannot be restored.
  * `isStale` runs synchronously inside goBack/goForward, before the first await,
  * and resolves the view registry only once a view entry shows up.
  */
@@ -128,6 +157,7 @@ function navigateOptions(accessor: ServicesAccessor, args: unknown): IHistoryNav
   return {
     count,
     isStale: (entry) => {
+      if (isUnrestorableEditorEntry(entry)) return true
       if (entry.kind !== 'view') return false
       views ??= accessor.get(IViewDescriptorService)
       return !isViewAvailable(views, entry.viewId)

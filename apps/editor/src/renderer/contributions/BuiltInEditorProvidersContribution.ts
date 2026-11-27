@@ -136,13 +136,17 @@ export class BuiltInEditorProvidersContribution
         CustomEditorHost,
       ),
     )
-    // Transient like DiffEditorInput — holds the two sides' bytes in memory (a
-    // Git HEAD blob / Perforce have-revision has no on-disk file), so no
-    // deserialize: a webview diff tab is dropped on window restore. Shares the
-    // CustomEditorHost component with customEditor.
+    // Both sides' bytes are persisted (base64), so a closed webview diff can be
+    // rebuilt from history / Ctrl+Shift+T / workspace restore. CustomEditorHost
+    // re-activates the owning extension on mount. Shares the CustomEditorHost
+    // component with customEditor.
     this._register(
       registerEditorWithComponent(
-        { typeId: WebviewDiffInput.TYPE_ID, componentKey: 'customEditor' },
+        {
+          typeId: WebviewDiffInput.TYPE_ID,
+          componentKey: 'customEditor',
+          deserialize: (data) => WebviewDiffInput.deserialize(data),
+        },
         CustomEditorHost,
       ),
     )
@@ -200,6 +204,9 @@ export class BuiltInEditorProvidersContribution
         DiffEditor,
       ),
     )
+    // Deliberately not restorable: replaying a stale merge's save could re-stage
+    // an already-resolved file. The history guard treats a provider without
+    // deserialize as stale, so it never degrades into a blank FileEditorInput.
     this._register(registerEditorWithComponent({ typeId: MergeEditorInput.TYPE_ID }, MergeEditor))
     this._register(
       registerEditorWithComponent(
@@ -334,7 +341,13 @@ export class BuiltInEditorProvidersContribution
       ),
     )
     this._register(
-      registerEditorWithComponent({ typeId: SwarmDiffEditorInput.TYPE_ID }, SwarmDiffEditor),
+      registerEditorWithComponent(
+        {
+          typeId: SwarmDiffEditorInput.TYPE_ID,
+          deserialize: (data, accessor) => SwarmDiffEditorInput.deserialize(data, accessor),
+        },
+        SwarmDiffEditor,
+      ),
     )
   }
 }
