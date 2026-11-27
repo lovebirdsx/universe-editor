@@ -5,9 +5,9 @@
  *  contributed commands and renders it as a two-level tree (group headers →
  *  review rows) with a state badge + vote / comment / task counts. Keyboard
  *  parity with Source Control: ↑↓ move, ←→ fold groups, Space previews a review,
- *  Enter opens it pinned, Ctrl+Enter opens it beside the active group and
- *  Alt+Enter in a new window; Ctrl+Shift+Enter jumps to the Swarm Changes view.
- *  The focused
+ *  Enter jumps to the Swarm Changes file tree, Ctrl+Shift+Enter pins the review
+ *  in place, Ctrl+Enter opens it beside the active group and Alt+Enter in a new
+ *  window. The focused
  *  review drives that view through swarmChangesViewState. A keyword filter box
  *  re-queries the list. All wire logic lives behind ICommandService — this
  *  component owns no HTTP.
@@ -63,6 +63,7 @@ import { IScmService } from '../../services/extensions/ScmService.js'
 import { useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import {
+  JumpToSwarmChangesAction,
   OpenSwarmReviewByIdAction,
   RefreshSwarmReviewsAction,
   SWARM_REVIEWS_VIEW_ID,
@@ -1184,10 +1185,23 @@ export function SwarmReviewsView() {
           onShiftTab={() => filterInputRef.current?.focus()}
           scrollStateKey="swarmReviews"
           modifierActivation
+          shiftModifierActivation
           onActivate={(node, opts) => {
-            if (node.element.kind === 'review') {
-              openReview(node.element.review.id, opts.preview, resolveOpenTarget(opts.modifiers))
+            if (node.element.kind !== 'review') return
+            const reviewId = node.element.review.id
+            // Enter hands keyboard focus to the Swarm Changes file tree. The
+            // modified gestures still open the review: Ctrl/Meta+Enter beside
+            // the active group, Ctrl+Shift+Enter pinned in place, Alt+Enter in
+            // a new window. Vim's `o` shares list.activate with Enter, so it
+            // jumps too.
+            if (opts.source === 'keyboard' && !opts.preview && opts.modifiers === undefined) {
+              void commands.executeCommand(JumpToSwarmChangesAction.ID)
+              return
             }
+            const mods = opts.modifiers
+            const target: OpenTarget =
+              mods?.shift === true && mods.alt !== true ? 'default' : resolveOpenTarget(mods)
+            openReview(reviewId, opts.preview, target)
           }}
           // Row menus are opened by each row's own handler; this exists so the
           // Tree binds its guard, which swallows the native contextmenu Chromium

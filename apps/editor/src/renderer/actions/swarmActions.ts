@@ -12,7 +12,6 @@ import {
   IEditorService,
   ILayoutService,
   IQuickInputService,
-  KeybindingWeight,
   MenuId,
   PartId,
   ViewContainerRegistry,
@@ -284,14 +283,12 @@ export class FocusSwarmChangesAction extends Action2 {
 }
 
 /**
- * Ctrl+Shift+Enter from the Swarm Reviews tree hands keyboard focus to the Swarm
- * Changes file tree — the keyboard twin of "I picked a review, now let me walk
- * its files". Plain Ctrl+Enter is the row's side-open gesture, so this keeps a
- * modified binding of its own. Scoped to the reviews view through the root
- * `focusedView` key; the weight must beat any global Ctrl+Shift+Enter binding
- * (see `docs/development/commands-and-context-keys.md`). The Tree's modifier
- * activation deliberately excludes Shift, so the event reaches the global
- * keybinding handler unconsumed.
+ * Hands keyboard focus from the Swarm Reviews tree to the Swarm Changes file
+ * tree — "I picked a review, now let me walk its files". The reviews tree's
+ * Enter activates this through `ICommandService`; it deliberately carries no
+ * global keybinding (Enter stays a tree-level gesture so group folding, the
+ * filter box and Vim Normal mode keep their own semantics). Scoped to the
+ * reviews view through the root `focusedView` key.
  */
 export class JumpToSwarmChangesAction extends Action2 {
   static readonly ID = 'swarm.jumpToChanges'
@@ -301,11 +298,6 @@ export class JumpToSwarmChangesAction extends Action2 {
       id: JumpToSwarmChangesAction.ID,
       title: localize2('action.swarm.jumpToChanges', 'Go to Swarm Changes'),
       category: CATEGORY,
-      keybinding: {
-        primary: 'ctrl+shift+enter',
-        when: SWARM_REVIEWS_FOCUS_WHEN,
-        weight: KeybindingWeight.WorkbenchContrib + 50,
-      },
       precondition: SWARM_REVIEWS_FOCUS_WHEN,
       f1: true,
     })

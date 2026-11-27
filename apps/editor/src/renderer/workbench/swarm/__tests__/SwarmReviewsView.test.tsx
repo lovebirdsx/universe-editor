@@ -43,6 +43,7 @@ import { swarmApplyStore } from '../../../services/swarm/swarmApplyStore.js'
 import { swarmReviewsUiStore } from '../../../services/swarm/swarmReviewsUiStore.js'
 import { buildSwarmReviewUrl } from '../../../services/swarm/swarmReviewUrl.js'
 import { SendContextToAgentChatAction } from '../../../actions/agentContextActions.js'
+import { JumpToSwarmChangesAction } from '../../../actions/swarmActions.js'
 import { swarmChangesViewState } from '../swarmChangesViewState.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { IAuxiliaryEditorWindowService } from '../../../services/windows/auxiliaryEditorWindowService.js'
@@ -690,8 +691,8 @@ describe('SwarmReviewsView keyboard', () => {
     await waitFor(() => expect(swarmChangesViewState.selectedReviewId.get()).toBe('1001'))
   })
 
-  it('previews on Space and pins on Enter', async () => {
-    const { tree, openEditor } = await renderTree()
+  it('previews on Space and jumps to Swarm Changes on Enter', async () => {
+    const { tree, openEditor, executeCommand } = await renderTree()
 
     fireEvent.keyDown(tree, { key: ' ' })
     await waitFor(() => expect(openEditor).toHaveBeenCalled())
@@ -699,6 +700,15 @@ describe('SwarmReviewsView keyboard', () => {
 
     openEditor.mockClear()
     fireEvent.keyDown(tree, { key: 'Enter' })
+    await waitFor(() => expect(executeCommand).toHaveBeenCalledWith(JumpToSwarmChangesAction.ID))
+    expect(openEditor).not.toHaveBeenCalled()
+  })
+
+  it('Ctrl+Shift+Enter pins the review in the active group', async () => {
+    const { tree, openEditor } = await renderTree()
+
+    fireEvent.keyDown(tree, { key: 'Enter', ctrlKey: true, shiftKey: true })
+
     await waitFor(() => expect(openEditor).toHaveBeenCalled())
     expect(openEditor.mock.calls.at(-1)?.[1]).toEqual({ pinned: true })
   })

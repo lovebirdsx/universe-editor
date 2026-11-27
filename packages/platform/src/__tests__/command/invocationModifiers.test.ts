@@ -7,6 +7,7 @@ import {
   getInvocationModifiers,
   isModifiedEnter,
   isOpenTargetEnter,
+  isShiftOpenTargetEnter,
   runWithInvocationModifiers,
 } from '../../command/invocationModifiers.js'
 
@@ -72,5 +73,25 @@ describe('modified Enter', () => {
     const event = { key: 'Enter', ctrlKey: true, repeat: true }
     expect(isModifiedEnter(event)).toBe(true)
     expect(isOpenTargetEnter(event)).toBe(false)
+  })
+})
+
+describe('shifted open gesture', () => {
+  it.each([{ ctrlKey: true }, { metaKey: true }, { altKey: true }])(
+    'accepts Shift + %o',
+    (mods) => {
+      expect(isShiftOpenTargetEnter({ key: 'Enter', shiftKey: true, ...mods })).toBe(true)
+      expect(isOpenTargetEnter({ key: 'Enter', shiftKey: true, ...mods })).toBe(false)
+    },
+  )
+
+  it.each([
+    { key: 'Enter', shiftKey: true },
+    { key: 'Enter' },
+    { key: 'Enter', ctrlKey: true },
+    { key: 'n', ctrlKey: true, shiftKey: true },
+    { key: 'Enter', ctrlKey: true, shiftKey: true, repeat: true },
+  ])('rejects %o', (event) => {
+    expect(isShiftOpenTargetEnter(event)).toBe(false)
   })
 })

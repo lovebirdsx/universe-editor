@@ -109,7 +109,7 @@
 
 列表行上的 `Ctrl+点击` 仍然是**多选**，不会侧开；需要侧开请用键盘手势。文件在新窗口里打开的是**副本**（原标签页保留；无法复制的自定义编辑器改为移动），Agent 会话是**移动**（保持全局唯一）。`Ctrl+Tab`、`Alt+S` 这类「按住修饰键、松手即打开」的列表不适用，编辑器内部的 `Ctrl+Enter`（如提交信息框、代码行内）也保持原义。欢迎页、设置页、扩展列表等页面内的链接不在上述范围。
 
-Swarm 审核列表的「跳到 Swarm 更改」占用 `Ctrl+Shift+Enter`，因此该组合不参与上面的落点解析。Git / Perforce 图谱的提交行本身不打开文档，`Ctrl+Enter` 仍是提交行的上下文菜单。
+Swarm 审核列表的 `Enter` 用来跳到 **Swarm 更改** 子视图（不打开编辑器）；打开审核请用 `Ctrl+Enter`（右侧分屏）/ `Ctrl+Shift+Enter`（当前组固定打开）/ `Alt+Enter`（新窗口）。Git / Perforce 图谱的提交行本身不打开文档，`Ctrl+Enter` 仍是提交行的上下文菜单。
 
 > 更多见 [快速打开与命令面板](../search-navigation/quick-open.md) 与 [命令面板](../getting-started/command-palette.md)。
 

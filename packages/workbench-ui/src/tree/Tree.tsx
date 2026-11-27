@@ -40,7 +40,11 @@ import { useVimSurface } from '../keybinding/vim/vimSurfaceRegistry.js'
 import { useVimSurfaceKey } from '../keybinding/vim/vimSurfaceId.js'
 import { showKeyboardTooltipForRow } from '../tooltip/keyboardTooltip.js'
 import { useStableCallback } from '../hooks/useStableCallback.js'
-import { isOpenTargetEnter, markAsSingleton } from '@universe-editor/platform'
+import {
+  isOpenTargetEnter,
+  isShiftOpenTargetEnter,
+  markAsSingleton,
+} from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
 import type { ITreeFocusSource } from './focusSeed.js'
 import {
@@ -80,6 +84,8 @@ export interface ITreeActivateModifiers {
   readonly ctrl: boolean
   readonly meta: boolean
   readonly alt: boolean
+  /** Set only for the shifted gesture (`shiftModifierActivation`). */
+  readonly shift?: boolean
 }
 
 export interface ITreeActivateOptions {
@@ -154,10 +160,16 @@ export interface ITreeProps<T> {
    * (side open / new window). Those combos normally fall through to the global
    * keybinding handler; with this on, the tree calls `onActivate` with
    * `modifiers` instead — including for non-leaf rows, whose guard is the
-   * view's job. Shift is deliberately excluded so Ctrl+Shift+Enter stays a
-   * global binding.
+   * view's job. Shift is excluded by default so Ctrl+Shift+Enter stays a
+   * global binding; `shiftModifierActivation` opts a tree into it too.
    */
   readonly modifierActivation?: boolean
+  /**
+   * Also route Shift+Ctrl/Meta/Alt+Enter to `onActivate`, with
+   * `modifiers.shift` set. Only trees that want a shifted activation gesture
+   * (the Swarm reviews list pins on Ctrl+Shift+Enter) should enable it.
+   */
+  readonly shiftModifierActivation?: boolean
   /** Keys not handled by built-in navigation (e.g. F2 / Delete) reach the view here. */
   readonly onRowKeyDown?: (e: ReactKeyboardEvent, node: IVisibleNode<T>) => void
   /** Shift+Tab inside the tree — lets the view hand focus back to a prior region. */
@@ -241,6 +253,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     onVisibleNodesChange,
     activateNonLeafOnEnter = false,
     modifierActivation = false,
+    shiftModifierActivation = false,
     renderStickyRow,
     maxStickyRows = DEFAULT_MAX_STICKY_ROWS,
     scrollStateKey,
@@ -855,7 +868,10 @@ export function Tree<T>(props: ITreeProps<T>) {
 
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (modifierActivation && isOpenTargetEnter(e)) {
+      if (
+        modifierActivation &&
+        (isOpenTargetEnter(e) || (shiftModifierActivation && isShiftOpenTargetEnter(e)))
+      ) {
         const vis = model.getVisibleNodes()
         const focusedId = model.focused
         const current = focusedId ? vis.find((n) => n.id === focusedId) : undefined
@@ -865,7 +881,12 @@ export function Tree<T>(props: ITreeProps<T>) {
           onActivate(current, {
             preview: false,
             source: 'keyboard',
-            modifiers: { ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey },
+            modifiers: {
+              ctrl: e.ctrlKey,
+              meta: e.metaKey,
+              alt: e.altKey,
+              ...(e.shiftKey ? { shift: true } : {}),
+            },
           })
         }
         return
@@ -964,6 +985,7 @@ export function Tree<T>(props: ITreeProps<T>) {
       onShiftTab,
       activateNonLeafOnEnter,
       modifierActivation,
+      shiftModifierActivation,
       openKeyboardContextMenu,
     ],
   )

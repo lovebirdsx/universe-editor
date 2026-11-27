@@ -68,3 +68,14 @@ export function isModifiedEnter(e: IEnterKeyEvent): boolean {
 export function isOpenTargetEnter(e: IEnterKeyEvent): boolean {
   return e.repeat !== true && isModifiedEnter(e)
 }
+
+/** Ctrl/Meta/Alt+Shift+Enter. Shift is normally left to the global keybinding
+ *  handler, so only trees that opt in (`shiftModifierActivation`) see this. */
+export function isShiftOpenTargetEnter(e: IEnterKeyEvent): boolean {
+  return (
+    e.repeat !== true &&
+    e.key === 'Enter' &&
+    e.shiftKey === true &&
+    (e.ctrlKey === true || e.metaKey === true || e.altKey === true)
+  )
+}

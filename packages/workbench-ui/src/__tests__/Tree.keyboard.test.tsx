@@ -167,6 +167,25 @@ describe('Tree — modifierActivation', () => {
     model.dispose()
   })
 
+  it('routes Shift+Ctrl+Enter to onActivate when shiftModifierActivation is on', () => {
+    const model = makeModel()
+    const { onActivate } = renderTree(model, {
+      modifierActivation: true,
+      shiftModifierActivation: true,
+    })
+    act(() => model.setSelection(['1'], '1'))
+
+    expect(fireEvent.keyDown(view(), { key: 'Enter', ctrlKey: true, shiftKey: true })).toBe(false)
+    expect(onActivate).toHaveBeenCalledTimes(1)
+    expect(onActivate.mock.calls[0]?.[1]?.modifiers).toEqual({
+      ctrl: true,
+      meta: false,
+      alt: false,
+      shift: true,
+    })
+    model.dispose()
+  })
+
   it('keeps plain Enter and Space unchanged', () => {
     const model = makeModel()
     const { onActivate } = renderTree(model, { modifierActivation: true })
