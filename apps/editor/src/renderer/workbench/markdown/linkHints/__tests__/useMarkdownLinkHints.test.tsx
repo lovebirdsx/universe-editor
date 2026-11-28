@@ -99,3 +99,35 @@ describe('useMarkdownLinkHints — listener scope', () => {
     expect(clicks).toEqual(['a'])
   })
 })
+
+describe('useMarkdownLinkHints — input guards', () => {
+  it('ignores IME composition keystrokes', () => {
+    const win = new Window()
+    const doc = win.document as unknown as Document
+    const root = doc.createElement('div') as HTMLElement
+    root.getBoundingClientRect = () => rect(0, 0, 1000, 1000)
+    doc.body.appendChild(root)
+
+    const clicks: string[] = []
+    const anchor = doc.createElement('a')
+    anchor.setAttribute('href', 'https://example.com/a')
+    anchor.getBoundingClientRect = () => rect(10, 10, 100, 20)
+    anchor.addEventListener('click', () => clicks.push('a'))
+    root.appendChild(anchor)
+
+    const rootRef = { current: root }
+    const { result } = renderHook(() => useMarkdownLinkHints(rootRef), { container: doc.body })
+    act(() => result.current.show(false))
+    expect(result.current.active).toBe(true)
+
+    // A composed `a` belongs to the IME session, not to the hint filter.
+    const event = new win.KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'isComposing', { value: true })
+    act(() => {
+      doc.dispatchEvent(event as unknown as Event)
+    })
+
+    expect(result.current.active).toBe(true)
+    expect(clicks).toHaveLength(0)
+  })
+})

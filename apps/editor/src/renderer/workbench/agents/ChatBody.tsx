@@ -42,6 +42,7 @@ import {
   ILoggerService,
   localize,
   runWithInvocationModifiers,
+  URI,
   type IInvocationModifiers,
 } from '@universe-editor/platform'
 import { useExecuteCommand, useObservable, useOptionalService, useService } from '../useService.js'
@@ -85,11 +86,15 @@ import {
   requestOwnerFrame,
   useVimSurface,
   useVimSurfaceKey,
+  useVimSurfaceKeymap,
   writeClipboardText,
+  type IVimKeymapEntry,
   type OwnerFrame,
 } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { describeAcpChatSlot, focusSurfaceFromEvent, slotKeyFromEvent } from './chatContextSlot.js'
+import { LinkHintsOverlay } from '../markdown/linkHints/LinkHintsOverlay.js'
+import { useMarkdownLinkHintsHost } from '../markdown/linkHints/useMarkdownLinkHintsHost.js'
 import { PermissionCard } from './PermissionCard.js'
 import { ElicitationCard } from './ElicitationCard.js'
 import { RecoveryBar } from './RecoveryBar.js'
@@ -165,6 +170,20 @@ const selectionSyncEmitter = new Emitter<{
 }>()
 
 const STICK_THRESHOLD_PX = 32
+
+// The chat timeline is a `list` Vim surface, and lists swallow printable keys.
+// Bind `f` / `F` per-surface (not in the shared default keymap) so only the
+// chat gets link hints; Explorer / settings / graph lists keep their current
+// "unsupported key" behaviour.
+const CHAT_LINK_HINTS_KEYMAP: readonly IVimKeymapEntry[] = [
+  { id: 'list.showLinkHints', keys: ['f'], command: 'list.showLinkHints', surfaces: ['list'] },
+  {
+    id: 'list.showLinkHintsToSide',
+    keys: ['F'],
+    command: 'list.showLinkHintsToSide',
+    surfaces: ['list'],
+  },
+]
 
 export interface WidgetHandle {
   move: (direction: AcpTimelineMoveDirection) => void
@@ -715,11 +734,22 @@ function ChatScroll({
     [scrollContainerRef],
   )
 
+  // Link hints over the visible timeline. The container is also the Vim `list`
+  // surface, so `f` / `F` are routed below through a per-surface keymap.
+  const { linkHints } = useMarkdownLinkHintsHost({
+    rootRef: containerRef,
+    registryUri: URI.parse(`universe:/chat/${session.id}`),
+    contentSignature: tailContentSignature(timeline),
+  })
+  const linkHintsRef = useRef(linkHints)
+  linkHintsRef.current = linkHints
+
   // Bare Vim keys: the same widget entry points Alt+J/K, Alt+H/L and Alt+A/E
   // drive, so the two key layers cannot diverge. The prompt input lives outside
   // this container (and is editable), so it never activates this surface.
   // Ctrl+J/K/H/L stay global (toggle panel / chord leader / replace / select-line).
   const vimSurfaceKey = useVimSurfaceKey('list', `chat:${session.id}`)
+  useVimSurfaceKeymap(vimSurfaceKey, CHAT_LINK_HINTS_KEYMAP)
   useVimSurface({
     id: vimSurfaceKey,
     kind: 'list',
@@ -727,6 +757,9 @@ function ChatScroll({
     getElement: () => containerRef.current,
     getSurfaceKey: () => vimSurfaceKey,
     defaultMode: 'normal',
+    // While hints own the keyboard the surface must yield so letters reach the
+    // link-hint document-capture filter (same contract as the reader surface).
+    enabled: !linkHints.active,
     actions: {
       move: (direction, count) => {
         if (direction === 'left') {
@@ -776,6 +809,7 @@ function ChatScroll({
         const text = handleRef.current.getFocusedText()
         if (text) void writeClipboardText(text)
       },
+      showLinkHints: (inNewTab) => linkHintsRef.current.show(inNewTab),
     },
   })
   const saved = AcpChatViewStateCache.load(session.id)
@@ -2209,6 +2243,7 @@ function ChatScroll({
             onClose={() => handleRef.current.closeFind()}
           />
         )}
+        <LinkHintsOverlay linkHints={linkHints} />
         <StickyScrollOverlay
           containerRef={containerRef}
           timeline={displayTimeline}

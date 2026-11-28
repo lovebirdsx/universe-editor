@@ -154,7 +154,7 @@ Markdown 的格式命令由内置 markdown 扩展提供，扩展清单尚未带�
 | Toggle Task Completion（英文）            | 切换任务勾选           | `Alt+C`                         |
 | Format Table（英文）                      | 格式化对齐表格         | `Ctrl+Alt+T`                    |
 | Organize Link Definitions（英文）         | 整理链接定义           | 无                              |
-| 显示链接提示                              | 预览内键盘跳转链接     | `F`（预览焦点）                 |
+| 显示链接提示                              | 阅读面内键盘跳转链接   | `F`（Markdown 阅读面焦点）     |
 
 > 上表标"（英文）"的命令面板显示英文原名，搜索用英文词。更多见 [Markdown 编辑与预览](../editing/markdown.md)。
 

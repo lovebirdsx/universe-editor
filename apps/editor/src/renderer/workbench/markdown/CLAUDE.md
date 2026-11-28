@@ -40,10 +40,11 @@ services/editor/MarkdownPreviewInput      虚拟 input（scheme 'markdown-previe
 workbench/editor/MarkdownPreviewEditor.tsx  源文件 open 时跟 Monaco model 实时刷新，否则 fileService 读盘
 workbench/editor/useMarkdownSyncScroll.ts   预览↔源 同步滚动
 workbench/markdown/MarkdownView.tsx       渲染核心：parseMarkdown AST → React 元素，不输出 raw HTML（React 转义 + SafeLink）
+workbench/markdown/linkHints/            共享链接提示：host hook + hint hook + 浮层；预览 / 文档中心 / Trigger / 聊天 / 扩展 README 共用
 services/acp/markdownRenderer.ts          parseMarkdown —— 与 ACP 聊天共享的 AST
 ```
 
-> MarkdownView 是**共享渲染器**（ACP 聊天 + 文档预览都用它），改它要同时顾及两个消费方；image AST 节点走可注入 `renderImage?(src,alt)`（`ImageRenderContext`，默认渲染裸 `<img>`），消费方可替换（ACP 聊天换成 ChatImage），见 [cases-prompt-images.md](../../services/acp/cases-prompt-images.md)。
+> MarkdownView 是**共享渲染器**（聊天/预览），改它要顾两方；image 节点走可注入 `renderImage?(src,alt)`（默认裸 `<img>`，ACP 换成 ChatImage），见 [cases-prompt-images.md](../../services/acp/cases-prompt-images.md)。
 
 **页内锚点**：标题自动 slug（CJK 保留）挂 `data-anchor`；空 HTML 锚点 `<a id="x"></a>` / `<a name="x"></a>` 被 parser 白名单识别（其余 HTML 仍是字面文本），渲染为零占位 `.mdAnchor`（**CSS 必须 `vertical-align: top`**——baseline 会让 scrollIntoView 对齐文字基线、落点偏下一行，已修勿回退；回归 e2e `smoke.markdownAnchorScroll.spec.ts`）。`#frag` 点击/跨文件 `foo.md#frag` 收口 `markdownAnchors.ts::findMarkdownAnchor`：先精确匹配 id（大小写敏感），未命中再 slugify 回退。已知限制：LSP 坏链诊断只认 `id=` 不认 `name=`——锚点统一写 `<a id="..."></a>`。
 

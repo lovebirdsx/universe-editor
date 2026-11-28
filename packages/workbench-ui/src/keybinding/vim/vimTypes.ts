@@ -114,6 +114,12 @@ export interface IVimSurfaceActions {
    */
   readonly showHover?: () => void
   /**
+   * `f` / `F`: show vimium-style link hints over the surface's visible links.
+   * `inNewTab` follows the chosen link to the side (mirrors Ctrl/Cmd+click).
+   * Only read-only readers and the chat timeline implement it.
+   */
+  readonly showLinkHints?: (inNewTab: boolean) => void
+  /**
    * Editor surfaces only. Receives the raw keydown while the surface owns the
    * keyboard; returning true means Vim consumed the stroke. The editor's Vim
    * core owns counts/operators/search, so it bypasses the sequence engine.

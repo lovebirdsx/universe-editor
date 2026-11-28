@@ -12,7 +12,8 @@
 import { type MutableRefObject } from 'react'
 import { ChatFindWidget } from '../agents/ChatFindWidget.js'
 import type { FindInContainerState } from './useFindInContainer.js'
-import type { MarkdownLinkHintsState } from './useMarkdownLinkHints.js'
+import { LinkHintsOverlay } from '../markdown/linkHints/LinkHintsOverlay.js'
+import type { MarkdownLinkHintsState } from '../markdown/linkHints/useMarkdownLinkHints.js'
 import styles from './MarkdownPreviewEditor.module.css'
 
 interface MarkdownReaderOverlaysProps<T extends HTMLElement> {
@@ -44,28 +45,7 @@ export function MarkdownReaderOverlays<T extends HTMLElement>({
           }}
         />
       )}
-      {linkHints.active && (
-        <div className={styles['linkHintsLayer']} data-find-widget aria-hidden="true">
-          {linkHints.markers.map((m, i) => (
-            <span
-              key={i}
-              className={styles['linkHint']}
-              style={{ left: `${m.left}px`, top: `${m.top}px` }}
-              data-testid="md-link-hint"
-              data-link-label={m.label}
-            >
-              {m.label.split('').map((ch, j) => (
-                <span
-                  key={j}
-                  className={j < linkHints.typed.length ? styles['linkHintTyped'] : undefined}
-                >
-                  {ch}
-                </span>
-              ))}
-            </span>
-          ))}
-        </div>
-      )}
+      <LinkHintsOverlay linkHints={linkHints} />
     </>
   )
 }

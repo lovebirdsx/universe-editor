@@ -54,36 +54,6 @@
   box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.5));
 }
 
-/* Vimium-style link hint overlay. Fixed to the viewport (marker coords come from
-   getBoundingClientRect) and click-through so it never blocks the page beneath. */
-.linkHintsLayer {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-view-backdrop);
-  pointer-events: none;
-}
-
-.linkHint {
-  position: fixed;
-  transform: translateY(-2px);
-  padding: 0 3px;
-  font-family: var(--font-family-mono, monospace);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.4;
-  color: #1a1a00;
-  background: linear-gradient(to bottom, #fff785, #ffc542);
-  border: 1px solid #c38a22;
-  border-radius: 3px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.linkHintTyped {
-  color: #bb6600;
-}
-
 /* `?` keyboard cheat sheet — centred modal over the preview. */
 .helpBackdrop {
   position: fixed;

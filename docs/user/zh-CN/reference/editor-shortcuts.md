@@ -313,7 +313,7 @@ Insert 模式：所有键原样输入，`Esc` 或 `Ctrl+[` 回到 Normal 模式�
 | 退出 surface | `Esc`（具体动作由宿主决定：菜单收一层或关闭、浮层关闭等）。侧栏 / 底栏里的视图列表（Explorer、SCM、搜索结果等）先收拢多选，**没有可退出的状态时把焦点交回编辑器**，与关闭 Vim 时的 `Esc` 一致 |
 | 导航历史后退 / 前进 | `Ctrl+O` / `Ctrl+I`：与编辑器内同义，共用同一条跳转栈。在视图里按 `Ctrl+O` 回到进入视图前的编辑器位置，随后 `Ctrl+I` 回到这个视图（所以在 Explorer 里 `Ctrl+O` 不再弹出「打开文件」；菜单 / 浮层除外） |
 
-Markdown 预览与文档中心也是列表类 surface（`vim.surfaces.lists` 控制）：`j` / `k` 滚动、`gg` / `G`、`Ctrl+D` / `Ctrl+U`、`Ctrl+E` / `Ctrl+Y` 等与原有的预览键盘导航（`f` 链接提示、`/` 查找等）共存；见 [Markdown 编辑与预览](../editing/markdown.md)。
+Markdown 预览、文档中心与 AI 聊天时间线也是列表类 surface（`vim.surfaces.lists` 控制）：`j` / `k` 滚动、`gg` / `G`、`Ctrl+D` / `Ctrl+U`、`Ctrl+E` / `Ctrl+Y` 等与原有的预览键盘导航（`f` 链接提示、`/` 查找等）共存；见 [Markdown 编辑与预览](../editing/markdown.md)。
 
 列表内的搜索框、行内输入框等**可编辑控件**聚焦时，裸键仍是普通输入，Vim 不会接管。Git / Perforce 图谱、Explorer、搜索结果、SCM、Outline、快捷键编辑器、扩展列表、MCP Servers、Process Explorer 等共享同一套列表 surface。
 

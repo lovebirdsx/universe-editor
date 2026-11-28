@@ -47,6 +47,8 @@ import {
   ListScrollViewportDownAction,
   ListScrollViewportUpAction,
   ListShowHoverAction,
+  ListShowLinkHintsAction,
+  ListShowLinkHintsToSideAction,
   ListToggleAction,
   SurfaceEscapeAction,
   SurfaceNextAction,
@@ -138,6 +140,8 @@ describe('Vim surface commands', () => {
       [ListActivatePreviewAction, ['activate']],
       [ListContextMenuAction, ['contextMenu']],
       [ListShowHoverAction, ['showHover']],
+      [ListShowLinkHintsAction, ['showLinkHints', false]],
+      [ListShowLinkHintsToSideAction, ['showLinkHints', true]],
       [ListCopyAction, ['copy']],
       [ListDeleteAction, ['remove']],
       [SurfaceNextAction, ['next']],
@@ -158,6 +162,8 @@ describe('Vim surface commands', () => {
     expect(handlers.get('move')).toHaveBeenCalledWith('down', 1)
     expect(handlers.get('move')).toHaveBeenCalledWith('left', 1)
     expect(handlers.get('move')).toHaveBeenCalledWith('right', 1)
+    expect(handlers.get('showLinkHints')).toHaveBeenCalledWith(false)
+    expect(handlers.get('showLinkHints')).toHaveBeenCalledWith(true)
   })
 
   describe('Escape with nothing left to escape', () => {
@@ -316,6 +322,8 @@ describe('Vim surface command ids', () => {
       ListActivateAction.ID,
       ListActivatePreviewAction.ID,
       ListContextMenuAction.ID,
+      ListShowLinkHintsAction.ID,
+      ListShowLinkHintsToSideAction.ID,
       ListCopyAction.ID,
       ListDeleteAction.ID,
       SurfaceNextAction.ID,

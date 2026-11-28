@@ -73,6 +73,9 @@ function activate(el: HTMLAnchorElement, inNewTab: boolean): void {
 
 export function useMarkdownLinkHints<T extends HTMLElement>(
   rootRef: MutableRefObject<T | null>,
+  /** Changes whenever the rendered content changes; hints dismiss so stale
+   *  labels never point at links that moved or disappeared (streaming chat). */
+  contentSignature?: unknown,
 ): MarkdownLinkHintsState {
   const [active, setActive] = useState(false)
   const [typed, setTyped] = useState('')
@@ -83,6 +86,8 @@ export function useMarkdownLinkHints<T extends HTMLElement>(
   const allMarkersRef = useRef<readonly LinkHintMarker[]>([])
   const typedRef = useRef('')
   const inNewTabRef = useRef(false)
+  const activeRef = useRef(false)
+  activeRef.current = active
 
   const hide = useCallback(() => {
     setActive(false)
@@ -119,12 +124,21 @@ export function useMarkdownLinkHints<T extends HTMLElement>(
     [rootRef],
   )
 
+  // Content can change while hints are showing (streaming chat, virtualized
+  // rows). The labels are viewport snapshots, so a change invalidates them.
+  useEffect(() => {
+    if (activeRef.current) hide()
+  }, [contentSignature, hide])
+
   // Own the keyboard while hints are showing: letters filter, Backspace pops,
   // Escape (and any non-hint key) dismisses. Capture phase so editor keybindings
   // never see these keys.
   useEffect(() => {
     if (!active) return
     const onKeyDown = (e: KeyboardEvent): void => {
+      // IME composition owns the keystroke; never treat a composed letter as a
+      // hint (matches the Vim dispatcher's own composing guard).
+      if (e.isComposing) return
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()

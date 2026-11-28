@@ -374,11 +374,18 @@ export class MarkdownPreviewFindCloseAction extends Action2 {
 // ---------------------------------------------------------------------------
 // In-preview link hints (vimium-style). `f` overlays a short label on every
 // visible link; typing the label follows it in place. `Shift+F` follows it to
-// the side (like Ctrl/Cmd+click). Gated by `markdownPreviewFocused`, and
-// suppressed while the find bar or hints are already up so letters aren't stolen.
+// the side (like Ctrl/Cmd+click). Gated by `markdownLinkHintsAvailable`, which
+// every markdown reader (preview, doc center, trigger report, AI chat,
+// extension README) sets while focused, and suppressed while the find bar or
+// hints are already up so letters aren't stolen.
 // ---------------------------------------------------------------------------
 
 const LINK_HINTS_WHEN =
+  'markdownLinkHintsAvailable && !markdownPreviewFindVisible && !markdownPreviewLinkHintsVisible && !acpChatFindVisible'
+
+// The `?` cheat sheet belongs to the reader surfaces only (preview / doc
+// center / trigger report); chat has its own help affordances.
+const READER_OVERLAY_WHEN =
   'markdownPreviewFocused && !markdownPreviewFindVisible && !markdownPreviewLinkHintsVisible'
 
 export class MarkdownPreviewLinkHintsAction extends Action2 {
@@ -427,8 +434,8 @@ export class MarkdownPreviewHelpAction extends Action2 {
       // clean "?" in the tooltip rather than "Shift+?". Gated like link hints so
       // it never steals the key while the find bar or hints own the keyboard.
       keybinding: [
-        { primary: 'shift+?', when: LINK_HINTS_WHEN },
-        { primary: '?', when: LINK_HINTS_WHEN },
+        { primary: 'shift+?', when: READER_OVERLAY_WHEN },
+        { primary: '?', when: READER_OVERLAY_WHEN },
       ],
       menu: [
         {

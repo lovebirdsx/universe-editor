@@ -11,8 +11,8 @@
  *  sandbox (see docs 05-security-and-trust).
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo, useState } from 'react'
-import { type IEditorInput, localize } from '@universe-editor/platform'
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
+import { type IEditorInput, localize, URI } from '@universe-editor/platform'
 import { Button, Spinner, cx } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import {
@@ -22,6 +22,8 @@ import {
 } from '../../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 import { ExtensionEditorInput } from '../../services/editor/ExtensionEditorInput.js'
 import { MarkdownView } from '../markdown/MarkdownView.js'
+import { LinkHintsOverlay } from '../markdown/linkHints/LinkHintsOverlay.js'
+import { useMarkdownLinkHintsHost } from '../markdown/linkHints/useMarkdownLinkHintsHost.js'
 import { ExtensionIcon } from './ExtensionIcon.js'
 import { InstallInRemoteButton } from './InstallInRemoteButton.js'
 import styles from './ExtensionEditor.module.css'
@@ -41,6 +43,9 @@ export function ExtensionEditor({ input }: { input: IEditorInput }) {
 
   const entry = service.find(extensionId)
   const [tab, setTab] = useState<Tab>('readme')
+  // The scroll container is shared by both tabs; link hints are only mounted by
+  // the README tab, but they need the scroll element to compute the viewport.
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   if (!entry) {
     return (
@@ -65,9 +70,9 @@ export function ExtensionEditor({ input }: { input: IEditorInput }) {
           {localize('extensions.detail.contributions', 'Contributions')}
         </TabButton>
       </div>
-      <div className={styles.body}>
+      <div ref={bodyRef} className={styles.body} tabIndex={0}>
         {tab === 'readme' ? (
-          <ReadmePanel entry={entry} service={service} />
+          <ReadmePanel bodyRef={bodyRef} entry={entry} service={service} />
         ) : (
           <ContributionsPanel entry={entry} />
         )}
@@ -238,9 +243,11 @@ function EnablementActions({
 }
 
 function ReadmePanel({
+  bodyRef,
   entry,
   service,
 }: {
+  bodyRef: MutableRefObject<HTMLDivElement | null>
   entry: IExtensionEntry
   service: IExtensionsWorkbenchService
 }) {
@@ -263,7 +270,29 @@ function ReadmePanel({
       </div>
     )
   }
-  return <MarkdownView text={readme} />
+  return <ReadmeContent bodyRef={bodyRef} extensionId={entry.id} readme={readme} />
+}
+
+function ReadmeContent({
+  bodyRef,
+  extensionId,
+  readme,
+}: {
+  bodyRef: MutableRefObject<HTMLDivElement | null>
+  extensionId: string
+  readme: string
+}) {
+  const { linkHints } = useMarkdownLinkHintsHost({
+    rootRef: bodyRef,
+    registryUri: URI.parse(`universe:/extension/${extensionId}`),
+    contentSignature: readme,
+  })
+  return (
+    <>
+      <LinkHintsOverlay linkHints={linkHints} />
+      <MarkdownView text={readme} />
+    </>
+  )
 }
 
 function ContributionsPanel({ entry }: { entry: IExtensionEntry }) {

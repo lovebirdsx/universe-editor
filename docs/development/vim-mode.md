@@ -6,7 +6,7 @@
 
 Vim 模式是**工作台级**能力，不在 Monaco 内注册原生命令，也不依赖扩展。所有第一方界面以「surface」接入同一套状态与分发：
 
-- `vim.enabled` 是总开关；`vim.surfaces.*`（`lists` / `menus` / `overlays` / `tabs` / `activityBar` / `terminalNormalMode` / `editor`）按界面组关闭。`lists` 同时管 `list` 与 `reader`（Markdown 预览）。
+- `vim.enabled` 是总开关；`vim.surfaces.*`（`lists` / `menus` / `overlays` / `tabs` / `activityBar` / `terminalNormalMode` / `editor`）按界面组关闭。`lists` 同时管 `list` 与 `reader`（Markdown 预览、文档中心、Trigger 报告、AI 聊天）。
 - 工作台 surface（列表 / 菜单 / 标签栏 / 终端…）的 Normal 键映射为**命令 id**，经 `ICommandService.executeCommand` 执行，因此命令面板、用户键位与扩展看到的是同一套命令。
 - **编辑器文本是例外**：裸键由编辑器 Vim 内核（reducer + controller）直接处理，不进键位表；只有 leader 与已开始的序列走工作台序列引擎。
 - 唯一入口是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts` 的 window-capture 监听；各 surface 只注册声明，不自行安装监听。
@@ -141,14 +141,14 @@ useVimSurface({
 | `getElement` | 在**击键时**读取宿主元素；callback ref 后挂载也能生效 |
 | `focus` | `self`（默认给 list/tabs/activityBar/viewContainerTabs）要求容器自身是 `activeElement`；`within` 接受后代焦点 |
 | `getSurfaceKey` | 在击键时解析实例键，用于模式记忆与 trace |
-| `enabled` | 为 `false` 时保持注册但不参与仲裁（菜单零行、关闭的标题栏、link hints 期间的 reader） |
+| `enabled` | 为 `false` 时保持注册但不参与仲裁（菜单零行、关闭的标题栏、link hints 期间的 reader / 聊天列表） |
 | `defaultMode` | `normal` / `insert` / `terminal-normal`；无记忆时的初始值 |
 | `actions` | 可选操作集合；未实现的命令会静默 no-op（但仍被消费） |
 | `keymap` | 只有这个 surface 认的键（见下）。**数组引用必须稳定**（模块常量或 `useMemo`），否则有效键位缓存每击重建 |
 
 `registerVimSurface` 是给非 React 调用方的同义入口（如终端实例、`attachVim`）；React 侧一律用 `useVimSurface`，它会通过 ref 读取最新注册，避免每次渲染重注册。
 
-`IVimSurfaceActions` 字段：`move(direction,count)`、`first(count)`、`last(count)`、`page(direction,count)`、`scrollViewport(direction,count)`、`expand/collapse/toggle(count)`、`activate(count,preview)`、`contextMenu/copy/remove(c)`、`next/previous(count)`、`escape(count)`（返回 `false` 表示没有可退出的状态：侧栏 / 底栏视图里的 `list`（`focusedView` 非空）随后执行 `workbench.action.focusActiveEditorGroup` 回编辑器；编辑器区里的 `list`（`editorAreaFocus` 为真）执行 `workbench.action.focusEditorTabs` 回标签栏；未实现 `escape` 同理；返回 void 视为已处理）、`find()`（`/` 打开宿主自己的筛选框；树通过 `onVimFind` 暴露，Outline 是范例）、`showHover()`（`K` 显示聚焦行与鼠标悬停相同的 tooltip；行没有提示时 no-op），以及编辑器专用的 `handleStroke(event)` / `isAwaitingCharArg()` / `takeCount()` / `getPendingHint()` / `dismissHover()`（共享引擎执行 leader / 映射和弦前关闭可见 hover）。
+`IVimSurfaceActions` 字段：`move(direction,count)`、`first(count)`、`last(count)`、`page(direction,count)`、`scrollViewport(direction,count)`、`expand/collapse/toggle(count)`、`activate(count,preview)`、`contextMenu/copy/remove(c)`、`next/previous(count)`、`escape(count)`（返回 `false` 表示没有可退出的状态：侧栏 / 底栏视图里的 `list`（`focusedView` 非空）随后执行 `workbench.action.focusActiveEditorGroup` 回编辑器；编辑器区里的 `list`（`editorAreaFocus` 为真）执行 `workbench.action.focusEditorTabs` 回标签栏；未实现 `escape` 同理；返回 void 视为已处理）、`find()`（`/` 打开宿主自己的筛选框；树通过 `onVimFind` 暴露，Outline 是范例）、`showHover()`（`K` 显示聚焦行与鼠标悬停相同的 tooltip；行没有提示时 no-op）、`showLinkHints(inNewTab)`（`f` / `F` 在可视链接上浮出 vimium 标签；只有 `reader` 与聊天的 `list` 实现），以及编辑器专用的 `handleStroke(event)` / `isAwaitingCharArg()` / `takeCount()` / `getPendingHint()` / `dismissHover()`（共享引擎执行 leader / 映射和弦前关闭可见 hover）。
 
 **count 语义（全 surface 统一）**：`first(count)` / `last(count)` 的 `count` 为 0 表示没敲数字（`gg` = 首项、`G` = 末项），`n ≥ 1` 表示跳第 n 项（1 基、夹到范围内）：`3G` / `3gg` 都是第 3 项，`1G` 是首项。`vimSurfaceActions` 靠 dispatcher 额外传的 `hasCount` 区分「没敲」与「敲了 1」，直接调命令不带 `hasCount` 时只有 count > 1 才算敲了。新 surface 用 `createIndexListVimActions` / `createStripVimActions` 就自动遵守，不要手写。
 
@@ -157,6 +157,8 @@ useVimSurface({
 `scrollViewport` 只移动视口，不移动焦点 / 选中项（`Ctrl+E/Y`）。列表 / 树 / 浮层 / 图谱的适配器各自提供 scroller 与行高；共享实现是 workbench-ui 的 `list/scrollViewport.ts`（`findScrollableElement` 从容器向上找真正滚动的祖先，`scrollViewportByRows` 按行高改 `scrollTop`，只夹下界）。焦点容器包着 `VirtualList` 的宿主（设置页、快捷键编辑器）必须显式传 `getScrollElement`，因为 VirtualList 的 scroller 是**子孙**而不是祖先。菜单没有纵向视口，不映射 `Ctrl+E/Y`。
 
 **`K` 显示行提示**：`vimDefaultKeymap.ts` 的 `list.showHover` 只对 `list` kind 生效，宿主实现 `actions.showHover()`——`Tree` / `useFlatListNavigation` 用 `findRowElement` 找到聚焦行，Git / Perforce 图谱的 `useGraphKeyboardNav` 还额外回调 `onShowHover(row, key)`（Git 用它异步补全提交正文）。行 tooltip 由 `TooltipProvider` 的命令式 controller 打开（`tooltip/keyboardTooltip.ts` 按 `Document` 注册，`showKeyboardTooltipForRow(row)` 取 `row.ownerDocument`）：解析顺序是 `[data-tooltip-primary]` → 行根自身 → 行内第一个有 tooltip 的后代，`data-tooltip` / 暂存的原生 `title` 都认；挂多个徽章的行用 `data-tooltip-primary` 指定主提示。关闭是**任意击键**：总闸在 `ctrlNavigationRegistry.handleKeyDown` 最前面（Vim 会 `stopPropagation`，document 监听收不到），另加 500ms 轮询在目标行卸载或 `aria-selected="false"` 时兜底——宿主行若由虚拟光标选中却不写 `aria-selected`，程序化焦点移动后提示不会自动消失。
+
+**`f` / `F` 链接提示**：`markdownActions.ts` 的两个 Action2 用 `markdownLinkHintsAvailable` 门控（任一 Markdown 阅读容器聚焦即为 true），本身不依赖 Vim；Vim 开启时 `reader` 走「未映射放行」，聊天时间线则必须用 `useVimSurfaceKeymap` 的 **per-surface 键位**把 `f` / `F` 映射到 `list.showLinkHints` / `list.showLinkHintsToSide`——**不能**加进全局 `vimDefaultKeymap` 的 `list` 条目，否则 Explorer / 设置 / 图谱都会变。hints 激活期间宿主 surface 必须 `enabled: false`，把字母让给 document-capture 的标签过滤器；共享实现（hook + 浮层 + 活动容器注册）在 `workbench/markdown/linkHints/`。
 
 ### 新增 surface 的步骤
 
@@ -350,7 +352,8 @@ KeybindingsRegistry.hasBindingAtOrAbove(
 | Agent 输入框（prompt） | `prompt:${sessionId}`（`promptVimSurfaceKey`）；`kind: 'editor'`、默认取 `vim.prompt.defaultMode`（出厂 `normal`），卸载时 forget（重新打开按该默认值开始）；同 session 的两个分屏共享模式记忆 |
 | 终端 | `terminal:${terminalId}`；默认 `insert`，终端在 panel / editor 间移动不重建键 |
 | 列表 / 树 / 图谱 | `list:${viewId}`；无 id 时 `list:auto:<n>` |
-| Markdown 预览 / 文档中心 | `reader:auto:<n>` |
+| AI 聊天时间线 | `chat:${sessionId}`（`kind: 'list'`；`f` / `F` 走 per-surface 键位） |
+| Markdown 预览 / 文档中心 / Trigger 报告 | `reader:auto:<n>` |
 | 菜单 | `menu:auto:<n>`（菜单短暂，通常无需记忆） |
 | 浮层 | `overlay:${id}`，如 `overlay:notifications` |
 | 编辑器标签栏 | `tabs:${groupId}` |

@@ -25,7 +25,10 @@ import { findMarkdownAnchor } from '../markdown/markdownAnchors.js'
 import { collectEntries, lineForPreviewTop, previewTopForLine } from './previewScrollMap.js'
 import { useFindInContainer, type FindInContainerState } from './useFindInContainer.js'
 import { useMarkdownKeyboardNav } from './useMarkdownKeyboardNav.js'
-import { useMarkdownLinkHints, type MarkdownLinkHintsState } from './useMarkdownLinkHints.js'
+import {
+  useMarkdownLinkHints,
+  type MarkdownLinkHintsState,
+} from '../markdown/linkHints/useMarkdownLinkHints.js'
 import { useEditorGroup } from './EditorGroupContext.js'
 import { isEditorActivationPreservingFocus } from './editorTabsFocus.js'
 import { useService } from '../useService.js'
@@ -79,11 +82,20 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
     () => contextKeyService.createKey<boolean>('markdownPreviewLinkHintsVisible', undefined),
     [contextKeyService],
   )
+  // Generic availability key for the `f` / `F` link-hint commands. The reader
+  // surfaces also use it (instead of the find-only `markdownPreviewFocused`) so
+  // any markdown host — preview, doc center, trigger report, chat, extension
+  // README — opts in the same way.
+  const linkHintsAvailableKey = useMemo(
+    () => contextKeyService.createKey<boolean>('markdownLinkHintsAvailable', undefined),
+    [contextKeyService],
+  )
   useEffect(() => {
     findVisibleKey.set(false)
     focusedKey.set(false)
     linkHintsVisibleKey.set(false)
-  }, [findVisibleKey, focusedKey, linkHintsVisibleKey])
+    linkHintsAvailableKey.set(false)
+  }, [findVisibleKey, focusedKey, linkHintsVisibleKey, linkHintsAvailableKey])
 
   const linkHints = useMarkdownLinkHints(rootRef)
   const linkHintsRef = useRef(linkHints)
@@ -166,12 +178,14 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
 
     const onFocusIn = () => {
       focusedKey.set(true)
+      linkHintsAvailableKey.set(true)
       MarkdownPreviewRegistry.setActive(controller)
     }
     const onFocusOut = (e: FocusEvent) => {
       const next = e.relatedTarget
       if (isElementLike(next) && el.contains(next)) return
       focusedKey.set(false)
+      linkHintsAvailableKey.set(false)
       MarkdownPreviewRegistry.clearActive(controller)
     }
     el.addEventListener('focusin', onFocusIn)
@@ -182,6 +196,7 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
     // the container already holds focus, mark it active immediately.
     if (el.contains(el.ownerDocument.activeElement)) {
       focusedKey.set(true)
+      linkHintsAvailableKey.set(true)
       MarkdownPreviewRegistry.setActive(controller)
     }
 
@@ -194,13 +209,14 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
       el.removeEventListener('focusin', onFocusIn)
       el.removeEventListener('focusout', onFocusOut)
       focusedKey.set(false)
+      linkHintsAvailableKey.set(false)
       MarkdownPreviewRegistry.clearActive(controller)
       MarkdownPreviewRegistry.unregister(registryUri, controller)
       onDidScroll.dispose()
     }
     // registryUri is addressed by its string form; keyStr keeps the effect stable
     // across URI instances that stringify equal.
-  }, [keyStr, focusedKey, rootRef, groupId])
+  }, [keyStr, focusedKey, linkHintsAvailableKey, rootRef, groupId])
 
   return { find, linkHints, helpVisible, closeHelp: () => setHelpVisible(false) }
 }

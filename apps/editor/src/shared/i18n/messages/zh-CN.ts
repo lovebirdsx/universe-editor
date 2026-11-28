@@ -1084,6 +1084,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.vim.list.scrollViewportDown.title': '向下滚动列表视口',
   'action.vim.list.scrollViewportUp.title': '向上滚动列表视口',
   'action.vim.list.showHover.title': '显示列表项提示',
+  'action.vim.list.showLinkHints.title': '显示链接提示',
+  'action.vim.list.showLinkHintsToSide.title': '在侧边显示链接提示',
   'action.vim.list.toggle.title': '切换列表项展开状态',
   'action.vim.showActiveKeymap.title': 'Vim：显示当前键位映射',
   'action.vim.showKeymapCheatSheet.title': 'Vim：显示键位速查',

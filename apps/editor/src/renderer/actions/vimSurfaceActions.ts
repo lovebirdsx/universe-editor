@@ -220,6 +220,24 @@ export class ListShowHoverAction extends VimSurfaceCommandAction {
   }
 }
 
+export class ListShowLinkHintsAction extends VimSurfaceCommandAction {
+  static readonly ID = 'list.showLinkHints'
+  constructor() {
+    super(options(ListShowLinkHintsAction.ID, 'Show Link Hints'), (actions) =>
+      actions.showLinkHints?.(false),
+    )
+  }
+}
+
+export class ListShowLinkHintsToSideAction extends VimSurfaceCommandAction {
+  static readonly ID = 'list.showLinkHintsToSide'
+  constructor() {
+    super(options(ListShowLinkHintsToSideAction.ID, 'Show Link Hints to Side'), (actions) =>
+      actions.showLinkHints?.(true),
+    )
+  }
+}
+
 export class ListCopyAction extends VimSurfaceCommandAction {
   static readonly ID = 'list.copy'
   constructor() {
@@ -305,6 +323,8 @@ export const VIM_SURFACE_ACTIONS = [
   ListContextMenuAction,
   ListFindAction,
   ListShowHoverAction,
+  ListShowLinkHintsAction,
+  ListShowLinkHintsToSideAction,
   ListCopyAction,
   ListDeleteAction,
   SurfaceNextAction,
